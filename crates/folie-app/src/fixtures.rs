@@ -55,8 +55,6 @@ impl FixturesView {
     /// Liste du patch et formulaire d'ajout. Renvoie `true` si le patch a changé.
     pub fn patch_panel(&mut self, ui: &mut egui::Ui, library: &Library, console: &mut Console) -> bool {
         let mut changed = false;
-        ui.heading("Patch");
-        ui.add_space(4.0);
         egui::Frame::group(ui.style()).show(ui, |ui| {
             if let Some(ids) = self.add_form(ui, library, &mut console.show.patch) {
                 console.select(ids.into_iter().map(Target::whole), SelectMode::Replace);

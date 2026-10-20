@@ -9,7 +9,7 @@ pub struct CommandLine {
     /// Position dans l'historique pendant la navigation aux flèches.
     browsing: Option<usize>,
     /// Résultat de la dernière action : (succès, message).
-    feedback: Option<(bool, String)>,
+    pub feedback: Option<(bool, String)>,
 }
 
 impl CommandLine {

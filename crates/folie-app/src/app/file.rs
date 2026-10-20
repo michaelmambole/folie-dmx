@@ -27,7 +27,7 @@ enum Pending {
 }
 
 pub(super) struct FileState {
-    storage: Storage,
+    pub(super) storage: Storage,
     pub(super) path: Option<PathBuf>,
     pub(super) dirty: bool,
     last_autosave: Instant,

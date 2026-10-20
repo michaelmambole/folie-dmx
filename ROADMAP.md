@@ -44,6 +44,15 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
   (egui, OSC et web passent tous par elle)
 - Sauvegarde et chargement du show (format texte versionnable, ex. RON/JSON)
 
+## Interface : fenêtres à la manière d'une station audio
+- [x] Fenêtre principale « Programmer » (attributs, ligne de commande, état)
+- [x] Fenêtres système séparées : Patch ⌘1, Groupes ⌘2, Presets ⌘3, Sortie DMX ⌘4
+- [x] Disposition de départ calculée selon l'écran, espace de travail retrouvé au lancement
+- [x] Dispositions enregistrées (cases 1 à 9), rappel ⌥⌘1 à ⌥⌘9, mise à jour, suppression
+- [x] Fenêtre ramenée sur l'écran principal si son écran n'est plus branché
+- [ ] Plusieurs fenêtres d'un même type (ex. deux pools de presets)
+- [ ] Dispositions embarquées dans le show
+
 ## Phase 4 — Cues et executors (≈ 2 à 3 mois, le cœur)
 - Listes de cues, Go / Back / Goto, temps de fondu et de délai
 - **Tracking** et cues bloquées (`Block`)

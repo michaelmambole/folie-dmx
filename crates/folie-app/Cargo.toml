@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 rfd = "0.17"
 dirs = "7"
+display-info = "0.5"
 eframe = "0.37"
 log.workspace = true
 env_logger.workspace = true

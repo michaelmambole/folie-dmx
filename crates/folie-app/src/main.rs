@@ -4,17 +4,25 @@ mod faders;
 mod fixtures;
 mod monitor;
 mod pools;
+mod screens;
 mod storage;
+mod workspace;
 
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Folie-DMX")
-            .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([900.0, 600.0]),
-        ..Default::default()
-    };
-    eframe::run_native("Folie-DMX", options, Box::new(|cc| Ok(Box::new(app::FolieApp::new(cc, storage::Storage::for_user())))))
+    let storage = storage::Storage::for_user();
+    // La fenêtre principale reprend sa place de la dernière fois.
+    let main = storage.workspace().map(|w| w.main).unwrap_or_default();
+    let main = screens::rescue(main, &screens::displays(), 0);
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("Folie-DMX")
+        .with_inner_size(main.size().unwrap_or(eframe::egui::vec2(1100.0, 760.0)))
+        .with_min_inner_size([700.0, 480.0])
+        .with_fullscreen(main.fullscreen);
+    if let Some(position) = main.position() {
+        viewport = viewport.with_position(position);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    eframe::run_native("Folie-DMX", options, Box::new(|cc| Ok(Box::new(app::FolieApp::new(cc, storage)))))
 }

@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use folie_show::Show;
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
+use crate::workspace::{Layout, Workspace};
+
 const SETTINGS_FILE: &str = "settings.json";
 const AUTOSAVE_FILE: &str = "autosave.folie";
 
@@ -14,6 +18,12 @@ struct Settings {
     last_show: Option<PathBuf>,
     /// Show dont la sauvegarde automatique contient les modifications non enregistrées.
     autosave_of: Option<PathBuf>,
+    /// Fenêtres telles qu'elles étaient à la dernière fermeture.
+    #[serde(default)]
+    workspace: Option<Workspace>,
+    /// Dispositions enregistrées, par case (1 à 9).
+    #[serde(default)]
+    layouts: BTreeMap<u8, Layout>,
 }
 
 /// Sauvegarde automatique trouvée au démarrage.
@@ -72,6 +82,22 @@ impl Storage {
 
     pub fn set_last_show(&self, path: Option<&Path>) {
         self.update_settings(|s| s.last_show = path.map(Path::to_path_buf));
+    }
+
+    pub fn workspace(&self) -> Option<Workspace> {
+        self.settings().workspace
+    }
+
+    pub fn set_workspace(&self, workspace: &Workspace) {
+        self.update_settings(|s| s.workspace = Some(workspace.clone()));
+    }
+
+    pub fn layouts(&self) -> BTreeMap<u8, Layout> {
+        self.settings().layouts
+    }
+
+    pub fn set_layouts(&self, layouts: &BTreeMap<u8, Layout>) {
+        self.update_settings(|s| s.layouts = layouts.clone());
     }
 
     pub fn write_autosave(&self, show: &Show, original: Option<&Path>) -> Result<(), String> {

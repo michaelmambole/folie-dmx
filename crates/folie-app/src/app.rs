@@ -17,7 +17,7 @@ use crate::pools::PoolsView;
 use crate::storage::Storage;
 
 mod file;
-use crate::{faders, monitor};
+mod windows;
 
 /// Rafraîchissement de l'interface : largement suffisant pour suivre le moteur à 44 Hz.
 const UI_REFRESH: Duration = Duration::from_millis(33);
@@ -35,12 +35,6 @@ impl DisplayMode {
             Self::Dmx => value.to_string(),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum View {
-    Fixtures,
-    Dmx,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +97,7 @@ pub struct FolieApp {
     command_line: CommandLine,
     channel_labels: Vec<Option<String>>,
     file: file::FileState,
-    view: View,
+    windows: windows::WindowsState,
     fixtures_view: FixturesView,
     snapshot: Snapshot,
     ports: Vec<PortCandidate>,
@@ -128,6 +122,8 @@ impl FolieApp {
             log::error!("{} : {}", err.path.display(), err.message);
         }
         let console = Console::new(engine);
+        let workspace = storage.workspace();
+        let layouts = storage.layouts();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
             console,
@@ -137,7 +133,7 @@ impl FolieApp {
             library_errors,
             channel_labels: vec![None; CHANNELS_PER_UNIVERSE],
             file: file::FileState::new(storage),
-            view: View::Fixtures,
+            windows: windows::WindowsState::new(workspace, layouts),
             fixtures_view: FixturesView::new(),
             ports: Vec::new(),
             output: OutputChoice::Virtual,
@@ -168,6 +164,10 @@ impl FolieApp {
         self.channel_labels = channel_labels(&self.console.show.patch);
     }
 
+    fn toggle_blackout(&mut self) {
+        self.engine().send(Command::Blackout(!self.snapshot.blackout));
+    }
+
     fn select_output(&mut self, choice: OutputChoice) {
         let output: Box<dyn folie_dmx::DmxOutput> = match &choice {
             OutputChoice::Virtual => Box::new(NullOutput),
@@ -188,9 +188,7 @@ impl FolieApp {
         ui.horizontal(|ui| {
             ui.heading(RichText::new("Folie-DMX").strong());
             self.file_menu(ui);
-            ui.separator();
-            ui.selectable_value(&mut self.view, View::Fixtures, "Fixtures");
-            ui.selectable_value(&mut self.view, View::Dmx, "Sortie DMX");
+            self.windows_menu(ui);
             ui.separator();
 
             let output_label = ui.label("Sortie :");
@@ -236,7 +234,7 @@ impl FolieApp {
             };
             let button = egui::Button::new(RichText::new("BLACKOUT").strong().color(text)).fill(fill);
             if ui.add(button).on_hover_text("Coupe toute la sortie (B)").clicked() {
-                self.engine().send(Command::Blackout(!blackout));
+                self.toggle_blackout();
             }
             let clear_help = "Vide le programmer : fixtures à leurs valeurs par défaut, canaux forcés relâchés";
             if ui.button("Clear").on_hover_text(clear_help).clicked() {
@@ -288,69 +286,17 @@ impl FolieApp {
     }
 }
 
-impl FolieApp {
-    fn fixtures_ui(&mut self, ui: &mut egui::Ui) {
-        let mut patch_changed = false;
-        egui::Panel::left("patch").resizable(true).default_size(430.0).show(ui, |ui| {
-            ui.add_space(6.0);
-            patch_changed = self.fixtures_view.patch_panel(ui, &self.library, &mut self.console);
-        });
-        if patch_changed {
-            self.patch_changed();
-            self.mark_dirty();
-        }
-        let mut result = None;
-        egui::Panel::right("pools").resizable(true).default_size(300.0).show(ui, |ui| {
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical().show(ui, |ui| result = self.pools.show(ui, &mut self.console));
-        });
-        if let Some(result) = result
-            && self.command_line.report(result)
-        {
-            self.mark_dirty();
-        }
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.fixtures_view.attribute_panel(ui, &mut self.console, &self.snapshot, self.display);
-        });
-    }
-
-    fn dmx_ui(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("faders").resizable(false).show(ui, |ui| {
-            ui.add_space(6.0);
-            faders::show(
-                ui,
-                &mut self.fader_page,
-                &self.snapshot.channel_overrides[0],
-                &self.snapshot.output[0],
-                self.display,
-                self.selected,
-                self.console.engine(),
-            );
-            ui.add_space(6.0);
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            let output = &self.snapshot.output[0];
-            if let Some(channel) =
-                monitor::show(ui, output, &self.channel_labels, self.display, self.selected)
-            {
-                self.selected = Some(channel);
-                self.fader_page = (channel as usize - 1) / faders::FADERS_PER_PAGE;
-            }
-        });
-    }
-}
-
 impl eframe::App for FolieApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.snapshot = self.engine().snapshot();
         self.rate.update(self.snapshot.frame);
 
         let ctx = ui.ctx().clone();
-        self.file_shortcuts(&ctx);
-        self.file_tick(&ctx);
-        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::B)) {
-            self.engine().send(Command::Blackout(!self.snapshot.blackout));
+        self.global_shortcuts(&ctx);
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.save_workspace_if_changed(true);
         }
+        self.file_tick(&ctx);
 
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(4.0);
@@ -367,12 +313,13 @@ impl eframe::App for FolieApp {
         if command_changed {
             self.mark_dirty();
         }
-        match self.view {
-            View::Fixtures => self.fixtures_ui(ui),
-            View::Dmx => self.dmx_ui(ui),
-        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            self.fixtures_view.attribute_panel(ui, &mut self.console, &self.snapshot, self.display);
+        });
+        self.show_windows(&ctx);
 
         self.file_modals(&ctx);
+        self.layout_dialog(&ctx);
         ctx.request_repaint_after(UI_REFRESH);
     }
 }
@@ -382,8 +329,38 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui::accesskit::Role;
+    use crate::workspace::{Placement, WindowKind, WindowState, Workspace};
     use folie_fixture::FeatureGroup;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{By, Queryable};
+
+    /// Fenêtres simulées à droite du Programmer, pour ne pas masquer ses réglages.
+    fn test_workspace() -> Workspace {
+        let window = |kind, x: f32, y: f32, w: f32, h: f32| WindowState {
+            kind,
+            placement: Placement::at_size(egui::pos2(x, y), egui::vec2(w, h)),
+            preset_family: None,
+        };
+        Workspace {
+            main: Placement::default(),
+            windows: vec![
+                window(WindowKind::Patch, 1000.0, 40.0, 480.0, 760.0),
+                window(WindowKind::Groups, 1520.0, 40.0, 340.0, 360.0),
+                window(WindowKind::Presets, 1520.0, 430.0, 340.0, 420.0),
+            ],
+        }
+    }
+
+    fn harness(storage: Storage) -> Harness<'static, FolieApp> {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1900.0, 900.0))
+            .build_eframe(move |cc| {
+                let mut app = FolieApp::new(cc, storage);
+                app.windows = windows::WindowsState::new(Some(test_workspace()), Default::default());
+                app
+            });
+        harness.run_steps(2);
+        harness
+    }
 
     /// Traite les clics en attente, laisse au moteur le temps d'exécuter les
     /// commandes envoyées, puis rafraîchit l'interface avec son nouvel état.
@@ -395,10 +372,7 @@ mod tests {
 
     #[test]
     fn patch_four_mh6_and_program_them() {
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1400.0, 900.0))
-            .build_eframe(|cc| FolieApp::new(cc, Storage::disabled()));
-        harness.run_steps(2);
+        let mut harness = harness(Storage::disabled());
 
         // Type : la bibliothèque est triée, la MH 2 vient en premier.
         harness.get_by_role_and_label(Role::ComboBox, "Type").click();
@@ -449,10 +423,7 @@ mod tests {
 
     #[test]
     fn sunstrip_sub_fixtures() {
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1400.0, 900.0))
-            .build_eframe(|cc| FolieApp::new(cc, Storage::disabled()));
-        harness.run_steps(2);
+        let mut harness = harness(Storage::disabled());
 
         harness.get_by_role_and_label(Role::ComboBox, "Type").click();
         harness.run_steps(2);
@@ -495,13 +466,6 @@ mod tests {
         assert_eq!(out.get(1), Ok(0));
     }
 
-    fn harness(storage: Storage) -> Harness<'static, FolieApp> {
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1400.0, 900.0))
-            .build_eframe(move |cc| FolieApp::new(cc, storage));
-        harness.run_steps(2);
-        harness
-    }
 
     /// Patche `quantity` fixtures du type donné par le formulaire, mode par défaut.
     fn patch_with_form(harness: &mut Harness<'_, FolieApp>, fixture_type: &str, quantity: u32) {
@@ -605,7 +569,7 @@ mod tests {
         harness.get_by_label("Full").click();
         settle(&mut harness);
         harness.get_by_label("1 Dimmer").click();
-        harness.get_by_label("Store").click();
+        harness.get_all_by_label("Store").last().unwrap().click(); // celui de la fenêtre Presets
         harness.run_steps(2);
         harness.get_all_by_label("1").last().unwrap().click(); // case 1 du pool de presets
         settle(&mut harness);
@@ -621,5 +585,51 @@ mod tests {
             let path = std::path::Path::new(&dir).join("pools.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+    }
+
+    #[test]
+    fn window_layouts_from_the_menu_and_shortcut() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut harness = harness(Storage::at(dir.path()));
+
+        harness.get_by_label("Fenêtres").click();
+        harness.run_steps(2);
+        harness.get_by_label("Enregistrer la disposition…").click();
+        harness.run_steps(2);
+        let name = harness.get_by_role_and_label(Role::TextInput, "Nom");
+        name.focus();
+        name.type_text("Programmation");
+        harness.run_steps(1);
+        harness.get_by_label("Enregistrer").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().windows.layouts[&1].name, "Programmation");
+
+        // On ferme les groupes depuis le menu…
+        harness.get_by_label("Fenêtres").click();
+        harness.run_steps(2);
+        // L'entrée du menu porte aussi son raccourci : « Groupes ⌘2 ».
+        harness.get(By::new().role(Role::Button).label_contains("Groupes")).click();
+        harness.run_steps(2);
+        assert!(!harness.state().windows.workspace.is_open(WindowKind::Groups));
+
+        // … et ⌥⌘1 les rouvre avec le reste de la disposition.
+        harness.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::Num1);
+        harness.run_steps(2);
+        assert!(harness.state().windows.workspace.is_open(WindowKind::Groups));
+        harness.get_by_label("Disposition 1 « Programmation » rappelée");
+
+        // Les dispositions survivent au redémarrage.
+        drop(harness);
+        let again = harness_restored(Storage::at(dir.path()));
+        assert_eq!(again.state().windows.layouts[&1].name, "Programmation");
+    }
+
+    /// Comme `harness`, mais en gardant l'espace de travail et les dispositions enregistrés.
+    fn harness_restored(storage: Storage) -> Harness<'static, FolieApp> {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1900.0, 900.0))
+            .build_eframe(move |cc| FolieApp::new(cc, storage));
+        harness.run_steps(2);
+        harness
     }
 }

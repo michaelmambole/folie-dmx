@@ -1,4 +1,4 @@
-//! Pools de groupes et de presets : une grille de cases numérotées, comme sur MA.
+//! Pools de groupes et de presets : des grilles de cases numérotées, comme sur MA.
 //! Un clic rappelle la case ; avec « Store » armé, un clic y enregistre.
 
 use eframe::egui::{self, Color32, RichText, vec2};
@@ -11,71 +11,75 @@ const ARMED: Color32 = Color32::from_rgb(200, 30, 30);
 
 pub struct PoolsView {
     /// Le prochain clic dans un pool enregistre au lieu de rappeler.
+    /// Partagé par toutes les fenêtres de pool, comme la touche Store d'une console.
     store_armed: bool,
-    family: FeatureGroup,
 }
 
 impl PoolsView {
     pub fn new() -> Self {
-        Self { store_armed: false, family: FeatureGroup::Color }
+        Self { store_armed: false }
     }
 
-    /// Renvoie le résultat de l'action faite, s'il y en a une.
-    pub fn show(&mut self, ui: &mut egui::Ui, console: &mut Console) -> Option<Result<Outcome, CommandError>> {
-        let mut result = None;
-        ui.horizontal(|ui| {
-            ui.heading("Pools");
-            let text = RichText::new("Store").strong();
-            let button = if self.store_armed {
-                egui::Button::new(text.color(Color32::WHITE)).fill(ARMED)
-            } else {
-                egui::Button::new(text)
-            };
-            let help = "Armer, puis cliquer une case pour y enregistrer la sélection ou le programmer";
-            if ui.add(button).on_hover_text(help).clicked() {
-                self.store_armed = !self.store_armed;
-            }
-        });
-        ui.add_space(4.0);
+    fn store_button(&mut self, ui: &mut egui::Ui) {
+        let text = RichText::new("Store").strong();
+        let button = if self.store_armed {
+            egui::Button::new(text.color(Color32::WHITE)).fill(ARMED)
+        } else {
+            egui::Button::new(text)
+        };
+        let help = "Armer, puis cliquer une case pour y enregistrer la sélection ou le programmer";
+        if ui.add(button).on_hover_text(help).clicked() {
+            self.store_armed = !self.store_armed;
+        }
+    }
 
-        ui.label(RichText::new("Groupes").strong());
+    /// Pool de groupes. Renvoie le résultat de l'action faite, s'il y en a une.
+    pub fn groups(&mut self, ui: &mut egui::Ui, console: &mut Console) -> Option<Result<Outcome, CommandError>> {
+        self.store_button(ui);
+        ui.add_space(4.0);
         let groups: Vec<(u32, String, usize)> =
             console.show.groups.iter().map(|(n, g)| (*n, g.name.clone(), g.targets.len())).collect();
-        if let Some(number) = grid(ui, "groups", &groups, self.store_armed) {
-            let add = ui.input(|i| i.modifiers.command);
-            result = Some(if self.store_armed {
-                console.store_group(number, None)
-            } else {
-                console.select_group(number, if add { SelectMode::Add } else { SelectMode::Replace })
-            });
-            self.store_armed = false;
-        }
+        let number = grid(ui, "groups", &groups, self.store_armed)?;
+        let add = ui.input(|i| i.modifiers.command);
+        let result = if self.store_armed {
+            console.store_group(number, None)
+        } else {
+            console.select_group(number, if add { SelectMode::Add } else { SelectMode::Replace })
+        };
+        self.store_armed = false;
+        Some(result)
+    }
 
-        ui.add_space(10.0);
-        ui.label(RichText::new("Presets").strong());
+    /// Pool de presets d'une famille, choisie dans la fenêtre.
+    pub fn presets(
+        &mut self,
+        ui: &mut egui::Ui,
+        console: &mut Console,
+        family: &mut FeatureGroup,
+    ) -> Option<Result<Outcome, CommandError>> {
+        self.store_button(ui);
+        ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            for family in FeatureGroup::ALL {
-                let label = format!("{} {}", family.preset_number(), family.label());
-                ui.selectable_value(&mut self.family, family, label);
+            for f in FeatureGroup::ALL {
+                ui.selectable_value(family, f, format!("{} {}", f.preset_number(), f.label()));
             }
         });
-        let family = self.family;
+        let current = *family;
         let presets: Vec<(u32, String, usize)> = console
             .show
             .presets
             .iter()
-            .filter(|((f, _), _)| *f == family)
+            .filter(|((f, _), _)| *f == current)
             .map(|((_, n), p)| (*n, p.name.clone(), p.values.len()))
             .collect();
-        if let Some(number) = grid(ui, ("presets", family), &presets, self.store_armed) {
-            result = Some(if self.store_armed {
-                console.store_preset(family, number, None)
-            } else {
-                console.apply_preset(family, number)
-            });
-            self.store_armed = false;
-        }
-        result
+        let number = grid(ui, ("presets", current), &presets, self.store_armed)?;
+        let result = if self.store_armed {
+            console.store_preset(current, number, None)
+        } else {
+            console.apply_preset(current, number)
+        };
+        self.store_armed = false;
+        Some(result)
     }
 }
 
