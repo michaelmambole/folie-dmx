@@ -97,7 +97,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [ ] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
 - [x] Effets relatifs (autour de la valeur en cours, donc aussi d'un preset rappelé) ; Cercle relatif
 - [ ] Pool d'effets personnalisés, rapport cyclique du carré, aléatoire
-- [ ] Effets visibles dans la fenêtre Programmer
+- [x] Effets visibles dans la fenêtre Programmer (pastilles, plage, nom de l'effet)
 
 ## Phase 6 — Réseau et télécommande (≈ 1,5 à 2 mois)
 - Art-Net et sACN (univers multiples ; l'USB Pro n'en gère qu'un)

@@ -227,7 +227,15 @@ pub fn primary_button(text: &str) -> egui::Button<'_> {
 /// Barre de valeur réglable, de 0 à 1 : le niveau est rempli dans la couleur de
 /// sa source et la valeur lisible est écrite dedans.
 /// Glisser : réglage relatif (Maj : fin) ; clic : valeur directe ; molette : ajustement.
-pub fn value_bar(ui: &mut egui::Ui, value: &mut f32, color: Color32, text: &str, width: f32) -> egui::Response {
+/// `band` : plage (0 à 1) dessinée en clair derrière le niveau, celle d'un effet par exemple.
+pub fn value_bar(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    color: Color32,
+    text: &str,
+    width: f32,
+    band: Option<(f32, f32)>,
+) -> egui::Response {
     let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::click_and_drag());
     let before = *value;
     // Option-clic : réservé à l'appelant (relâcher la valeur), la barre ne bouge pas.
@@ -252,6 +260,12 @@ pub fn value_bar(ui: &mut egui::Ui, value: &mut f32, color: Color32, text: &str,
 
     let painter = ui.painter();
     painter.rect_filled(rect, 4.0, SURFACE_2);
+    if let Some((low, high)) = band {
+        let (low, high) = (low.min(high).clamp(0.0, 1.0), low.max(high).clamp(0.0, 1.0));
+        let x = |t: f32| rect.left() + rect.width() * t;
+        let range = egui::Rect::from_x_y_ranges(x(low)..=x(high), rect.y_range());
+        painter.rect_filled(range, 4.0, color.gamma_multiply(0.22));
+    }
     let filled = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * *value, rect.height()));
     painter.rect_filled(filled, 4.0, color.gamma_multiply(0.85));
     if response.hovered() || response.dragged() {

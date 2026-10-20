@@ -958,6 +958,18 @@ mod tests {
         let pan = harness.state().console.programmer_effects()[0].lines[0].clone();
         assert!(!pan.relative && pan.low == 0.0 && pan.high == 100.0, "{pan:?}");
         harness.get_by_label("Plage 0–100 %");
+
+        // Le Programmer montre l'effet de chaque paramètre et permet de l'arrêter.
+        harness.get_by_label("Cercle · 0–100 %"); // le Pan, repassé en absolu
+        harness.get_by_label("Cercle · ±10 %"); // le Tilt, toujours relatif
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("programmer-effects.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Cercle  ×").click();
+        settle(&mut harness);
+        assert!(harness.state().console.programmer_effects().is_empty(), "arrêté depuis le Programmer");
+        assert!(harness.query_by_label("Cercle · ±10 %").is_none());
     }
 
     #[test]

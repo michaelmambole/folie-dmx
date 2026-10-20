@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, RichText, Sense, vec2};
@@ -388,6 +388,7 @@ impl FixturesView {
                 }
             });
             selection_chips(ui, console.selection());
+            effect_chips(ui, console);
         });
         ui.add_space(6.0);
         theme::legend(ui);
@@ -404,13 +405,17 @@ impl FixturesView {
         groups.sort();
         groups.dedup();
 
-        // Paramètres animés par un effet du programmer.
-        let animated: BTreeSet<ParamKey> = console
-            .programmer_effects()
-            .iter()
-            .flat_map(|e| folie_control::effects::instance(e, 0, &console.show.patch).lines)
-            .flat_map(|l| l.params.into_iter().map(|(k, _)| k))
-            .collect();
+        // Paramètres animés par un effet du programmer : quel effet, et sa plage.
+        let mut animated: BTreeMap<ParamKey, EffectMark> = BTreeMap::new();
+        for effect in console.programmer_effects() {
+            let instance = folie_control::effects::instance(effect, 0, &console.show.patch);
+            for (line, played) in effect.lines.iter().zip(instance.lines) {
+                for (key, _) in played.params {
+                    let mark = EffectMark { name: effect.name.clone(), low: line.low, high: line.high, relative: line.relative };
+                    animated.insert(key, mark);
+                }
+            }
+        }
 
         let bar_width = (ui.available_width() - NAME_WIDTH - MENU_WIDTH - 60.0).clamp(140.0, 420.0);
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -442,6 +447,29 @@ impl FixturesView {
                 ui.add_space(6.0);
             }
         });
+    }
+}
+
+/// Effets du programmer en pastilles violettes ; un clic arrête l'effet.
+fn effect_chips(ui: &mut egui::Ui, console: &mut Console) {
+    if console.programmer_effects().is_empty() {
+        return;
+    }
+    let mut stop = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Effets").size(11.5).color(theme::MUTED));
+        for (index, effect) in console.programmer_effects().iter().enumerate() {
+            let text = RichText::new(format!("{}  ×", effect.name)).size(12.0).color(theme::TEXT);
+            let chip = egui::Button::new(text)
+                .fill(theme::EFFECT.gamma_multiply(0.12))
+                .stroke(egui::Stroke::new(1.0, theme::EFFECT));
+            if ui.add(chip).on_hover_text(format!("Arrêter « {} »", effect.name)).clicked() {
+                stop = Some(index);
+            }
+        }
+    });
+    if let Some(index) = stop {
+        console.remove_effect(index);
     }
 }
 
@@ -625,6 +653,26 @@ fn universe_map(ui: &mut egui::Ui, console: &mut Console) {
     }
 }
 
+/// Effet du programmer qui anime un paramètre, pour l'afficher dans sa ligne.
+struct EffectMark {
+    name: String,
+    low: f32,
+    high: f32,
+    relative: bool,
+}
+
+impl EffectMark {
+    /// « Cercle · ±10 % », « Cercle · -5 à +10 % », « Vague · 0–100 % ».
+    fn summary(&self) -> String {
+        let range = match self.relative {
+            true if self.low == -self.high => format!("±{} %", self.high.abs()),
+            true => format!("{:+} à {:+} %", self.low, self.high),
+            false => format!("{}–{} %", self.low, self.high),
+        };
+        format!("{} · {range}", self.name)
+    }
+}
+
 /// Une ligne de réglage d'attribut, pour la cible de référence de la sélection.
 struct Row<'a> {
     index: usize,
@@ -637,10 +685,11 @@ struct Row<'a> {
 }
 
 impl Row<'_> {
-    fn show(&self, ui: &mut egui::Ui, console: &mut Console, animated: &BTreeSet<ParamKey>) {
+    fn show(&self, ui: &mut egui::Ui, console: &mut Console, animated: &BTreeMap<ParamKey, EffectMark>) {
         let parameter = self.parameter;
         let key = ParamKey { fixture: self.reference.fixture, parameter: self.index };
-        let source = if animated.contains(&key) {
+        let effect = animated.get(&key);
+        let source = if effect.is_some() {
             Source::Effect
         } else if console.programmer().contains_key(&key) || console.released().contains(&key) {
             Source::Programmer
@@ -663,10 +712,30 @@ impl Row<'_> {
 
         let mut level = value as f32 / u16::MAX as f32;
         let text = if console.released().contains(&key) { "relâché".to_string() } else { self.value_text(value) };
-        let help = "Glisser : régler (Maj : fin) · clic : placer · Option-clic : relâcher";
-        let bar = theme::value_bar(ui, &mut level, source.color(), &text, self.bar_width)
-            .labelled_by(name_label.id)
-            .on_hover_text(help);
+        let help = match effect {
+            Some(e) if e.relative => "Effet relatif : glisser déplace le centre autour duquel il tourne · Option-clic : relâcher",
+            _ => "Glisser : régler (Maj : fin) · clic : placer · Option-clic : relâcher",
+        };
+        // Plage de l'effet, en clair derrière la valeur ; relative, elle suit la valeur de base.
+        let band = effect.map(|e| {
+            let base = if e.relative {
+                console.programmer().get(&key).copied().unwrap_or(parameter.default) as f32 / u16::MAX as f32
+            } else {
+                0.0
+            };
+            (base + e.low / 100.0, base + e.high / 100.0)
+        });
+        let bar = ui
+            .horizontal(|ui| {
+                let bar = theme::value_bar(ui, &mut level, source.color(), &text, self.bar_width, band)
+                    .labelled_by(name_label.id)
+                    .on_hover_text(help);
+                if let Some(e) = effect {
+                    ui.label(RichText::new(e.summary()).size(11.0).color(theme::EFFECT));
+                }
+                bar
+            })
+            .inner;
         let alt = ui.input(|i| i.modifiers.alt);
         if alt && (bar.clicked() || name_label.clicked()) {
             console.release_like(parameter);
