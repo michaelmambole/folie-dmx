@@ -10,6 +10,7 @@ mod pools;
 mod screens;
 mod storage;
 mod theme;
+mod tracking_ui;
 mod workspace;
 
 fn main() -> eframe::Result {

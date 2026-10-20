@@ -9,6 +9,7 @@ pub mod color;
 pub mod command;
 pub mod cues;
 pub mod effects;
+pub mod tracking;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -624,7 +625,7 @@ mod tests {
     use crate::command::fixture;
 
     /// 4 MH 6 (1 à 4) et un Sunstrip 10 dimmers (10).
-    fn console() -> Console {
+    pub(crate) fn console() -> Console {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
         let (library, _) = Library::load_dir(root);
         let engine = folie_engine::spawn(
@@ -661,7 +662,7 @@ mod tests {
         settled(console).output[0].get(channel).unwrap()
     }
 
-    fn run(console: &mut Console, line: &str) -> Outcome {
+    pub(crate) fn run(console: &mut Console, line: &str) -> Outcome {
         console.execute(line).unwrap_or_else(|e| panic!("{line} : {e}"))
     }
 

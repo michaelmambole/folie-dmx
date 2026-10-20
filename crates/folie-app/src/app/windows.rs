@@ -11,7 +11,7 @@ use eframe::egui::{
 use super::FolieApp;
 use crate::screens;
 use crate::workspace::{LAYOUT_SLOTS, Layout, Placement, WindowKind, Workspace, layout_key};
-use crate::{effects_ui, faders, monitor, playback_ui};
+use crate::{effects_ui, faders, monitor, playback_ui, tracking_ui};
 
 /// Les déplacements de fenêtres sont enregistrés au plus à cette fréquence.
 const SAVE_WORKSPACE_EVERY: Duration = Duration::from_secs(5);
@@ -439,6 +439,10 @@ impl FolieApp {
             }
             WindowKind::Effects => {
                 let result = effects_ui::effects_window(ui, &mut self.console);
+                self.report(result);
+            }
+            WindowKind::Tracking => {
+                let result = tracking_ui::tracking_window(ui, &mut self.console, &self.snapshot, self.display);
                 self.report(result);
             }
         }

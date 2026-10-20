@@ -966,6 +966,56 @@ mod tests {
     }
 
     #[test]
+    fn tracking_window_shows_origins() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Tracking,
+            placement: Placement::at_size(egui::pos2(1400.0, 40.0), egui::vec2(760.0, 560.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2200.0, 1000.0));
+        harness.get_by_label("Aucune cue : enregistrez des cues sur cet executor pour suivre leurs valeurs.");
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Face""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 2 At 50");
+        command(&mut harness, r#"Store Cue 2 Fade 0 "Contre""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 30");
+        command(&mut harness, r#"Store Preset 1.1 "Demi""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1");
+        command(&mut harness, "Preset 1.1");
+        command(&mut harness, r#"Store Cue 3 Fade 0 "Demi""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Goto Cue 2");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1); // ferme le Patch, qui la recouvre
+        settle(&mut harness);
+
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get_by_label("2 Contre"); // en-tête de colonne
+        harness.get_by_label("1 · Rush MH 6 Wash 1");
+        // Dimmer de la fixture 1 : enregistré en cue 1, suivi en cue 2, preset en cue 3.
+        harness.get(described("Enregistrée dans la cue 1 Face"));
+        assert!(harness.query_all(described("Suivie depuis la cue 1 Face")).count() >= 1);
+        harness.get(described("Enregistrée dans la cue 3 Demi · preset 1.1 « Demi »"));
+        harness.get_by_label("P1.1");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("tracking.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Seulement les changements : les valeurs suivies disparaissent.
+        harness.get_by_label("Seulement les changements").click();
+        harness.run_steps(2);
+        assert_eq!(harness.query_all(described("Suivie depuis la cue 1 Face")).count(), 0);
+        harness.get(described("Enregistrée dans la cue 1 Face"));
+    }
+
+    #[test]
     fn transition_bar_shows_delay_without_moving_the_layout() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

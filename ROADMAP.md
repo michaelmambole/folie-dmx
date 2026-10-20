@@ -79,6 +79,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Pools : renommer et supprimer une case au clic droit
 - [x] Pages d'executors (`Page 2`, `Page +`, `Page -`, `Go Executor 2.5`), pages nommées,
       executors fixés sur toutes les pages (`Fix Executor 3`)
+- [x] Fenêtre Tracking (⌘8) : valeurs de chaque cue, changées, suivies, relâchées, presets, effets
 - [ ] Mode chenillard, temps par attribut
 - **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
   `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)

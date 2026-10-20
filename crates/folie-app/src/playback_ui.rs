@@ -502,6 +502,28 @@ fn cue_row(
     action
 }
 
+/// « EXECUTOR [3] » : choix de l'executor sélectionné parmi les places de la page courante.
+pub fn executor_field(ui: &mut egui::Ui, console: &mut Console) -> Action {
+    let mut action = None;
+    let executor = console.selected_executor();
+    let label = ui.label(RichText::new("EXECUTOR").size(11.0).color(theme::MUTED).extra_letter_spacing(0.8));
+    // On choisit une place de la page courante ; le champ affiche le nom de l'executor (« 2.3 »).
+    let slot = executor_place(executor).1;
+    let labels: Vec<String> = (1..=SLOTS_PER_PAGE)
+        .map(|n| executor_label(if n == slot { executor } else { console.executor_at(n) }))
+        .collect();
+    let mut selected = slot;
+    let field = egui::DragValue::new(&mut selected)
+        .range(1..=SLOTS_PER_PAGE)
+        .custom_formatter(move |n, _| labels[(n as usize).clamp(1, labels.len()) - 1].clone())
+        .custom_parser(|text| text.rsplit('.').next()?.trim().parse().ok());
+    ui.add(field).labelled_by(label.id);
+    if selected != slot {
+        action = Some(Ok(console.select_executor(console.executor_at(selected))));
+    }
+    action
+}
+
 /// Liste des cues de la séquence de l'executor sélectionné : en-tête en carte,
 /// cue en cours en ambre, suivante repérée, passées atténuées.
 pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot, store_armed: &mut bool) -> Action {
@@ -511,20 +533,8 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
     theme::card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            let label = ui.label(RichText::new("EXECUTOR").size(11.0).color(theme::MUTED).extra_letter_spacing(0.8));
-            // On choisit une place de la page courante ; le champ affiche le nom de l'executor (« 2.3 »).
-            let slot = executor_place(executor).1;
-            let labels: Vec<String> = (1..=SLOTS_PER_PAGE)
-                .map(|n| executor_label(if n == slot { executor } else { console.executor_at(n) }))
-                .collect();
-            let mut selected = slot;
-            let field = egui::DragValue::new(&mut selected)
-                .range(1..=SLOTS_PER_PAGE)
-                .custom_formatter(move |n, _| labels[(n as usize).clamp(1, labels.len()) - 1].clone())
-                .custom_parser(|text| text.rsplit('.').next()?.trim().parse().ok());
-            ui.add(field).labelled_by(label.id);
-            if selected != slot {
-                action = Some(Ok(console.select_executor(console.executor_at(selected))));
+            if let Some(a) = executor_field(ui, console) {
+                action = Some(a);
             }
             match console.selected_sequence() {
                 Some((_, sequence)) => {
