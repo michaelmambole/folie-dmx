@@ -9,44 +9,43 @@ const COLUMNS: usize = 4;
 const CELL: egui::Vec2 = vec2(70.0, 44.0);
 const ARMED: Color32 = Color32::from_rgb(200, 30, 30);
 
-pub struct PoolsView {
-    /// Le prochain clic dans un pool enregistre au lieu de rappeler.
-    /// Partagé par toutes les fenêtres de pool, comme la touche Store d'une console.
-    store_armed: bool,
+pub struct PoolsView;
+
+/// Touche Store : armée, le prochain clic dans un pool, sur un executor ou une
+/// cue enregistre au lieu de rappeler. Une seule pour toute l'application.
+pub fn store_button(ui: &mut egui::Ui, armed: &mut bool) {
+    let text = RichText::new("Store").strong();
+    let button = if *armed { egui::Button::new(text.color(Color32::WHITE)).fill(ARMED) } else { egui::Button::new(text) };
+    let help = "Armer, puis cliquer une case de pool, un executor ou une cue pour y enregistrer (Échap pour annuler)";
+    if ui.add(button).on_hover_text(help).clicked() {
+        *armed = !*armed;
+    }
 }
 
 impl PoolsView {
     pub fn new() -> Self {
-        Self { store_armed: false }
+        Self
     }
 
-    fn store_button(&mut self, ui: &mut egui::Ui) {
-        let text = RichText::new("Store").strong();
-        let button = if self.store_armed {
-            egui::Button::new(text.color(Color32::WHITE)).fill(ARMED)
-        } else {
-            egui::Button::new(text)
-        };
-        let help = "Armer, puis cliquer une case pour y enregistrer la sélection ou le programmer";
-        if ui.add(button).on_hover_text(help).clicked() {
-            self.store_armed = !self.store_armed;
-        }
-    }
-
-    /// Pool de groupes. Renvoie le résultat de l'action faite, s'il y en a une.
-    pub fn groups(&mut self, ui: &mut egui::Ui, console: &mut Console) -> Option<Result<Outcome, CommandError>> {
-        self.store_button(ui);
+/// Pool de groupes. Renvoie le résultat de l'action faite, s'il y en a une.
+    pub fn groups(
+        &mut self,
+        ui: &mut egui::Ui,
+        console: &mut Console,
+        store_armed: &mut bool,
+    ) -> Option<Result<Outcome, CommandError>> {
+        store_button(ui, store_armed);
         ui.add_space(4.0);
         let groups: Vec<(u32, String, usize)> =
             console.show.groups.iter().map(|(n, g)| (*n, g.name.clone(), g.targets.len())).collect();
-        let number = grid(ui, "groups", &groups, self.store_armed)?;
+        let number = grid(ui, "groups", &groups, *store_armed)?;
         let add = ui.input(|i| i.modifiers.command);
-        let result = if self.store_armed {
+        let result = if *store_armed {
             console.store_group(number, None)
         } else {
             console.select_group(number, if add { SelectMode::Add } else { SelectMode::Replace })
         };
-        self.store_armed = false;
+        *store_armed = false;
         Some(result)
     }
 
@@ -56,8 +55,9 @@ impl PoolsView {
         ui: &mut egui::Ui,
         console: &mut Console,
         family: &mut FeatureGroup,
+        store_armed: &mut bool,
     ) -> Option<Result<Outcome, CommandError>> {
-        self.store_button(ui);
+        store_button(ui, store_armed);
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for f in FeatureGroup::ALL {
@@ -72,13 +72,13 @@ impl PoolsView {
             .filter(|((f, _), _)| *f == current)
             .map(|((_, n), p)| (*n, p.name.clone(), p.values.len()))
             .collect();
-        let number = grid(ui, ("presets", current), &presets, self.store_armed)?;
-        let result = if self.store_armed {
+        let number = grid(ui, ("presets", current), &presets, *store_armed)?;
+        let result = if *store_armed {
             console.store_preset(current, number, None)
         } else {
             console.apply_preset(current, number)
         };
-        self.store_armed = false;
+        *store_armed = false;
         Some(result)
     }
 }

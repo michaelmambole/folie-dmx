@@ -219,6 +219,8 @@ pub enum Command {
     /// Lance un effet modèle sur la sélection.
     ApplyEffect(u32),
     SetTempo(f32),
+    /// `Store Executor 3` : le programmer devient la cue suivante de l'executor 3.
+    StoreExecutor(u32),
 }
 
 struct Parser {
@@ -380,6 +382,10 @@ impl Parser {
             Some(Token::Keyword(Keyword::ClearAll)) => {
                 self.position += 1;
                 Command::ClearAll
+            }
+            Some(Token::Keyword(Keyword::Store)) if self.tokens.get(self.position + 1) == Some(&Token::Keyword(Keyword::Executor)) => {
+                self.position += 2;
+                Command::StoreExecutor(self.integer("numéro d'executor")?)
             }
             Some(Token::Keyword(Keyword::Store)) => {
                 self.position += 1;
@@ -568,6 +574,7 @@ mod tests {
         assert!(parse("Store Group 1 Fade 3").is_err());
         assert!(parse("Goto 5").unwrap_err().0.contains("Goto Cue"));
         assert_eq!(parse("eff 3"), Ok(Command::ApplyEffect(3)));
+        assert_eq!(parse("Store Exec 4"), Ok(Command::StoreExecutor(4)));
         assert_eq!(parse("Tempo 128"), Ok(Command::SetTempo(128.0)));
         assert!(parse("Tempo 0").is_err());
         assert!(parse("e 1").unwrap_err().0.contains("ambigu"), "Effect ou Executor");

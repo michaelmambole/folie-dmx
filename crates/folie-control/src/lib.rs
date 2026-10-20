@@ -283,6 +283,7 @@ impl Console {
             Command::SelectExecutor(executor) => Ok(self.select_executor(executor)),
             Command::SetFader(executor, percent) => self.set_fader(executor, percent),
             Command::ApplyEffect(number) => self.apply_effect(number),
+            Command::StoreExecutor(executor) => self.store_in_executor(executor),
             Command::SetTempo(bpm) => Ok(self.set_tempo(bpm)),
             Command::Clear => {
                 if self.selection.is_empty() {
@@ -726,7 +727,7 @@ mod tests {
         run(&mut c, "Fixture 4 At 100");
         run(&mut c, "Store Cue 1 Fade 0");
         run(&mut c, "ClearAll");
-        assert_eq!(c.show.executors[&2], 1, "première séquence créée pour l'executor 2");
+        assert_eq!(c.show.executors[&2].sequence, 1, "première séquence créée pour l'executor 2");
 
         run(&mut c, "Go Executor 2");
         assert_eq!(dmx(&c, 44), 255);
@@ -781,5 +782,36 @@ mod tests {
         assert_eq!(settled(&c).tempo, 98.0);
         assert!(c.execute("Effect 9").unwrap_err().to_string().contains("n'existe pas"));
         assert_eq!(c.execute("Effect 1").unwrap_err().to_string(), "aucune sélection");
+    }
+
+    #[test]
+    fn executor_modes_and_management() {
+        use folie_show::ExecutorMode;
+        let mut c = console();
+        assert!(c.press(3).unwrap_err().to_string().contains("Store, puis cliquez-le"));
+
+        run(&mut c, "Fixture 1 At 100");
+        assert!(run(&mut c, "Store Executor 3").message.starts_with("Cue 1 enregistrée sur l'executor 3"));
+        run(&mut c, "ClearAll");
+        // Store Executor sélectionne l'executor : on peut retoucher sa cue tout de suite.
+        c.set_cue_times(CueNumber::whole(1), 0.0, 0.0).unwrap();
+        c.set_executor_mode(3, ExecutorMode::Toggle).unwrap();
+        c.press(3).unwrap();
+        assert_eq!(dmx(&c, 2), 255, "bascule : allumé");
+        c.press(3).unwrap();
+        assert_eq!(dmx(&c, 2), 0, "bascule : éteint");
+
+        c.set_executor_mode(3, ExecutorMode::Flash).unwrap();
+        c.flash(3, true);
+        assert_eq!(dmx(&c, 2), 255);
+        c.flash(3, false);
+        assert_eq!(dmx(&c, 2), 0);
+
+        c.rename_executor(3, "Face".into()).unwrap();
+        assert_eq!(c.executor(3).unwrap().1.name, "Face");
+        c.assign_sequence(4, 1).unwrap();
+        assert_eq!(c.clear_executor(3).unwrap().message, "Executor 3 vidé", "la séquence sert encore à l'executor 4");
+        assert_eq!(c.clear_executor(4).unwrap().message, "Executor 4 vidé, séquence supprimée");
+        assert!(c.show.sequences.is_empty());
     }
 }

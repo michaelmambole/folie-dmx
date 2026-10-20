@@ -188,6 +188,9 @@ impl FolieApp {
                 }
             }
         }
+        if self.store_armed && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.store_armed = false;
+        }
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::B)) {
             self.toggle_blackout();
         }
@@ -389,14 +392,16 @@ impl FolieApp {
                 }
             }
             WindowKind::Groups => {
-                let result = egui::ScrollArea::vertical().show(ui, |ui| self.pools.groups(ui, &mut self.console)).inner;
+                let result = egui::ScrollArea::vertical()
+                    .show(ui, |ui| self.pools.groups(ui, &mut self.console, &mut self.store_armed))
+                    .inner;
                 self.report(result);
             }
             WindowKind::Presets => {
                 let Some(window) = self.windows.workspace.window_mut(kind) else { return };
                 let mut family = window.family();
                 let result = egui::ScrollArea::vertical()
-                    .show(ui, |ui| self.pools.presets(ui, &mut self.console, &mut family))
+                    .show(ui, |ui| self.pools.presets(ui, &mut self.console, &mut family, &mut self.store_armed))
                     .inner;
                 if let Some(window) = self.windows.workspace.window_mut(kind) {
                     window.preset_family = Some(family.key().to_string());
@@ -405,11 +410,17 @@ impl FolieApp {
             }
             WindowKind::Output => self.output_contents(ui),
             WindowKind::Cues => {
-                let result = playback_ui::cues_window(ui, &mut self.console, &self.snapshot);
+                let result = playback_ui::cues_window(ui, &mut self.console, &self.snapshot, &mut self.store_armed);
                 self.report(result);
             }
             WindowKind::Executors => {
-                let result = playback_ui::executors_window(ui, &mut self.console, &self.snapshot);
+                let result = playback_ui::executors_window(
+                    ui,
+                    &mut self.console,
+                    &self.snapshot,
+                    &mut self.store_armed,
+                    &mut self.flash_held,
+                );
                 self.report(result);
             }
             WindowKind::Effects => {

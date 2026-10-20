@@ -63,7 +63,10 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Sauvegarde automatique, reprise après plantage
 - [ ] `Block` (figer les valeurs suivies), temps de Back et d'Off, bouclage en fin de liste
 - [ ] Fondu des attributs LTP depuis la couche inférieure (aujourd'hui : départ franc)
-- [ ] Pages d'executors, executors de type flash/temp, temps par attribut
+- [x] Executors en modes Go, Flash et Bascule ; 10 à fader et 10 à boutons
+- [x] Touche Store globale : Store puis clic sur un executor, une case de pool ou une cue
+- [x] Executors toujours complets (cue en cours et suivante, progression), menu au clic droit
+- [ ] Pages d'executors, mode Temp, temps par attribut
 - **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
   `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)
 

@@ -85,6 +85,55 @@ impl Cue {
     }
 }
 
+/// Comportement de la touche principale d'un executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ExecutorMode {
+    /// Go, Back, Off : on avance dans la séquence.
+    #[default]
+    Go,
+    /// Allumé tant que la touche est maintenue, à pleine intensité.
+    Flash,
+    /// Un appui allume, le suivant éteint.
+    Toggle,
+}
+
+impl ExecutorMode {
+    pub const ALL: [ExecutorMode; 3] = [Self::Go, Self::Flash, Self::Toggle];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Go => "go",
+            Self::Flash => "flash",
+            Self::Toggle => "toggle",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Go => "Go",
+            Self::Flash => "Flash",
+            Self::Toggle => "Bascule",
+        }
+    }
+}
+
+/// Un executor : la séquence qu'il joue et le comportement de sa touche.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Executor {
+    pub sequence: u32,
+    pub mode: ExecutorMode,
+}
+
+impl Executor {
+    pub fn new(sequence: u32) -> Self {
+        Self { sequence, mode: ExecutorMode::Go }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Sequence {
     pub name: String,

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-pub use cues::{Cue, CueNumber, CueValue, DEFAULT_FADE, Sequence};
+pub use cues::{Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, Sequence};
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
 
 use effects::EffectEntry;
@@ -56,8 +56,8 @@ pub struct Show {
     pub presets: BTreeMap<(FeatureGroup, u32), Preset>,
     /// Séquences (listes de cues) par numéro.
     pub sequences: BTreeMap<u32, Sequence>,
-    /// Executor -> séquence qu'il joue.
-    pub executors: BTreeMap<u32, u32>,
+    /// Executors par numéro : 1 à 10 avec fader, 11 à 20 en boutons.
+    pub executors: BTreeMap<u32, Executor>,
     /// Battements par minute, pour les effets calés sur le tempo.
     pub tempo: f32,
 }
@@ -113,9 +113,10 @@ struct ShowFile {
     presets: Vec<PresetEntry>,
     #[serde(default)]
     sequences: Vec<SequenceEntry>,
-    /// Executor (en texte, clé JSON) -> séquence.
+    /// Executor (en texte, clé JSON) -> {"sequence": 1, "mode": "go"}.
+    /// Un simple numéro de séquence (anciens shows) est accepté aussi.
     #[serde(default)]
-    executors: BTreeMap<String, u32>,
+    executors: BTreeMap<String, Value>,
     #[serde(default = "default_tempo")]
     tempo: f32,
 }
@@ -271,7 +272,11 @@ pub fn to_json(show: &Show) -> String {
                 .collect(),
         })
         .collect();
-    let executors = show.executors.iter().map(|(e, s)| (e.to_string(), *s)).collect();
+    let executors = show
+        .executors
+        .iter()
+        .map(|(e, x)| (e.to_string(), serde_json::json!({ "sequence": x.sequence, "mode": x.mode.key() })))
+        .collect();
     let file = ShowFile {
         format: FORMAT.into(),
         version: VERSION,
@@ -399,12 +404,20 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         sequences.insert(entry.number, Sequence { name: entry.name, cues });
     }
     let mut executors = BTreeMap::new();
-    for (executor, sequence) in file.executors {
-        match executor.parse::<u32>() {
-            Ok(executor) if sequences.contains_key(&sequence) => {
-                executors.insert(executor, sequence);
+    for (executor, raw) in file.executors {
+        let (sequence, mode) = match &raw {
+            Value::Number(n) => (n.as_u64(), Some(ExecutorMode::Go)),
+            Value::Object(o) => (
+                o.get("sequence").and_then(Value::as_u64),
+                o.get("mode").and_then(Value::as_str).map_or(Some(ExecutorMode::Go), ExecutorMode::from_key),
+            ),
+            _ => (None, None),
+        };
+        match (executor.parse::<u32>(), sequence.map(|s| s as u32), mode) {
+            (Ok(executor), Some(sequence), Some(mode)) if sequences.contains_key(&sequence) => {
+                executors.insert(executor, Executor { sequence, mode });
             }
-            _ => warnings.push(format!("Executor {executor} : séquence {sequence} introuvable")),
+            _ => warnings.push(format!("Executor {executor} : illisible ou séquence introuvable, retiré")),
         }
     }
 
@@ -523,7 +536,10 @@ mod tests {
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
         cues.insert("1.5".parse().unwrap(), Cue::new("Noir".into()));
         let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
-        let executors = BTreeMap::from([(1, 1)]);
+        let executors = BTreeMap::from([
+            (1, Executor::new(1)),
+            (11, Executor { sequence: 1, mode: ExecutorMode::Flash }),
+        ]);
         Show { patch, groups, presets, sequences, executors, tempo: 98.0 }
     }
 
@@ -587,6 +603,17 @@ mod tests {
         assert_eq!(loaded.show.groups[&3].targets, ["2".parse().unwrap()]);
         assert_eq!(loaded.show.presets[&(FeatureGroup::Color, 1)].values.len(), 1);
         assert_eq!(loaded.warnings.len(), 3, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn reads_executors_of_older_shows() {
+        let library = library();
+        let mut file: Value = serde_json::from_str(&to_json(&sample(&library))).unwrap();
+        file["executors"] = serde_json::json!({ "1": 1, "2": { "sequence": 1, "mode": "toggle" }, "3": 99 });
+        let loaded = from_json(&file.to_string(), &library).unwrap();
+        assert_eq!(loaded.show.executors[&1], Executor::new(1));
+        assert_eq!(loaded.show.executors[&2].mode, ExecutorMode::Toggle);
+        assert!(!loaded.show.executors.contains_key(&3), "séquence 99 inexistante");
     }
 
     #[test]

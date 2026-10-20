@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, CueState, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
-use folie_show::{Cue, CueNumber, CueValue, Effect, Preset, Sequence, Show};
+use folie_show::{Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, Preset, Sequence, Show};
 
 use crate::{CommandError, Console, Outcome, invalid};
 
@@ -74,8 +74,8 @@ pub fn tracked_states(
 pub fn playback_data(show: &Show) -> Sequences {
     show.executors
         .iter()
-        .filter_map(|(executor, sequence)| {
-            let sequence = show.sequences.get(sequence)?;
+        .filter_map(|(executor, x)| {
+            let sequence = show.sequences.get(&x.sequence)?;
             Some((*executor, Arc::new(tracked_states(*executor, sequence, &show.patch, &show.presets))))
         })
         .collect()
@@ -93,7 +93,7 @@ impl Console {
 
     pub fn select_executor(&mut self, executor: u32) -> Outcome {
         self.selected_executor = executor;
-        let what = match self.show.executors.get(&executor).and_then(|s| self.show.sequences.get(s)) {
+        let what = match self.show.executors.get(&executor).and_then(|x| self.show.sequences.get(&x.sequence)) {
             Some(sequence) => format!(" (séquence « {} »)", sequence.name),
             None => " (vide)".into(),
         };
@@ -102,13 +102,13 @@ impl Console {
 
     /// Séquence de l'executor sélectionné, créée au premier `Store Cue`.
     pub fn selected_sequence(&self) -> Option<(u32, &Sequence)> {
-        let number = *self.show.executors.get(&self.selected_executor)?;
+        let number = self.show.executors.get(&self.selected_executor)?.sequence;
         Some((number, self.show.sequences.get(&number)?))
     }
 
     fn selected_sequence_mut(&mut self) -> Result<&mut Sequence, CommandError> {
         let executor = self.selected_executor;
-        let Some(number) = self.show.executors.get(&executor).copied() else {
+        let Some(number) = self.show.executors.get(&executor).map(|x| x.sequence) else {
             return invalid(format!("l'executor {executor} n'a pas de séquence"));
         };
         self.show.sequences.get_mut(&number).ok_or_else(|| CommandError::Invalid(format!("séquence {number} introuvable")))
@@ -143,11 +143,11 @@ impl Console {
 
         let executor = self.selected_executor;
         let sequence_number = match self.show.executors.get(&executor) {
-            Some(n) => *n,
+            Some(x) => x.sequence,
             None => {
                 let n = (1..).find(|n| !self.show.sequences.contains_key(n)).unwrap_or(executor);
                 self.show.sequences.insert(n, Sequence { name: format!("Séquence {n}"), cues: BTreeMap::new() });
-                self.show.executors.insert(executor, n);
+                self.show.executors.insert(executor, Executor::new(n));
                 n
             }
         };
@@ -238,6 +238,89 @@ impl Console {
         };
         self.engine.send(EngineCommand::Goto { executor, cue: index });
         Ok(Outcome::info(format!("Goto cue {number}")))
+    }
+
+    pub fn executor(&self, executor: u32) -> Option<(&Executor, &Sequence)> {
+        let x = self.show.executors.get(&executor)?;
+        Some((x, self.show.sequences.get(&x.sequence)?))
+    }
+
+    /// Touche principale de l'executor, selon son mode (Flash : voir [`Console::flash`]).
+    pub fn press(&self, executor: u32) -> Result<Outcome, CommandError> {
+        let Some((x, _)) = self.executor(executor) else {
+            return invalid(format!("l'executor {executor} est vide : Store, puis cliquez-le pour y enregistrer"));
+        };
+        match x.mode {
+            ExecutorMode::Go | ExecutorMode::Flash => self.go(Some(executor)),
+            ExecutorMode::Toggle => {
+                self.engine.send(EngineCommand::Toggle(executor));
+                Ok(Outcome::info(format!("Executor {executor} basculé")))
+            }
+        }
+    }
+
+    pub fn flash(&self, executor: u32, pressed: bool) {
+        if self.show.executors.contains_key(&executor) {
+            self.engine.send(EngineCommand::Flash { executor, pressed });
+        }
+    }
+
+    /// Le programmer devient la cue suivante de l'executor (créé s'il est vide).
+    pub fn store_in_executor(&mut self, executor: u32) -> Result<Outcome, CommandError> {
+        let previous = self.selected_executor;
+        self.selected_executor = executor;
+        let result = self.store_cue(None, None, None);
+        if result.is_err() {
+            self.selected_executor = previous;
+        }
+        result
+    }
+
+    pub fn set_executor_mode(&mut self, executor: u32, mode: ExecutorMode) -> Result<Outcome, CommandError> {
+        let Some(x) = self.show.executors.get_mut(&executor) else {
+            return invalid(format!("l'executor {executor} est vide"));
+        };
+        x.mode = mode;
+        self.engine.send(EngineCommand::Off(executor));
+        Ok(Outcome::changed(format!("Executor {executor} en mode {}", mode.label())))
+    }
+
+    /// Renomme la séquence de l'executor.
+    pub fn rename_executor(&mut self, executor: u32, name: String) -> Result<Outcome, CommandError> {
+        let Some(sequence) = self.show.executors.get(&executor).map(|x| x.sequence) else {
+            return invalid(format!("l'executor {executor} est vide"));
+        };
+        if let Some(s) = self.show.sequences.get_mut(&sequence) {
+            s.name = name.clone();
+        }
+        Ok(Outcome::changed(format!("Séquence {sequence} renommée « {name} »")))
+    }
+
+    /// Fait jouer une autre séquence existante à l'executor.
+    pub fn assign_sequence(&mut self, executor: u32, sequence: u32) -> Result<Outcome, CommandError> {
+        if !self.show.sequences.contains_key(&sequence) {
+            return invalid(format!("la séquence {sequence} n'existe pas"));
+        }
+        self.engine.send(EngineCommand::Off(executor));
+        let mode = self.show.executors.get(&executor).map_or(ExecutorMode::Go, |x| x.mode);
+        self.show.executors.insert(executor, Executor { sequence, mode });
+        self.sync_playback();
+        Ok(Outcome::changed(format!("Executor {executor} : séquence {sequence}")))
+    }
+
+    /// Libère l'executor. Sa séquence est supprimée si plus aucun executor ne la joue.
+    pub fn clear_executor(&mut self, executor: u32) -> Result<Outcome, CommandError> {
+        let Some(x) = self.show.executors.remove(&executor) else {
+            return invalid(format!("l'executor {executor} est déjà vide"));
+        };
+        self.engine.send(EngineCommand::Off(executor));
+        let still_used = self.show.executors.values().any(|o| o.sequence == x.sequence);
+        if !still_used {
+            self.show.sequences.remove(&x.sequence);
+        }
+        self.sync_playback();
+        let detail = if still_used { "" } else { ", séquence supprimée" };
+        Ok(Outcome::changed(format!("Executor {executor} vidé{detail}")))
     }
 
     pub fn set_fader(&self, executor: u32, percent: f32) -> Result<Outcome, CommandError> {

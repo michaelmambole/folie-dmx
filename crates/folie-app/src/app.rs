@@ -94,6 +94,10 @@ pub struct FolieApp {
     library_errors: Vec<LoadError>,
     console: Console,
     pools: PoolsView,
+    /// Touche Store armée : le prochain clic sur un pool, un executor ou une cue enregistre.
+    store_armed: bool,
+    /// Executors dont la touche Flash est maintenue.
+    flash_held: std::collections::BTreeSet<u32>,
     command_line: CommandLine,
     channel_labels: Vec<Option<String>>,
     file: file::FileState,
@@ -128,6 +132,8 @@ impl FolieApp {
             snapshot: console.engine().snapshot(),
             console,
             pools: PoolsView::new(),
+            store_armed: false,
+            flash_held: Default::default(),
             command_line: CommandLine::new(),
             library,
             library_errors,
@@ -189,6 +195,8 @@ impl FolieApp {
             ui.heading(RichText::new("Folie-DMX").strong());
             self.file_menu(ui);
             self.windows_menu(ui);
+            ui.separator();
+            crate::pools::store_button(ui, &mut self.store_armed);
             ui.separator();
 
             let output_label = ui.label("Sortie :");
@@ -645,8 +653,8 @@ mod tests {
             preset_family: None,
         };
         workspace.windows.push(window(WindowKind::Cues, 1520.0, 40.0, 560.0, 380.0));
-        workspace.windows.push(window(WindowKind::Executors, 1000.0, 860.0, 1100.0, 380.0));
-        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2200.0, 1300.0));
+        workspace.windows.push(window(WindowKind::Executors, 900.0, 820.0, 1350.0, 700.0));
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1600.0));
         harness.get_by_label("Aucune cue. Réglez des valeurs puis tapez « Store Cue », ou :");
 
         patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
@@ -660,17 +668,29 @@ mod tests {
         assert!(harness.state().file.dirty, "les cues sont à enregistrer dans le show");
         assert_eq!(output(&harness, 2), 0);
 
-        // Go depuis la fenêtre Cues : la cue 1, puis la 2 (la 1 reste suivie).
-        harness.get_all_by_label("Go").next().unwrap().click();
+        // Bouton Go de l'executor 1 (le mot « Go » apparaît aussi comme étiquette de mode).
+        let go = |h: &Harness<'_, FolieApp>| h.get_all(By::new().role(Role::Button).label("Go")).next().unwrap().click();
+        go(&harness);
         settle(&mut harness);
         assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 0));
         harness.get_by_label("1 Face"); // cue en cours affichée dans les executors
-        harness.get_all_by_label("Go").next().unwrap().click();
+        harness.get_by_label("ensuite 2 Contre");
+        go(&harness);
         settle(&mut harness);
         assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 255));
-        harness.get_all_by_label("Back").next().unwrap().click();
+        harness.get_all(By::new().role(Role::Button).label("Back")).next().unwrap().click();
         settle(&mut harness);
         assert_eq!(output(&harness, 16), 0);
+
+        // Store armé, puis « Enregistrer ici » sur l'executor 2, encore vide.
+        command(&mut harness, "Fixture 2 At 100");
+        harness.get_all_by_label("Store").next().unwrap().click(); // celui de la barre du haut
+        harness.run_steps(2);
+        harness.get_all_by_label("Enregistrer ici").nth(1).unwrap().click();
+        settle(&mut harness);
+        assert!(!harness.state().store_armed, "Store se désarme après usage");
+        assert_eq!(harness.state().console.show.executors[&2].sequence, 2);
+        harness.get_by_label("Cue 1 enregistrée sur l'executor 2 (fondu 2 s)");
 
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("cues.png");

@@ -61,6 +61,10 @@ pub enum Command {
     Off(u32),
     /// Niveau du fader de l'executor, de 0 à 1 (intensité seulement).
     SetFader { executor: u32, level: f32 },
+    /// Touche Flash enfoncée (allume tout de suite, à fond) ou relâchée (éteint).
+    Flash { executor: u32, pressed: bool },
+    /// Allume l'executor s'il est éteint, l'éteint sinon.
+    Toggle(u32),
     /// Effets qui tournent dans le programmer (remplace les précédents).
     SetProgrammerEffects(Vec<EffectInstance>),
     /// Tempo pour les effets calés sur le temps, en battements par minute.
@@ -289,6 +293,22 @@ impl Engine {
                     }
                     self.sequences = sequences;
                 }
+                Command::Flash { executor, pressed } => {
+                    if let Some(playback) = self.playbacks.get_mut(&executor) {
+                        playback.flashing = pressed;
+                    }
+                    let target = move |current: Option<usize>, len: usize| match (pressed, current) {
+                        (true, None) if len > 0 => Some(Some(0)),
+                        (false, Some(_)) => Some(None),
+                        _ => None,
+                    };
+                    self.transition_with(executor, true, target);
+                }
+                Command::Toggle(executor) => self.transition(executor, |current, len| match current {
+                    None if len > 0 => Some(Some(0)),
+                    Some(_) => Some(None),
+                    None => None,
+                }),
                 Command::Go(executor) => self.transition(executor, |current, len| match current {
                     None if len > 0 => Some(Some(0)),
                     Some(c) if c + 1 < len => Some(Some(c + 1)),
@@ -328,6 +348,15 @@ impl Engine {
 
     /// `next(cue en cours, nombre de cues)` donne la cue visée, ou `None` pour ne rien faire.
     fn transition(&mut self, executor: u32, next: impl Fn(Option<usize>, usize) -> Option<Option<usize>>) {
+        self.transition_with(executor, false, next);
+    }
+
+    fn transition_with(
+        &mut self,
+        executor: u32,
+        snap: bool,
+        next: impl Fn(Option<usize>, usize) -> Option<Option<usize>>,
+    ) {
         let (Some(cues), Some(playback)) = (self.sequences.get(&executor), self.playbacks.get_mut(&executor)) else {
             log::warn!("executor {executor} sans séquence");
             return;
@@ -335,7 +364,7 @@ impl Engine {
         if let Some(target) = next(playback.current(), cues.len()) {
             self.activations += 1;
             let patch = &self.state.patch;
-            playback.go_to(target, cues, Instant::now(), self.activations, |k| Self::is_intensity(patch, k));
+            playback.go_to(target, cues, Instant::now(), self.activations, snap, |k| Self::is_intensity(patch, k));
         }
     }
 
@@ -359,7 +388,7 @@ impl Engine {
             }
             for (key, value) in values {
                 if Self::is_intensity(patch, &key) {
-                    let scaled = (value as f32 * playback.level).round() as u16;
+                    let scaled = (value as f32 * playback.intensity_level()).round() as u16;
                     let slot = merged.entry(key).or_insert(0);
                     *slot = (*slot).max(scaled);
                 } else {
@@ -605,9 +634,21 @@ mod tests {
         assert_eq!(engine.snapshot().running_effects, 1);
         engine.send(Command::SetProgrammerEffects(Vec::new()));
 
+        // Flash : à fond tout de suite malgré le fader à 25 %, éteint au relâchement.
         engine.send(Command::ClearProgrammer);
         engine.send(Command::Off(1));
         engine.send(Command::Off(2));
+        assert_eq!(out(2), 0);
+        engine.send(Command::Flash { executor: 1, pressed: true });
+        assert_eq!(out(2), 0x80, "cue 1 à pleine intensité");
+        assert!(engine.snapshot().executors[&1].flashing);
+        engine.send(Command::Flash { executor: 1, pressed: false });
+        assert_eq!(out(2), 0);
+        // Bascule : un appui allume, le suivant éteint.
+        engine.send(Command::Toggle(2));
+        assert_eq!(out(2), 0x40);
+        engine.send(Command::Toggle(2));
+        assert_eq!(out(2), 0);
         assert_eq!((out(2), out(10)), (0, 0x80), "tout éteint : valeurs par défaut");
         let snapshot = engine.snapshot();
         assert_eq!(snapshot.executors[&1].cue, None);
