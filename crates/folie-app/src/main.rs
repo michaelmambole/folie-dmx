@@ -1,5 +1,6 @@
 mod app;
 mod cmdline;
+mod color_picker;
 mod effects_ui;
 mod faders;
 mod fixtures;

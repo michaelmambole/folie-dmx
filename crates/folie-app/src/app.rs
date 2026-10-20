@@ -852,4 +852,20 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
     }
+
+    #[test]
+    fn color_picker_sets_the_selection() {
+        let mut harness = harness(Storage::disabled());
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        harness.get_by_label("Ambre").click();
+        settle(&mut harness);
+        let out = |h: &Harness<'_, FolieApp>, ch| h.state().snapshot.output[0].get(ch).unwrap();
+        // MH 6 : Red 4, Green 5, Blue 6, White 7 (et 18 à 21 pour la deuxième).
+        assert_eq!((out(&harness, 4), out(&harness, 5), out(&harness, 6), out(&harness, 7)), (255, 128, 0, 0));
+        assert_eq!(out(&harness, 18), 255, "toute la sélection");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("color-picker.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+    }
 }

@@ -5,6 +5,7 @@
 //! elle (écran, et plus tard OSC et web), si bien qu'une fonction ajoutée ici est
 //! disponible partout à la fois.
 
+pub mod color;
 pub mod command;
 pub mod cues;
 pub mod effects;
@@ -818,6 +819,36 @@ mod tests {
         run(&mut c, "Store Preset 4.1");
         run(&mut c, "ClearAll");
         assert_eq!(dmx(&c, 32), 128);
+    }
+
+    #[test]
+    fn color_picker_translates_per_fixture() {
+        use crate::color::key_of;
+        let mut c = console();
+        // MH 6 (RGBW + roue simulée) : orange pastel → blanc extrait, roue ouverte.
+        run(&mut c, "Fixture 1");
+        assert_eq!(c.apply_color([1.0, 0.75, 0.5]), 1);
+        let t = fixture(1);
+        let value = |c: &Console, name| c.programmer()[&key_of(c, t, name)];
+        assert_eq!(value(&c, "White"), 32_768, "la part commune passe dans le blanc");
+        assert_eq!((value(&c, "Red"), value(&c, "Green"), value(&c, "Blue")), (32_768, 16_384, 0));
+        assert_eq!(value(&c, "Color Wheel") >> 8, 0, "roue en position ouverte");
+
+        // Le Sunstrip n'a pas de couleur : rien n'est envoyé.
+        run(&mut c, "Fixture 10");
+        assert_eq!(c.apply_color([1.0, 0.0, 0.0]), 0);
+    }
+
+    #[test]
+    fn wheel_only_picks_the_nearest_color() {
+        let c = console();
+        let parameters = c.show.patch.parameters_of(fixture(1));
+        let wheel: Vec<(usize, &Parameter)> =
+            parameters.into_iter().filter(|(_, p)| p.attribute == Attribute::ColorMacro).collect();
+        // Vert pur : la couleur 12 (R0 G255 B0 W0), DMX 66 à 70.
+        let values = crate::color::color_values(&wheel, [0.0, 1.0, 0.0]);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].1 >> 8, 66);
     }
 
     #[test]

@@ -31,6 +31,8 @@ pub struct FixturesView {
     pub(crate) form: AddForm,
     /// Dernier résultat d'une opération de patch : (succès, message).
     message: Option<(bool, String)>,
+    /// Couleur visée dans le sélecteur (teinte, saturation, luminosité).
+    picker: [f32; 3],
 }
 
 impl FixturesView {
@@ -47,6 +49,7 @@ impl FixturesView {
                 address: 1,
             },
             message: None,
+            picker: [0.0, 0.0, 1.0],
         }
     }
 
@@ -302,7 +305,7 @@ impl FixturesView {
 
     /// Le Programmer : réglage des attributs de la sélection.
     pub fn attribute_panel(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         console: &mut Console,
         snapshot: &Snapshot,
@@ -369,6 +372,13 @@ impl FixturesView {
                 theme::card(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     theme::section(ui, group.label());
+                    if group == FeatureGroup::Color && has_color(&rows) {
+                        let current = current_color(console, snapshot, &fixture, reference);
+                        if let Some(rgb) = crate::color_picker::color_picker(ui, &mut self.picker, current) {
+                            console.apply_color(rgb);
+                        }
+                        ui.add_space(8.0);
+                    }
                     egui::Grid::new(("attributes", group)).num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
                         for (index, parameter) in rows.iter().filter(|(_, p)| p.attribute.group() == group) {
                             let row = Row { index: *index, parameter, fixture: &fixture, reference, snapshot, display, bar_width };
@@ -399,6 +409,23 @@ fn selection_chips(ui: &mut egui::Ui, selection: &[Target]) {
             ui.label(RichText::new(format!("+{}", selection.len() - SHOWN)).color(theme::MUTED));
         }
     });
+}
+
+/// La fixture sait-elle faire de la couleur (mélange ou roue) ?
+fn has_color(rows: &[(usize, Parameter)]) -> bool {
+    rows.iter().any(|(_, p)| matches!(p.attribute, folie_fixture::Attribute::ColorMix(_) | folie_fixture::Attribute::ColorMacro))
+}
+
+/// Couleur produite en ce moment par la cible de référence, d'après la sortie DMX.
+fn current_color(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixture, target: Target) -> Option<[u8; 3]> {
+    let values = console
+        .show
+        .patch
+        .parameters_of(target)
+        .into_iter()
+        .filter_map(|(_, p)| live_value(snapshot, fixture, p).map(|v| (p.name.clone(), v)))
+        .collect();
+    console.target_color(target, &values)
 }
 
 /// Valeur réellement envoyée pour un paramètre, relue dans la sortie DMX.

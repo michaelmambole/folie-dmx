@@ -53,6 +53,14 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [ ] Plusieurs fenêtres d'un même type (ex. deux pools de presets)
 - [ ] Dispositions embarquées dans le show
 
+## Identité visuelle et ergonomie
+- [x] Thème : palette à sens fixe, polices Inter et JetBrains Mono, cartes et sections
+- [x] Programmer : barres de valeur colorées selon la source, Option-clic pour relâcher
+- [x] Sélecteur de couleur traduit par appareil (RGB, RGBW, CMY, roue seule), couleurs rapides
+- [x] Executors : fader dessiné, cartes adaptatives ; pools : couleur obtenue, LED d'état
+- [ ] Fenêtres Cues, Patch, Effets et Sortie DMX au même niveau visuel
+- [ ] Gélatines (Lee, Rosco) dans les couleurs rapides
+
 ## Phase 4 — Cues et executors (≈ 2 à 3 mois, le cœur)
 - [x] Séquences de cues numérotées au millième (1, 1.5…), fondu et délai par cue
 - [x] **Tracking** calculé par la console, `Release` pour rendre un paramètre
