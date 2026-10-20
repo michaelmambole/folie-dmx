@@ -1,0 +1,27 @@
+[package]
+name = "folie-app"
+description = "Interface graphique de Folie-DMX"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "folie-dmx"
+path = "src/main.rs"
+
+[dependencies]
+folie-dmx.workspace = true
+folie-engine.workspace = true
+folie-fixture.workspace = true
+folie-show.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rfd = "0.17"
+dirs = "7"
+eframe = "0.37"
+log.workspace = true
+env_logger.workspace = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
+tempfile = "3"

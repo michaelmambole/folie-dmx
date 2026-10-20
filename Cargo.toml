@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[workspace.dependencies]
+folie-dmx = { path = "crates/folie-dmx" }
+folie-engine = { path = "crates/folie-engine" }
+folie-fixture = { path = "crates/folie-fixture" }
+folie-show = { path = "crates/folie-show" }
+serialport = { version = "4.7", default-features = false }
+crossbeam-channel = "0.5"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"

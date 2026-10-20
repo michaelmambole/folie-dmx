@@ -1,0 +1,567 @@
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use eframe::egui::{self, Color32, RichText, Sense, vec2};
+use folie_engine::{Command, EngineHandle, Snapshot};
+use folie_fixture::{
+    Capability, CapabilityKind, FeatureGroup, FixtureId, Library, ParamKey, Parameter, Patch,
+    PatchedFixture,
+};
+
+use crate::app::DisplayMode;
+
+/// Couleur des valeurs saisies dans le programmer (rouge, comme sur MA).
+const PROGRAMMED: Color32 = Color32::from_rgb(255, 95, 95);
+const NAME_WIDTH: f32 = 170.0;
+const VALUE_WIDTH: f32 = 120.0;
+
+pub(crate) struct AddForm {
+    fixture_type: usize,
+    mode: usize,
+    pub(crate) quantity: u32,
+    pub(crate) first_id: u32,
+    auto_address: bool,
+    address: u16,
+}
+
+/// Ce qu'on sélectionne : une fixture entière (« 5 ») ou une sous-fixture (« 5.3 »).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Target {
+    pub fixture: FixtureId,
+    /// Index dans `Mode::heads`, `None` pour la fixture entière.
+    pub head: Option<usize>,
+}
+
+impl Target {
+    pub fn whole(fixture: FixtureId) -> Self {
+        Self { fixture, head: None }
+    }
+
+    pub fn label(&self) -> String {
+        match self.head {
+            None => self.fixture.to_string(),
+            Some(head) => format!("{}.{}", self.fixture, head + 1),
+        }
+    }
+
+    /// La fixture entière pilote tous ses paramètres, une sous-fixture seulement les siens.
+    fn covers(&self, parameter: &Parameter) -> bool {
+        self.head.is_none() || parameter.head == self.head
+    }
+}
+
+pub struct FixturesView {
+    pub selection: BTreeSet<Target>,
+    last_clicked: Option<Target>,
+    /// Fixtures multi-instance dont les sous-fixtures sont affichées dans le patch.
+    expanded: BTreeSet<FixtureId>,
+    pub(crate) form: AddForm,
+    /// Dernier résultat d'une opération de patch : (succès, message).
+    message: Option<(bool, String)>,
+}
+
+impl FixturesView {
+    pub fn new() -> Self {
+        Self {
+            selection: BTreeSet::new(),
+            last_clicked: None,
+            expanded: BTreeSet::new(),
+            form: AddForm {
+                fixture_type: 0,
+                mode: 0,
+                quantity: 1,
+                first_id: 1,
+                auto_address: true,
+                address: 1,
+            },
+            message: None,
+        }
+    }
+
+    /// Liste du patch et formulaire d'ajout. Renvoie `true` si le patch a changé.
+    pub fn patch_panel(&mut self, ui: &mut egui::Ui, library: &Library, patch: &mut Patch) -> bool {
+        let mut changed = false;
+        ui.heading("Patch");
+        ui.add_space(4.0);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            changed |= self.add_form(ui, library, patch);
+        });
+        if let Some((ok, text)) = &self.message {
+            let color = if *ok { Color32::LIGHT_GREEN } else { Color32::LIGHT_RED };
+            ui.colored_label(color, text);
+        }
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui| {
+            if ui.button("Tout sélectionner").clicked() {
+                self.selection = patch.fixtures().iter().map(|f| Target::whole(f.id)).collect();
+            }
+            if ui.button("Aucune").clicked() {
+                self.selection.clear();
+            }
+            let can_delete = !self.selection.is_empty();
+            if ui.add_enabled(can_delete, egui::Button::new("Supprimer")).clicked() {
+                for target in std::mem::take(&mut self.selection) {
+                    patch.remove(target.fixture);
+                }
+                self.message = None;
+                changed = true;
+            }
+        });
+        ui.add_space(4.0);
+        self.patch_list(ui, patch);
+        changed
+    }
+
+    fn add_form(&mut self, ui: &mut egui::Ui, library: &Library, patch: &mut Patch) -> bool {
+        if library.fixtures.is_empty() {
+            ui.label("Bibliothèque vide.");
+            return false;
+        }
+        let form = &mut self.form;
+        form.fixture_type = form.fixture_type.min(library.fixtures.len() - 1);
+        let fixture_type = library.fixtures[form.fixture_type].clone();
+        form.mode = form.mode.min(fixture_type.modes.len() - 1);
+
+        if !fixture_type.warnings.is_empty() {
+            ui.small(format!("Modes non disponibles : {}", fixture_type.warnings.join(" ; ")))
+                .on_hover_text("Fonctions du fichier pas encore gérées par Folie-DMX");
+        }
+        egui::Grid::new("add_form").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            let label = ui.label("Type");
+            egui::ComboBox::from_id_salt("add_type")
+                .width(260.0)
+                .selected_text(fixture_type.display_name())
+                .show_ui(ui, |ui| {
+                    for (i, t) in library.fixtures.iter().enumerate() {
+                        if ui.selectable_value(&mut form.fixture_type, i, t.display_name()).changed() {
+                            form.mode = 0;
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            ui.end_row();
+
+            let label = ui.label("Mode");
+            let mode_label = |m: &folie_fixture::Mode| format!("{} ({} canaux)", m.name, m.footprint);
+            egui::ComboBox::from_id_salt("add_mode")
+                .width(260.0)
+                .selected_text(mode_label(&fixture_type.modes[form.mode]))
+                .show_ui(ui, |ui| {
+                    for (i, m) in fixture_type.modes.iter().enumerate() {
+                        ui.selectable_value(&mut form.mode, i, mode_label(m));
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            ui.end_row();
+
+            let label = ui.label("Quantité");
+            ui.add(egui::DragValue::new(&mut form.quantity).range(1..=128)).labelled_by(label.id);
+            ui.end_row();
+
+            let label = ui.label("Fixture n°");
+            ui.add(egui::DragValue::new(&mut form.first_id).range(1..=99_999)).labelled_by(label.id);
+            ui.end_row();
+
+            let address_label = ui.label("Adresse");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut form.auto_address, "auto");
+                if form.auto_address {
+                    let footprint = fixture_type.modes[form.mode].footprint;
+                    let needed = footprint.saturating_mul(form.quantity as u16);
+                    match patch.next_free_address(0, needed) {
+                        Some(address) => {
+                            form.address = address;
+                            ui.monospace(format!("1.{address:03}"));
+                        }
+                        None => {
+                            ui.colored_label(Color32::LIGHT_RED, "pas assez de place");
+                        }
+                    }
+                } else {
+                    ui.label("1.");
+                    ui.add(egui::DragValue::new(&mut form.address).range(1..=512))
+                        .labelled_by(address_label.id);
+                }
+            });
+            ui.end_row();
+        });
+
+        if !ui.button("Patcher").clicked() {
+            return false;
+        }
+        match self.add_fixtures(&fixture_type, patch) {
+            Ok(ids) => {
+                self.message = Some((true, format!("{} fixture(s) patchée(s)", ids.len())));
+                self.form.first_id = patch.next_free_id().0;
+                self.selection = ids.into_iter().map(Target::whole).collect();
+                true
+            }
+            Err(text) => {
+                self.message = Some((false, text));
+                false
+            }
+        }
+    }
+
+    /// Ajoute toutes les fixtures du formulaire, ou aucune en cas d'erreur.
+    fn add_fixtures(
+        &self,
+        fixture_type: &Arc<folie_fixture::FixtureType>,
+        patch: &mut Patch,
+    ) -> Result<Vec<FixtureId>, String> {
+        let form = &self.form;
+        let footprint = fixture_type.modes[form.mode].footprint as u32;
+        let mut candidate = patch.clone();
+        let mut ids = Vec::new();
+        for i in 0..form.quantity {
+            let id = FixtureId(form.first_id + i);
+            let address = form.address as u32 + i * footprint;
+            let fixture = PatchedFixture {
+                id,
+                name: format!("{} {}", fixture_type.name, id),
+                fixture_type: fixture_type.clone(),
+                mode: form.mode,
+                universe: 0,
+                address: address.min(u16::MAX as u32) as u16,
+            };
+            candidate.add(fixture).map_err(|e| format!("Fixture {id} : {e}"))?;
+            ids.push(id);
+        }
+        *patch = candidate;
+        Ok(ids)
+    }
+
+    fn patch_list(&mut self, ui: &mut egui::Ui, patch: &Patch) {
+        let mut clicked = None;
+        // Lignes dans l'ordre d'affichage, pour la sélection Maj-clic.
+        let mut rows: Vec<Target> = Vec::new();
+        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            egui::Grid::new("patch_list").num_columns(5).striped(true).spacing([10.0, 4.0]).show(
+                ui,
+                |ui| {
+                    ui.label("");
+                    ui.strong("N°");
+                    ui.strong("Nom");
+                    ui.strong("Mode");
+                    ui.strong("Adresse");
+                    ui.end_row();
+                    for f in patch.fixtures() {
+                        let heads = &f.mode().heads;
+                        let expanded = self.expanded.contains(&f.id);
+                        if heads.is_empty() {
+                            ui.label("");
+                        } else {
+                            let (text, help) = if expanded {
+                                ("−", "Masquer les sous-fixtures")
+                            } else {
+                                ("+", "Afficher les sous-fixtures")
+                            };
+                            if ui.small_button(text).on_hover_text(help).clicked() && !self.expanded.remove(&f.id)
+                            {
+                                self.expanded.insert(f.id);
+                            }
+                        }
+                        let target = Target::whole(f.id);
+                        if target_row(ui, &self.selection, target, &f.name) {
+                            clicked = Some(target);
+                        }
+                        rows.push(target);
+                        ui.label(&f.mode().short_name);
+                        ui.monospace(format!("{}.{:03}", f.universe + 1, f.address));
+                        ui.end_row();
+
+                        if !expanded {
+                            continue;
+                        }
+                        for (head, key) in heads.iter().enumerate() {
+                            ui.label("");
+                            let target = Target { fixture: f.id, head: Some(head) };
+                            if target_row(ui, &self.selection, target, &format!("  cellule {key}")) {
+                                clicked = Some(target);
+                            }
+                            rows.push(target);
+                            ui.label("");
+                            let first_offset = f
+                                .mode()
+                                .parameters
+                                .iter()
+                                .filter(|p| p.head == Some(head))
+                                .flat_map(|p| p.offsets.iter().copied())
+                                .min()
+                                .unwrap_or(0);
+                            ui.monospace(format!("{}.{:03}", f.universe + 1, f.address + first_offset));
+                            ui.end_row();
+                        }
+                    }
+                },
+            );
+            if patch.fixtures().is_empty() {
+                ui.label("Aucune fixture patchée.");
+            }
+        });
+
+        if let Some(target) = clicked {
+            let modifiers = ui.input(|i| i.modifiers);
+            let position = |t: Target| rows.iter().position(|r| *r == t);
+            if modifiers.shift
+                && let Some(a) = self.last_clicked.and_then(position)
+                && let Some(b) = position(target)
+            {
+                self.selection.extend(&rows[a.min(b)..=a.max(b)]);
+            } else if modifiers.command {
+                if !self.selection.remove(&target) {
+                    self.selection.insert(target);
+                }
+            } else {
+                self.selection = BTreeSet::from([target]);
+            }
+            self.last_clicked = Some(target);
+        }
+    }
+
+    /// Réglage des attributs des fixtures sélectionnées.
+    pub fn attribute_panel(
+        &self,
+        ui: &mut egui::Ui,
+        snapshot: &Snapshot,
+        display: DisplayMode,
+        engine: &EngineHandle,
+    ) {
+        let patch = &snapshot.patch;
+        let targets: Vec<Selected<'_>> = self
+            .selection
+            .iter()
+            .filter_map(|t| patch.get(t.fixture).map(|fixture| Selected { fixture, target: *t }))
+            .collect();
+        let Some(reference) = targets.first() else {
+            ui.add_space(20.0);
+            ui.label("Sélectionnez des fixtures dans le patch (Cmd-clic, Maj-clic pour plusieurs).");
+            return;
+        };
+
+        ui.horizontal(|ui| {
+            ui.heading(match targets.len() {
+                1 => match reference.target.head {
+                    None => reference.fixture.name.clone(),
+                    Some(_) => format!("{} · {}", reference.fixture.name, reference.target.label()),
+                },
+                n => format!("{n} sélectionnées"),
+            });
+            ui.label(RichText::new(reference.fixture.fixture_type.display_name()).weak());
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Full").on_hover_text("Dimmer à 100 %, shutter ouvert").clicked() {
+                apply_full(&targets, engine);
+            }
+            if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut").clicked() {
+                for t in &targets {
+                    for (parameter, _) in t.parameters() {
+                        engine.send(Command::ReleaseAttribute(ParamKey { fixture: t.fixture.id, parameter }));
+                    }
+                }
+            }
+        });
+        ui.separator();
+
+        // Une ligne par fonction : les 10 « Dimmer N » d'un Sunstrip entier n'en font qu'une.
+        let mut rows: Vec<(usize, &Parameter)> = Vec::new();
+        for (index, parameter) in reference.parameters() {
+            if !rows.iter().any(|(_, p)| p.base_name == parameter.base_name) {
+                rows.push((index, parameter));
+            }
+        }
+        let mut groups: Vec<FeatureGroup> = rows.iter().map(|(_, p)| p.attribute.group()).collect();
+        groups.sort();
+        groups.dedup();
+
+        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            for group in groups {
+                ui.add_space(6.0);
+                ui.label(RichText::new(group.label()).strong().size(15.0));
+                egui::Grid::new(("attributes", group)).num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
+                    for &(index, parameter) in rows.iter().filter(|(_, p)| p.attribute.group() == group) {
+                        parameter_row(ui, index, parameter, reference, &targets, snapshot, display, engine);
+                        ui.end_row();
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// Ligne sélectionnable du patch (numéro et nom). Renvoie `true` si elle a été cliquée.
+fn target_row(ui: &mut egui::Ui, selection: &BTreeSet<Target>, target: Target, name: &str) -> bool {
+    let selected = selection.contains(&target);
+    let id_clicked = ui.selectable_label(selected, target.label()).clicked();
+    let name_clicked = ui.selectable_label(selected, name).clicked();
+    id_clicked || name_clicked
+}
+
+/// Une cible sélectionnée et la fixture patchée correspondante.
+struct Selected<'a> {
+    fixture: &'a PatchedFixture,
+    target: Target,
+}
+
+impl Selected<'_> {
+    /// Paramètres pilotés par cette cible, avec leur index dans le mode.
+    fn parameters(&self) -> impl Iterator<Item = (usize, &Parameter)> {
+        let target = self.target;
+        self.fixture.mode().parameters.iter().enumerate().filter(move |(_, p)| target.covers(p))
+    }
+
+    /// Paramètres équivalents à `reference` : même fonction, sinon même attribut.
+    fn matching(&self, reference: &Parameter) -> Vec<usize> {
+        let by_name: Vec<usize> =
+            self.parameters().filter(|(_, p)| p.base_name == reference.base_name).map(|(i, _)| i).collect();
+        if !by_name.is_empty() {
+            return by_name;
+        }
+        self.parameters().filter(|(_, p)| p.attribute == reference.attribute).map(|(i, _)| i).collect()
+    }
+}
+
+fn set_all(targets: &[Selected<'_>], reference: &Parameter, value: u16, engine: &EngineHandle) {
+    for t in targets {
+        for parameter in t.matching(reference) {
+            engine.send(Command::SetAttribute { key: ParamKey { fixture: t.fixture.id, parameter }, value });
+        }
+    }
+}
+
+fn apply_full(targets: &[Selected<'_>], engine: &EngineHandle) {
+    use folie_fixture::Attribute;
+    for t in targets {
+        for (parameter, p) in t.parameters() {
+            let value = match p.attribute {
+                Attribute::Dimmer => Some(u16::MAX),
+                Attribute::Shutter => p
+                    .capabilities
+                    .iter()
+                    .find(|c| matches!(&c.kind, CapabilityKind::Shutter { effect, .. } if effect == "Open"))
+                    .map(Capability::select_value),
+                _ => None,
+            };
+            if let Some(value) = value {
+                engine.send(Command::SetAttribute { key: ParamKey { fixture: t.fixture.id, parameter }, value });
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parameter_row(
+    ui: &mut egui::Ui,
+    index: usize,
+    parameter: &Parameter,
+    reference: &Selected<'_>,
+    targets: &[Selected<'_>],
+    snapshot: &Snapshot,
+    display: DisplayMode,
+    engine: &EngineHandle,
+) {
+    let key = ParamKey { fixture: reference.fixture.id, parameter: index };
+    let programmed = snapshot.attributes.get(&key).copied();
+    let value = programmed.unwrap_or(parameter.default);
+
+    // Fixture entière : nom de la fonction ; sous-fixture : nom complet ("Dimmer 3").
+    let label = if reference.target.head.is_some() { &parameter.name } else { &parameter.base_name };
+    let name = RichText::new(label);
+    let name = if programmed.is_some() { name.color(PROGRAMMED) } else { name };
+    // Largeurs fixes : les colonnes restent alignées d'un groupe d'attributs à l'autre.
+    let name_label = fixed_width(ui, NAME_WIDTH, |ui| ui.label(name));
+
+    let mut percent = value as f32 / u16::MAX as f32 * 100.0;
+    ui.spacing_mut().slider_width = 240.0;
+    let slider = egui::Slider::new(&mut percent, 0.0..=100.0).show_value(false);
+    if ui.add(slider).labelled_by(name_label.id).changed() {
+        let new_value = (percent / 100.0 * u16::MAX as f32).round() as u16;
+        set_all(targets, parameter, new_value, engine);
+    }
+
+    let mut text = match display {
+        DisplayMode::Percent => format!("{percent:.1} %"),
+        DisplayMode::Dmx if parameter.resolution_bits() > 8 => {
+            format!("{}/{}", value >> 8, value & 0xFF)
+        }
+        DisplayMode::Dmx => (value >> 8).to_string(),
+    };
+    if let Some(cap) = parameter.capability_at(value)
+        && let Some((start, end)) = cap.angle
+    {
+        let t = (value - cap.range.start()) as f32 / (cap.range.end() - cap.range.start()).max(1) as f32;
+        text.push_str(&format!("  {:.0}°", start + (end - start) * t));
+    }
+    fixed_width(ui, VALUE_WIDTH, |ui| ui.monospace(text));
+
+    capability_menu(ui, index, parameter, value, targets, engine, name_label.id);
+}
+
+fn capability_menu(
+    ui: &mut egui::Ui,
+    index: usize,
+    parameter: &Parameter,
+    value: u16,
+    targets: &[Selected<'_>],
+    engine: &EngineHandle,
+    label: egui::Id,
+) {
+    if parameter.capabilities.len() < 2 {
+        ui.label("");
+        return;
+    }
+    let current = parameter.capability_at(value);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        if let Some(rgb) = current.and_then(preset_color) {
+            swatch(ui, rgb);
+        }
+        egui::ComboBox::from_id_salt(("capability", index))
+            .width(230.0)
+            .selected_text(current.map_or("—", |c| c.label.as_str()))
+            .height(400.0)
+            .show_ui(ui, |ui| {
+                for cap in parameter.capabilities.iter().filter(|c| !c.hidden) {
+                    ui.horizontal(|ui| {
+                        if let Some(rgb) = preset_color(cap) {
+                            swatch(ui, rgb);
+                        }
+                        let selected = current.is_some_and(|c| c.range == cap.range);
+                        if ui.selectable_label(selected, &cap.label).clicked() {
+                            chosen = Some(cap.select_value());
+                        }
+                    });
+                }
+            })
+            .response
+            .labelled_by(label);
+    });
+    if let Some(value) = chosen {
+        set_all(targets, parameter, value, engine);
+    }
+}
+
+fn fixed_width(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -> egui::Response {
+    let size = vec2(width, ui.spacing().interact_size.y);
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
+    ui.allocate_ui_with_layout(size, layout, |ui| {
+        ui.set_min_width(width);
+        add(ui)
+    })
+    .inner
+}
+
+fn preset_color(cap: &Capability) -> Option<[u8; 3]> {
+    match &cap.kind {
+        CapabilityKind::ColorPreset { colors } => colors.first().copied(),
+        _ => None,
+    }
+}
+
+fn swatch(ui: &mut egui::Ui, [r, g, b]: [u8; 3]) {
+    let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+    ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(r, g, b));
+}

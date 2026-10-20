@@ -1,0 +1,851 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "Rush MH 6 Wash",
+  "shortName": "MartinRushMH6Wash",
+  "categories": [
+    "Moving Head",
+    "Color Changer"
+  ],
+  "meta": {
+    "authors": [
+      "Folie-DMX"
+    ],
+    "createDate": "2026-10-20",
+    "lastModifyDate": "2026-10-20"
+  },
+  "comment": "12 RGBW LEDs, 10°-60° zoom, simulated color wheel with 36 presets. Channel 8 (color wheel) overrides RGBW channels 4-7 unless set to 0-10.",
+  "links": {
+    "manual": [
+      "https://adn.harmanpro.com/site_elements/executables/6796_1526699748/UM_RUSHMH6Wash_EN_D_original.pdf"
+    ],
+    "productPage": [
+      "https://www.martin.com/en-US/products/rush-mh-6-wash"
+    ]
+  },
+  "physical": {
+    "DMXconnector": "3-pin and 5-pin",
+    "bulb": {
+      "type": "12 x RGBW LEDs"
+    },
+    "lens": {
+      "degreesMinMax": [
+        10,
+        60
+      ]
+    }
+  },
+  "availableChannels": {
+    "Shutter": {
+      "defaultValue": 12,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            7
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Closed"
+        },
+        {
+          "dmxRange": [
+            8,
+            15
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [
+            16,
+            131
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "slow",
+          "speedEnd": "fast"
+        },
+        {
+          "dmxRange": [
+            132,
+            139
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            140,
+            181
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "RampUp",
+          "comment": "Pulse, fast close & slow open"
+        },
+        {
+          "dmxRange": [
+            182,
+            189
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            190,
+            231
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "RampDown",
+          "comment": "Pulse, fast open & slow close"
+        },
+        {
+          "dmxRange": [
+            232,
+            239
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            240,
+            247
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "randomTiming": true
+        },
+        {
+          "dmxRange": [
+            248,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open",
+          "menuClick": "hidden"
+        }
+      ]
+    },
+    "Dimmer": {
+      "fineChannelAliases": [
+        "Dimmer fine"
+      ],
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "Red": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "Green": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "Blue": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "White": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "White"
+      }
+    },
+    "Color Wheel": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            10
+          ],
+          "type": "NoFunction",
+          "comment": "Open (RGBW control)"
+        },
+        {
+          "dmxRange": [
+            11,
+            15
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff0000"
+          ],
+          "comment": "Color 1 (R255 G0 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            16,
+            20
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff9b00"
+          ],
+          "comment": "Color 2 (R255 G155 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            21,
+            25
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffd866"
+          ],
+          "comment": "Color 3 (R255 G190 B0 W170)"
+        },
+        {
+          "dmxRange": [
+            26,
+            30
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffe100"
+          ],
+          "comment": "Color 4 (R255 G225 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            31,
+            35
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#fff500"
+          ],
+          "comment": "Color 5 (R255 G245 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            36,
+            40
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#fffe79"
+          ],
+          "comment": "Color 6 (R255 G253 B0 W202)"
+        },
+        {
+          "dmxRange": [
+            41,
+            45
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffff00"
+          ],
+          "comment": "Color 7 (R255 G255 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            46,
+            50
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#f5ff00"
+          ],
+          "comment": "Color 8 (R245 G255 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            51,
+            55
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#eaff4a"
+          ],
+          "comment": "Color 9 (R226 G255 B0 W124)"
+        },
+        {
+          "dmxRange": [
+            56,
+            60
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#cdff00"
+          ],
+          "comment": "Color 10 (R205 G255 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            61,
+            65
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ceff75"
+          ],
+          "comment": "Color 11 (R165 G255 B0 W195)"
+        },
+        {
+          "dmxRange": [
+            66,
+            70
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00ff00"
+          ],
+          "comment": "Color 12 (R0 G255 B0 W0)"
+        },
+        {
+          "dmxRange": [
+            71,
+            75
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00ff9b"
+          ],
+          "comment": "Color 13 (R0 G255 B155 W0)"
+        },
+        {
+          "dmxRange": [
+            76,
+            80
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#2affc5"
+          ],
+          "comment": "Color 14 (R0 G255 B185 W70)"
+        },
+        {
+          "dmxRange": [
+            81,
+            85
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00ffd2"
+          ],
+          "comment": "Color 15 (R0 G255 B210 W0)"
+        },
+        {
+          "dmxRange": [
+            86,
+            90
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00ffe6"
+          ],
+          "comment": "Color 16 (R0 G255 B230 W0)"
+        },
+        {
+          "dmxRange": [
+            91,
+            95
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#3cfff4"
+          ],
+          "comment": "Color 17 (R0 G255 B240 W100)"
+        },
+        {
+          "dmxRange": [
+            96,
+            100
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00ffff"
+          ],
+          "comment": "Color 18 (R0 G255 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            101,
+            105
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00faff"
+          ],
+          "comment": "Color 19 (R0 G250 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            106,
+            110
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#60e9ff"
+          ],
+          "comment": "Color 20 (R0 G220 B255 W160)"
+        },
+        {
+          "dmxRange": [
+            111,
+            115
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#00d7e1"
+          ],
+          "comment": "Color 21 (R0 G215 B225 W0)"
+        },
+        {
+          "dmxRange": [
+            116,
+            120
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#72dbff"
+          ],
+          "comment": "Color 22 (R0 G190 B255 W190)"
+        },
+        {
+          "dmxRange": [
+            121,
+            125
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#0000ff"
+          ],
+          "comment": "Color 23 (R0 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            126,
+            130
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#a500ff"
+          ],
+          "comment": "Color 24 (R165 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            131,
+            135
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#c300ff"
+          ],
+          "comment": "Color 25 (R195 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            136,
+            140
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#e100ff"
+          ],
+          "comment": "Color 26 (R225 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            141,
+            145
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#f666ff"
+          ],
+          "comment": "Color 27 (R240 G0 B255 W170)"
+        },
+        {
+          "dmxRange": [
+            146,
+            150
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#fd00ff"
+          ],
+          "comment": "Color 28 (R253 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            151,
+            155
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff00ff"
+          ],
+          "comment": "Color 29 (R255 G0 B255 W0)"
+        },
+        {
+          "dmxRange": [
+            156,
+            160
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff00f5"
+          ],
+          "comment": "Color 30 (R255 G0 B245 W0)"
+        },
+        {
+          "dmxRange": [
+            161,
+            165
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff00eb"
+          ],
+          "comment": "Color 31 (R255 G0 B235 W0)"
+        },
+        {
+          "dmxRange": [
+            166,
+            170
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff00dc"
+          ],
+          "comment": "Color 32 (R255 G0 B220 W0)"
+        },
+        {
+          "dmxRange": [
+            171,
+            175
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff6fd7"
+          ],
+          "comment": "Color 33 (R255 G0 B185 W185)"
+        },
+        {
+          "dmxRange": [
+            176,
+            180
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ff00a5"
+          ],
+          "comment": "Color 34 (R255 G0 B165 W0)"
+        },
+        {
+          "dmxRange": [
+            181,
+            185
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#fff6e8"
+          ],
+          "comment": "Color 35 (R0 G0 B0 W255)"
+        },
+        {
+          "dmxRange": [
+            186,
+            190
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffffff"
+          ],
+          "comment": "Color 36 (R255 G255 B255 W255)"
+        },
+        {
+          "dmxRange": [
+            191,
+            192
+          ],
+          "type": "NoFunction",
+          "comment": "Open",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            193,
+            214
+          ],
+          "type": "Effect",
+          "effectName": "Color scroll",
+          "speedStart": "fast",
+          "speedEnd": "slow"
+        },
+        {
+          "dmxRange": [
+            215,
+            221
+          ],
+          "type": "Effect",
+          "effectName": "Color scroll",
+          "speed": "stop"
+        },
+        {
+          "dmxRange": [
+            222,
+            243
+          ],
+          "type": "Effect",
+          "effectName": "Color scroll",
+          "speedStart": "slow reverse",
+          "speedEnd": "fast reverse"
+        },
+        {
+          "dmxRange": [
+            244,
+            247
+          ],
+          "type": "Effect",
+          "effectName": "Random colors",
+          "speed": "fast"
+        },
+        {
+          "dmxRange": [
+            248,
+            251
+          ],
+          "type": "Effect",
+          "effectName": "Random colors",
+          "speed": "50%"
+        },
+        {
+          "dmxRange": [
+            252,
+            255
+          ],
+          "type": "Effect",
+          "effectName": "Random colors",
+          "speed": "slow"
+        }
+      ]
+    },
+    "Zoom": {
+      "defaultValue": 128,
+      "capability": {
+        "type": "Zoom",
+        "angleStart": "60deg",
+        "angleEnd": "10deg"
+      }
+    },
+    "Pan": {
+      "fineChannelAliases": [
+        "Pan fine"
+      ],
+      "defaultValue": "50%",
+      "capability": {
+        "type": "Pan",
+        "angleStart": "0deg",
+        "angleEnd": "540deg"
+      }
+    },
+    "Tilt": {
+      "fineChannelAliases": [
+        "Tilt fine"
+      ],
+      "defaultValue": "50%",
+      "capability": {
+        "type": "Tilt",
+        "angleStart": "0deg",
+        "angleEnd": "220deg"
+      }
+    },
+    "Fixture Control Settings": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            9
+          ],
+          "type": "NoFunction",
+          "comment": "No function (disables calibration)"
+        },
+        {
+          "dmxRange": [
+            10,
+            14
+          ],
+          "type": "Maintenance",
+          "comment": "Reset fixture",
+          "hold": "5s"
+        },
+        {
+          "dmxRange": [
+            15,
+            54
+          ],
+          "type": "NoFunction",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            55,
+            59
+          ],
+          "type": "Maintenance",
+          "comment": "Enable calibration"
+        },
+        {
+          "dmxRange": [
+            60,
+            74
+          ],
+          "type": "NoFunction",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            75,
+            79
+          ],
+          "type": "PanTiltSpeed",
+          "speed": "50%",
+          "comment": "Pan & tilt speed normal"
+        },
+        {
+          "dmxRange": [
+            80,
+            89
+          ],
+          "type": "PanTiltSpeed",
+          "speed": "fast",
+          "comment": "Pan & tilt speed fast (default)"
+        },
+        {
+          "dmxRange": [
+            90,
+            94
+          ],
+          "type": "PanTiltSpeed",
+          "speed": "slow",
+          "comment": "Pan & tilt speed slow"
+        },
+        {
+          "dmxRange": [
+            95,
+            144
+          ],
+          "type": "NoFunction",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            145,
+            149
+          ],
+          "type": "Maintenance",
+          "comment": "Pan/tilt blackout on"
+        },
+        {
+          "dmxRange": [
+            150,
+            154
+          ],
+          "type": "Maintenance",
+          "comment": "Pan/tilt blackout off"
+        },
+        {
+          "dmxRange": [
+            155,
+            159
+          ],
+          "type": "Maintenance",
+          "comment": "Illuminate display"
+        },
+        {
+          "dmxRange": [
+            160,
+            164
+          ],
+          "type": "Maintenance",
+          "comment": "Display illumination off"
+        },
+        {
+          "dmxRange": [
+            165,
+            229
+          ],
+          "type": "NoFunction",
+          "menuClick": "hidden"
+        },
+        {
+          "dmxRange": [
+            230,
+            234
+          ],
+          "type": "Maintenance",
+          "comment": "Store zoom calibration"
+        },
+        {
+          "dmxRange": [
+            235,
+            239
+          ],
+          "type": "Maintenance",
+          "comment": "Store pan calibration"
+        },
+        {
+          "dmxRange": [
+            240,
+            244
+          ],
+          "type": "Maintenance",
+          "comment": "Store tilt calibration"
+        },
+        {
+          "dmxRange": [
+            245,
+            249
+          ],
+          "type": "Maintenance",
+          "comment": "Reset all calibrations to factory default",
+          "hold": "5s"
+        },
+        {
+          "dmxRange": [
+            250,
+            255
+          ],
+          "type": "NoFunction",
+          "menuClick": "hidden"
+        }
+      ]
+    }
+  },
+  "modes": [
+    {
+      "name": "14-channel",
+      "shortName": "14ch",
+      "channels": [
+        "Shutter",
+        "Dimmer",
+        "Dimmer fine",
+        "Red",
+        "Green",
+        "Blue",
+        "White",
+        "Color Wheel",
+        "Zoom",
+        "Pan",
+        "Pan fine",
+        "Tilt",
+        "Tilt fine",
+        "Fixture Control Settings"
+      ]
+    }
+  ]
+}

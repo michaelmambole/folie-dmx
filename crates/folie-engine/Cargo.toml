@@ -1,0 +1,12 @@
+[package]
+name = "folie-engine"
+description = "Moteur temps réel de Folie-DMX"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+folie-dmx.workspace = true
+folie-fixture.workspace = true
+crossbeam-channel.workspace = true
+log.workspace = true

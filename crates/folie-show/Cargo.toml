@@ -1,0 +1,15 @@
+[package]
+name = "folie-show"
+description = "Fichier de show Folie-DMX : lecture, écriture, sauvegarde automatique"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+folie-fixture.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,18 @@
+[package]
+name = "folie-cli"
+description = "Outil en ligne de commande de Folie-DMX"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "folie"
+path = "src/main.rs"
+
+[dependencies]
+folie-dmx.workspace = true
+folie-engine.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true

@@ -1,0 +1,614 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "SupraKolor HD",
+  "shortName": "StarwaySupraKolorHD",
+  "categories": [
+    "Color Changer"
+  ],
+  "meta": {
+    "authors": [
+      "Folie-DMX"
+    ],
+    "createDate": "2026-10-20",
+    "lastModifyDate": "2026-10-20"
+  },
+  "comment": "14 x 15 W RGBW LEDs, IP66, zoom 8°-40°. Written from the 'SupraKolor' user manual (2014 v2); the HD libraries share the same folder. Only the TOUR (12 ch) mode is described.",
+  "links": {
+    "manual": [
+      "http://ftp.technique.freevox.fr/STARWAY/900025_SUPRAKOLOR/900025_SUPRAKOLOR_FR.pdf"
+    ]
+  },
+  "physical": {
+    "dimensions": [
+      283,
+      236,
+      324
+    ],
+    "weight": 8.6,
+    "power": 235,
+    "bulb": {
+      "type": "14 x 15 W RGBW LEDs"
+    },
+    "lens": {
+      "degreesMinMax": [
+        8,
+        40
+      ]
+    }
+  },
+  "availableChannels": {
+    "Dimmer": {
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "Red": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "Green": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "Blue": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "White": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "White"
+      }
+    },
+    "Color Macro": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            10
+          ],
+          "type": "NoFunction"
+        },
+        {
+          "dmxRange": [
+            11,
+            30
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#ff0000"
+          ],
+          "colorsEnd": [
+            "#ffff00"
+          ],
+          "comment": "Red 100%, green up, blue 0%"
+        },
+        {
+          "dmxRange": [
+            31,
+            50
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffff00"
+          ],
+          "comment": "Red 100%, green 100%, blue 0%"
+        },
+        {
+          "dmxRange": [
+            51,
+            70
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#00ff00"
+          ],
+          "colorsEnd": [
+            "#00ffff"
+          ],
+          "comment": "Red 0%, green 100%, blue up"
+        },
+        {
+          "dmxRange": [
+            71,
+            90
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#00ffff"
+          ],
+          "colorsEnd": [
+            "#0000ff"
+          ],
+          "comment": "Red 0%, green down, blue 100%"
+        },
+        {
+          "dmxRange": [
+            91,
+            110
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#0000ff"
+          ],
+          "colorsEnd": [
+            "#ff00ff"
+          ],
+          "comment": "Red up, green 0%, blue 100%"
+        },
+        {
+          "dmxRange": [
+            111,
+            130
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#ff00ff"
+          ],
+          "colorsEnd": [
+            "#ff0000"
+          ],
+          "comment": "Red 100%, green 0%, blue down"
+        },
+        {
+          "dmxRange": [
+            131,
+            150
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#ff0000"
+          ],
+          "colorsEnd": [
+            "#ffffff"
+          ],
+          "comment": "Red 100%, green up, blue up"
+        },
+        {
+          "dmxRange": [
+            151,
+            170
+          ],
+          "type": "ColorPreset",
+          "colorsStart": [
+            "#ffffff"
+          ],
+          "colorsEnd": [
+            "#0000ff"
+          ],
+          "comment": "Red down, green down, blue 100%"
+        },
+        {
+          "dmxRange": [
+            171,
+            200
+          ],
+          "type": "ColorPreset",
+          "colors": [
+            "#ffffff"
+          ],
+          "comment": "Red 100%, green 100%, blue 100%"
+        },
+        {
+          "dmxRange": [
+            201,
+            205
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "3200K",
+          "comment": "White 1: 3200K"
+        },
+        {
+          "dmxRange": [
+            206,
+            210
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "3400K",
+          "comment": "White 2: 3400K"
+        },
+        {
+          "dmxRange": [
+            211,
+            215
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "4200K",
+          "comment": "White 3: 4200K"
+        },
+        {
+          "dmxRange": [
+            216,
+            220
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "4900K",
+          "comment": "White 4: 4900K"
+        },
+        {
+          "dmxRange": [
+            221,
+            225
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "5600K",
+          "comment": "White 5: 5600K"
+        },
+        {
+          "dmxRange": [
+            226,
+            230
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "5900K",
+          "comment": "White 6: 5900K"
+        },
+        {
+          "dmxRange": [
+            231,
+            235
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "6500K",
+          "comment": "White 7: 6500K"
+        },
+        {
+          "dmxRange": [
+            236,
+            240
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "7200K",
+          "comment": "White 8: 7200K"
+        },
+        {
+          "dmxRange": [
+            241,
+            245
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "8000K",
+          "comment": "White 9: 8000K"
+        },
+        {
+          "dmxRange": [
+            246,
+            250
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "8500K",
+          "comment": "White 10: 8500K"
+        },
+        {
+          "dmxRange": [
+            251,
+            255
+          ],
+          "type": "ColorPreset",
+          "colorTemperature": "10000K",
+          "comment": "White 11: 10000K"
+        }
+      ]
+    },
+    "Strobe": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            10
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [
+            11,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "0Hz",
+          "speedEnd": "20Hz"
+        }
+      ]
+    },
+    "Programs": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            20
+          ],
+          "type": "NoFunction"
+        },
+        {
+          "dmxRange": [
+            21,
+            30
+          ],
+          "type": "Effect",
+          "effectName": "Auto 1"
+        },
+        {
+          "dmxRange": [
+            31,
+            40
+          ],
+          "type": "Effect",
+          "effectName": "Auto 2"
+        },
+        {
+          "dmxRange": [
+            41,
+            50
+          ],
+          "type": "Effect",
+          "effectName": "Auto 3"
+        },
+        {
+          "dmxRange": [
+            51,
+            60
+          ],
+          "type": "Effect",
+          "effectName": "Auto 4"
+        },
+        {
+          "dmxRange": [
+            61,
+            70
+          ],
+          "type": "Effect",
+          "effectName": "Auto 5"
+        },
+        {
+          "dmxRange": [
+            71,
+            80
+          ],
+          "type": "Effect",
+          "effectName": "Auto 6"
+        },
+        {
+          "dmxRange": [
+            81,
+            90
+          ],
+          "type": "Effect",
+          "effectName": "Auto 7"
+        },
+        {
+          "dmxRange": [
+            91,
+            100
+          ],
+          "type": "Effect",
+          "effectName": "Auto 8"
+        },
+        {
+          "dmxRange": [
+            101,
+            110
+          ],
+          "type": "Effect",
+          "effectName": "Auto 9"
+        },
+        {
+          "dmxRange": [
+            111,
+            120
+          ],
+          "type": "Effect",
+          "effectName": "Auto 10"
+        },
+        {
+          "dmxRange": [
+            121,
+            130
+          ],
+          "type": "Effect",
+          "effectName": "Custom 1"
+        },
+        {
+          "dmxRange": [
+            131,
+            140
+          ],
+          "type": "Effect",
+          "effectName": "Custom 2"
+        },
+        {
+          "dmxRange": [
+            141,
+            150
+          ],
+          "type": "Effect",
+          "effectName": "Custom 3"
+        },
+        {
+          "dmxRange": [
+            151,
+            160
+          ],
+          "type": "Effect",
+          "effectName": "Custom 4"
+        },
+        {
+          "dmxRange": [
+            161,
+            170
+          ],
+          "type": "Effect",
+          "effectName": "Custom 5"
+        },
+        {
+          "dmxRange": [
+            171,
+            180
+          ],
+          "type": "Effect",
+          "effectName": "Custom 6"
+        },
+        {
+          "dmxRange": [
+            181,
+            190
+          ],
+          "type": "Effect",
+          "effectName": "Custom 7"
+        },
+        {
+          "dmxRange": [
+            191,
+            200
+          ],
+          "type": "Effect",
+          "effectName": "Custom 8"
+        },
+        {
+          "dmxRange": [
+            201,
+            210
+          ],
+          "type": "Effect",
+          "effectName": "Custom 9"
+        },
+        {
+          "dmxRange": [
+            211,
+            220
+          ],
+          "type": "Effect",
+          "effectName": "Custom 10"
+        },
+        {
+          "dmxRange": [
+            221,
+            255
+          ],
+          "type": "NoFunction"
+        }
+      ]
+    },
+    "Program Speed": {
+      "capability": {
+        "type": "EffectSpeed",
+        "speedStart": "slow",
+        "speedEnd": "fast",
+        "comment": "Only when a Custom program is active"
+      }
+    },
+    "Dimmer Speed": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            9
+          ],
+          "type": "Maintenance",
+          "comment": "Dimmer speed from display menu"
+        },
+        {
+          "dmxRange": [
+            10,
+            29
+          ],
+          "type": "Maintenance",
+          "comment": "Linear dimming"
+        },
+        {
+          "dmxRange": [
+            30,
+            69
+          ],
+          "type": "Maintenance",
+          "comment": "Non-linear curve 1 (fastest)"
+        },
+        {
+          "dmxRange": [
+            70,
+            129
+          ],
+          "type": "Maintenance",
+          "comment": "Non-linear curve 2"
+        },
+        {
+          "dmxRange": [
+            130,
+            189
+          ],
+          "type": "Maintenance",
+          "comment": "Non-linear curve 3"
+        },
+        {
+          "dmxRange": [
+            190,
+            255
+          ],
+          "type": "Maintenance",
+          "comment": "Non-linear curve 4 (slowest)"
+        }
+      ]
+    },
+    "Zoom": {
+      "capability": {
+        "type": "Zoom",
+        "angleStart": "wide",
+        "angleEnd": "narrow",
+        "comment": "8°-40°, direction to be checked"
+      }
+    },
+    "Zoom Reset": {
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            200
+          ],
+          "type": "NoFunction"
+        },
+        {
+          "dmxRange": [
+            201,
+            220
+          ],
+          "type": "Maintenance",
+          "comment": "Reset zoom"
+        },
+        {
+          "dmxRange": [
+            221,
+            255
+          ],
+          "type": "NoFunction"
+        }
+      ]
+    }
+  },
+  "modes": [
+    {
+      "name": "TOUR",
+      "shortName": "12ch",
+      "channels": [
+        "Dimmer",
+        "Red",
+        "Green",
+        "Blue",
+        "White",
+        "Color Macro",
+        "Strobe",
+        "Programs",
+        "Program Speed",
+        "Dimmer Speed",
+        "Zoom",
+        "Zoom Reset"
+      ]
+    }
+  ]
+}
