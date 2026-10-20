@@ -14,7 +14,8 @@ const PROGRAMMER_IDS: u64 = 1 << 62;
 /// Au-delà, un tap recommence une nouvelle mesure du tempo.
 const TAP_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn waveform(w: Waveform) -> EngineWave {
+/// Forme d'onde du moteur, qui sait la calculer.
+pub fn waveform(w: Waveform) -> EngineWave {
     match w {
         Waveform::Sine => EngineWave::Sine,
         Waveform::RampUp => EngineWave::RampUp,

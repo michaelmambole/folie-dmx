@@ -921,6 +921,8 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
 
+        harness.get_by_label("Plage 0–100 %"); // plage du Dimmer de la vague, en violet
+
         harness.get_by_label("Arrêter").click();
         settle(&mut harness);
         assert!(harness.state().console.programmer_effects().is_empty());
