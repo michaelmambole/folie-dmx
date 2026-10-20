@@ -368,14 +368,16 @@ impl Console {
 
     pub fn execute(&mut self, line: &str) -> Result<Outcome, CommandError> {
         match command::parse(line)? {
-            Command::Select { selection, value } => {
+            Command::Select { selection, attribute, value } => {
                 let mut message = String::new();
                 if let Some(selection) = selection {
                     self.execute_selection(&selection)?;
                     message = format!("{} sélectionnée(s)", plural(self.selection.len(), "cible"));
                 }
-                if let Some(Value::Percent(percent)) = value {
-                    message = self.set_dimmer(percent)?;
+                match (attribute, value) {
+                    (None, Some(Value::Percent(percent))) => message = self.set_dimmer(percent)?,
+                    (attribute, Some(value)) => message = self.set_attribute(attribute.as_deref(), value)?,
+                    (_, None) => {}
                 }
                 Ok(Outcome::info(message))
             }
@@ -491,6 +493,63 @@ impl Console {
             resolved.push((*add, targets));
         }
         Ok(resolved)
+    }
+
+    /// Valeur d'un paramètre telle qu'elle sort en ce moment.
+    fn live_value(&self, key: ParamKey) -> Option<u16> {
+        let fixture = self.show.patch.get(key.fixture)?;
+        let parameter = fixture.mode().parameters.get(key.parameter)?;
+        let snapshot = self.engine.snapshot();
+        let universe = snapshot.output.get(fixture.universe)?;
+        let byte = |offset: u16| universe.get(fixture.address + offset).ok();
+        match parameter.offsets.as_slice() {
+            [coarse] => byte(*coarse).map(|v| v as u16 * 257),
+            [coarse, fine, ..] => Some(((byte(*coarse)? as u16) << 8) | byte(*fine)? as u16),
+            [] => None,
+        }
+    }
+
+    /// `Attribute "Pan" At 50`, `At + 10` : un paramètre nommé (le dimmer sans nom) sur toute
+    /// la sélection, à une valeur ou relatif à sa valeur en cours (programmer, sinon sortie).
+    fn set_attribute(&mut self, name: Option<&str>, value: Value) -> Result<String, CommandError> {
+        if self.selection.is_empty() {
+            return invalid("aucune sélection");
+        }
+        let wanted = |p: &Parameter| match name {
+            None => p.attribute == Attribute::Dimmer,
+            Some(name) => {
+                [p.base_name.as_str(), p.name.as_str(), &p.attribute.label()].iter().any(|n| n.eq_ignore_ascii_case(name))
+            }
+        };
+        let mut touched = 0;
+        for target in self.selection.clone() {
+            let parameters: Vec<usize> =
+                self.show.patch.parameters_of(target).into_iter().filter(|(_, p)| wanted(p)).map(|(i, _)| i).collect();
+            touched += usize::from(!parameters.is_empty());
+            for parameter in parameters {
+                let key = ParamKey { fixture: target.fixture, parameter };
+                let full = u16::MAX as f32;
+                let percent = match value {
+                    Value::Percent(p) => p,
+                    Value::Relative(delta) => {
+                        let current = self.programmer.get(&key).copied().or_else(|| self.live_value(key)).unwrap_or(0);
+                        (current as f32 / full * 100.0 + delta).clamp(0.0, 100.0)
+                    }
+                };
+                self.send_value(target, parameter, (percent / 100.0 * full).round() as u16);
+            }
+        }
+        let label = name.unwrap_or("Dimmer");
+        if touched == 0 {
+            return invalid(format!("aucun paramètre « {label} » dans la sélection"));
+        }
+        self.selection_used = true;
+        let what = match value {
+            Value::Percent(p) => format!("à {p} %"),
+            Value::Relative(d) if d >= 0.0 => format!("+ {d} %"),
+            Value::Relative(d) => format!("- {} %", -d),
+        };
+        Ok(format!("{label} {what} sur {}", plural(touched, "cible")))
     }
 
     fn set_dimmer(&mut self, percent: f32) -> Result<String, CommandError> {
@@ -1186,5 +1245,34 @@ mod tests {
             seen.extend(settled(&c).executors[&1].cue);
         }
         assert_eq!(seen.len(), 2, "les deux pas ont défilé");
+    }
+
+    #[test]
+    fn attribute_values_absolute_and_relative() {
+        let mut c = console();
+        let index = |c: &Console, name: &str| {
+            c.show.patch.get(FixtureId(1)).unwrap().mode().parameters.iter().position(|p| p.name == name).unwrap()
+        };
+        let programmed = |c: &Console, fixture: u32, name: &str| {
+            let key = ParamKey { fixture: FixtureId(fixture), parameter: index(c, name) };
+            c.programmer().get(&key).map(|v| (*v as f32 / u16::MAX as f32 * 100.0).round())
+        };
+        assert_eq!(run(&mut c, r#"Fixture 1 Thru 2 Attribute "Pan" At 25"#).message, "Pan à 25 % sur 2 cibles");
+        assert_eq!((programmed(&c, 1, "Pan"), programmed(&c, 2, "Pan")), (Some(25.0), Some(25.0)));
+        assert_eq!(programmed(&c, 1, "Dimmer"), None, "seul le Pan est touché");
+
+        // Relatif : depuis ce qui sort (0), puis depuis le programmer.
+        assert_eq!(run(&mut c, "At + 10").message, "Dimmer + 10 % sur 2 cibles");
+        assert_eq!(programmed(&c, 1, "Dimmer"), Some(10.0));
+        run(&mut c, "At + 10");
+        assert_eq!(programmed(&c, 2, "Dimmer"), Some(20.0));
+        assert_eq!(run(&mut c, "At - 50").message, "Dimmer - 50 % sur 2 cibles");
+        assert_eq!(programmed(&c, 1, "Dimmer"), Some(0.0), "jamais sous 0");
+        run(&mut c, r#"attribute "pan" at + 10"#);
+        assert_eq!(programmed(&c, 1, "Pan"), Some(35.0), "nom sans tenir compte des majuscules");
+
+        let err = c.execute(r#"Attribute "Couleur magique" At 5"#).unwrap_err().to_string();
+        assert_eq!(err, "aucun paramètre « Couleur magique » dans la sélection");
+        assert!(c.execute("Executor 1 At + 10").is_err(), "un fader prend une valeur absolue");
     }
 }

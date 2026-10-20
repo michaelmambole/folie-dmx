@@ -9,6 +9,7 @@
 //! Store Cue 3 Fade 4 "Entrée"   Delete Cue 3            Executor 2 At 50
 //! Effect 2                      Tempo 128
 //! Page 2   Page +   Page -       Go Executor 2.5         Fix Executor 3
+//! Attribute "Pan" At 50          Fixture 1 At + 10       Block Cue 3
 //! Fixture 2 Release             Assert Executor 3
 //! ```
 //!
@@ -52,6 +53,7 @@ pub enum Keyword {
     Release,
     Block,
     Unblock,
+    Attribute,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
@@ -66,7 +68,7 @@ const ALIASES: [(&str, Keyword); 7] = [
     ("b", Keyword::Back),
 ];
 
-const KEYWORDS: [(&str, Keyword); 27] = [
+const KEYWORDS: [(&str, Keyword); 28] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -94,6 +96,7 @@ const KEYWORDS: [(&str, Keyword); 27] = [
     ("release", Keyword::Release),
     ("block", Keyword::Block),
     ("unblock", Keyword::Unblock),
+    ("attribute", Keyword::Attribute),
 ];
 
 impl Keyword {
@@ -126,6 +129,7 @@ impl Keyword {
             Self::Release => "Release",
             Self::Block => "Block",
             Self::Unblock => "Unblock",
+            Self::Attribute => "Attribute",
         }
     }
 
@@ -219,6 +223,8 @@ pub struct Selection {
 pub enum Value {
     /// Pourcentage 0 à 100.
     Percent(f32),
+    /// `At + 10`, `At - 10` : écart en pourcentage, ajouté à la valeur en cours.
+    Relative(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,7 +253,8 @@ pub enum PageMove {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Sélection éventuellement suivie d'une valeur de dimmer : `Fixture 1 Thru 4 At 50`.
-    Select { selection: Option<Selection>, value: Option<Value> },
+    /// Avec `Attribute "Pan"`, la valeur vise ce paramètre au lieu du dimmer.
+    Select { selection: Option<Selection>, attribute: Option<String>, value: Option<Value> },
     ApplyPreset(FeatureGroup, u32),
     Store { object: Object, name: Option<String>, fade: Option<f32> },
     Label { object: Object, name: String },
@@ -443,6 +450,20 @@ impl Parser {
         if self.eat(Keyword::Full) {
             return Ok(Value::Percent(100.0));
         }
+        // `At + 10` / `At - 10` : relatif à la valeur en cours.
+        if let Some(sign) = match self.peek() {
+            Some(Token::Plus) => Some(1.0),
+            Some(Token::Minus) => Some(-1.0),
+            _ => None,
+        } {
+            self.position += 1;
+            let text = self.number("écart (0 à 100)")?;
+            let delta: f32 = text.parse().map_err(|_| SyntaxError(format!("écart invalide : {text}")))?;
+            if !(0.0..=100.0).contains(&delta) {
+                return Err(SyntaxError(format!("écart hors limites : {delta} (0 à 100)")));
+            }
+            return Ok(Value::Relative(sign * delta));
+        }
         let text = self.number("valeur (0 à 100 ou Full)")?;
         let percent: f32 = text.parse().map_err(|_| SyntaxError(format!("valeur invalide : {text}")))?;
         if !(0.0..=100.0).contains(&percent) {
@@ -553,7 +574,9 @@ impl Parser {
                 self.position += 1;
                 let executor = self.executor_ref()?;
                 if self.eat(Keyword::At) {
-                    let Value::Percent(p) = self.value()?;
+                    let Value::Percent(p) = self.value()? else {
+                        return Err(SyntaxError("niveau de fader absolu attendu : Executor 3 At 50".into()));
+                    };
                     Command::SetFader(executor, p)
                 } else {
                     Command::SelectExecutor(executor)
@@ -586,6 +609,15 @@ impl Parser {
                 if self.eat(Keyword::Release) {
                     return self.end(Command::Release(selection));
                 }
+                let attribute = if self.eat(Keyword::Attribute) {
+                    let name = self.text().ok_or_else(|| SyntaxError("nom d'attribut entre guillemets attendu : Attribute \"Pan\"".into()))?;
+                    if !matches!(self.peek(), Some(Token::Keyword(Keyword::At))) {
+                        return Err(SyntaxError(format!("At attendu après Attribute \"{name}\"")));
+                    }
+                    Some(name)
+                } else {
+                    None
+                };
                 let value = if self.eat(Keyword::At) { Some(self.value()?) } else { None };
                 if selection.is_none() && value.is_none() {
                     return Err(SyntaxError(match self.peek() {
@@ -594,7 +626,7 @@ impl Parser {
                         None => "commande vide".into(),
                     }));
                 }
-                Command::Select { selection, value }
+                Command::Select { selection, attribute, value }
             }
         };
         self.end(command)
@@ -628,7 +660,7 @@ mod tests {
 
     fn select(line: &str) -> (Vec<(bool, Item)>, Option<Value>) {
         match parse(line).unwrap() {
-            Command::Select { selection, value } => (selection.map(|s| s.items).unwrap_or_default(), value),
+            Command::Select { selection, value, .. } => (selection.map(|s| s.items).unwrap_or_default(), value),
             other => panic!("{line} : {other:?}"),
         }
     }
@@ -719,6 +751,20 @@ mod tests {
         // Les abréviations courantes ne changent pas.
         assert!(matches!(parse("fi 1 at 50"), Ok(Command::Select { .. })));
         assert_eq!(parse("p 4.1"), Ok(Command::ApplyPreset(FeatureGroup::Color, 1)));
+    }
+
+    #[test]
+    fn attributes_and_relative_values() {
+        let attribute = |line: &str| match parse(line) {
+            Ok(Command::Select { attribute, value, .. }) => (attribute, value),
+            other => panic!("{line} : {other:?}"),
+        };
+        assert_eq!(attribute(r#"Attribute "Pan" At 50"#), (Some("Pan".into()), Some(Value::Percent(50.0))));
+        assert_eq!(attribute(r#"Fixture 1 Thru 4 att "tilt" at - 5"#), (Some("tilt".into()), Some(Value::Relative(-5.0))));
+        assert_eq!(attribute("At + 10"), (None, Some(Value::Relative(10.0))));
+        assert!(parse("At + 120").is_err());
+        assert!(parse(r#"Attribute "Pan""#).unwrap_err().0.contains("At attendu"));
+        assert!(parse("Attribute At 50").unwrap_err().0.contains("guillemets"));
     }
 
     #[test]
