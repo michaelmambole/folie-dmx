@@ -338,7 +338,7 @@ mod tests {
     use egui_kittest::Harness;
     use egui::accesskit::Role;
     use crate::workspace::{Placement, WindowKind, WindowState, Workspace};
-    use folie_fixture::FeatureGroup;
+    use folie_fixture::{FeatureGroup, FixtureId, Target};
     use egui_kittest::kittest::{By, Queryable};
 
     /// Fenêtres simulées à droite du Programmer, pour ne pas masquer ses réglages.
@@ -404,6 +404,19 @@ mod tests {
         assert_eq!(out.get(1), Ok(12));
         assert_eq!(out.get(10), Ok(128));
         assert_eq!(out.get(9), Ok(128));
+        harness.get_by_label("Supprimer (4)"); // la touche dit combien de fixtures elle retirerait
+        harness.get_by_label("56 / 512 canaux · 4 fixtures");
+
+        // Carte de l'univers : un clic sélectionne la fixture, Cmd-clic en ajoute une.
+        harness.get_by_label("2 · Rush MH 6 Wash 2 : 1.015–028").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.selection(), [Target::whole(FixtureId(2))]);
+        harness.get_by_label("3 · Rush MH 6 Wash 3 : 1.029–042").click_modifiers(egui::Modifiers::COMMAND);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.selection().len(), 2);
+        harness.get_by_label("Supprimer (2)");
+        harness.get_by_label("Tout sélectionner").click();
+        harness.run_steps(2);
 
         harness.get_by_label("Full").click();
         settle(&mut harness);
@@ -472,7 +485,7 @@ mod tests {
         assert_eq!(addresses, [1, 11]);
 
         // Ouvre la fixture 10 et ne sélectionne que sa cellule 3.
-        harness.get_all_by_label("+").next().unwrap().click();
+        harness.get_all_by_label("Afficher les sous-fixtures").next().unwrap().click();
         harness.run_steps(2);
         harness.get_by_label("10.3").click();
         settle(&mut harness);
@@ -632,12 +645,15 @@ mod tests {
         command(&mut harness, r#"Store Group 1 "Face""#);
 
         // Preset de dimmer enregistré avec Store armé, puis rappelé d'un clic.
+        // Le Patch, devant le pool de presets, est fermé (⌘1) pour ne pas recevoir les clics.
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1);
+        harness.run_steps(2);
         harness.get_by_label("Full").click();
         settle(&mut harness);
         harness.get_by_label("1 Dimmer").click();
         harness.get_all_by_label("Store").last().unwrap().click(); // celui de la fenêtre Presets
         harness.run_steps(2);
-        harness.get_all_by_label("1").last().unwrap().click(); // case 1 du pool de presets
+        harness.get_all(By::new().role(Role::Button).label("1")).last().unwrap().click(); // case 1 du pool de presets
         settle(&mut harness);
         let preset = &harness.state().console.show.presets[&(FeatureGroup::Dimmer, 1)];
         assert_eq!(preset.values.len(), 2);
