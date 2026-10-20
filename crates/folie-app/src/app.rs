@@ -739,10 +739,69 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
 
+        // Fenêtre Cues, sur la séquence de l'executor 1 : cue 1 en cours après le Back.
+        harness.key_press(egui::Key::Escape);
+        harness.state_mut().console.select_executor(1);
+        settle(&mut harness);
+        // Les numéros de cue, à distinguer de ceux du patch et des executors.
+        let in_cues = |r: egui::Rect| r.min.x > 1520.0 && r.max.y < 420.0;
+        let cue_number = |h: &Harness<'_, FolieApp>, label: &str| {
+            h.get_all(By::new().role(Role::Button).label(label)).find(|n| in_cues(n.rect())).unwrap().rect()
+        };
+        harness.get_by_label("EN COURS");
+        harness.get_by_label("SUIVANTE");
+        assert_eq!(harness.get_all_by_label("1 fixture").count(), 2, "contenu de chaque cue");
+        assert!(cue_number(&harness, "2").min.y > cue_number(&harness, "1").min.y);
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("cues.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+
+        // Clic sur un numéro : Goto.
+        harness.get_all(By::new().role(Role::Button).label("2")).find(|n| in_cues(n.rect())).unwrap().click();
+        settle(&mut harness);
+        assert_eq!(output(&harness, 16), 255, "Goto cue 2");
+
+        // Fondu et délai réglés depuis la liste. Ces champs sont nommés par leur valeur :
+        // on les retrouve par leur infobulle, qui est leur description.
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Fondu de la cue 2")).set_value_accesskit(1.5);
+        settle(&mut harness);
+        harness.get(described("Délai de la cue 2")).set_value_accesskit(0.5);
+        settle(&mut harness);
+        let cue = |h: &Harness<'_, FolieApp>, n: u32| h.state().console.show.sequences[&1].cues[&folie_show::CueNumber::whole(n)].clone();
+        assert_eq!((cue(&harness, 2).fade, cue(&harness, 2).delay), (1.5, 0.5));
+
+        // Clic droit sur la ligne : renommer.
+        harness.get_by_label("Contre").click_secondary();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::TextInput, "Nom").type_text(" bis");
+        harness.run_steps(1);
+        harness.get_by_label("Renommer").click();
+        settle(&mut harness);
+        assert_eq!(cue(&harness, 2).name, "Contre bis");
+
+        // Store armé : les numéros de cue complètent la cue avec le programmer.
+        command(&mut harness, "Fixture 2 At 50");
+        harness.get_all_by_label("Store").next().unwrap().click();
+        harness.run_steps(2);
+        harness.get_by_label("Store armé : cliquez un numéro pour compléter cette cue");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("cues-store.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_all(By::new().role(Role::Button).label("1")).find(|n| in_cues(n.rect())).unwrap().click();
+        settle(&mut harness);
+        assert!(!harness.state().store_armed, "Store se désarme après usage");
+        assert_eq!(cue(&harness, 1).values.len(), 2, "la cue 1 tient maintenant les deux fixtures");
+        harness.get_by_label("2 fixtures");
+        command(&mut harness, "ClearAll");
+
+        // Suppression.
+        harness.get(described("Supprimer la cue 2")).click();
+        settle(&mut harness);
+        assert!(!harness.state().console.show.sequences[&1].cues.contains_key(&folie_show::CueNumber::whole(2)));
+        harness.get_by_label("1 cue");
     }
 
     #[test]

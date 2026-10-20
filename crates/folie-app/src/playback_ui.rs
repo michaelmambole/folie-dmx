@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use eframe::egui::{self, Color32, RichText};
 use folie_control::{CommandError, Console, Outcome};
 use folie_engine::{ExecutorStatus, Snapshot};
-use folie_show::{CueNumber, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
+use folie_show::{Cue, CueNumber, CueValue, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
 
 use crate::theme;
 
@@ -15,7 +15,6 @@ type Action = Option<Result<Outcome, CommandError>>;
 pub const FADER_EXECUTORS: std::ops::RangeInclusive<u32> = 1..=10;
 /// Executors à boutons, sans fader.
 pub const BUTTON_EXECUTORS: std::ops::RangeInclusive<u32> = 11..=20;
-const CURRENT: Color32 = crate::theme::EXECUTOR;
 const ARMED: Color32 = crate::theme::DANGER;
 const MODE: Color32 = Color32::from_rgb(120, 170, 255);
 const DELAY: Color32 = crate::theme::EXECUTOR;
@@ -318,76 +317,258 @@ fn executor_header(
     action
 }
 
-/// Liste des cues de la séquence de l'executor sélectionné.
+/// Ce que mémorise une cue, en quelques mots : « 4 fixtures · 1 preset · 1 effet ».
+fn cue_contents(cue: &Cue) -> String {
+    let count = |n: usize, word: &str| format!("{n} {word}{}", if n > 1 { "s" } else { "" });
+    let mut parts = Vec::new();
+    if !cue.values.is_empty() {
+        parts.push(count(cue.values.len(), "fixture"));
+    }
+    let presets: BTreeSet<_> = cue
+        .values
+        .values()
+        .flat_map(|values| values.values())
+        .filter_map(|v| match v {
+            CueValue::Preset(family, number) => Some((*family, *number)),
+            _ => None,
+        })
+        .collect();
+    if !presets.is_empty() {
+        parts.push(count(presets.len(), "preset"));
+    }
+    match &cue.effects {
+        None => {}
+        Some(effects) if effects.is_empty() => parts.push("effets arrêtés".into()),
+        Some(effects) => parts.push(count(effects.len(), "effet")),
+    }
+    if parts.is_empty() { "vide".into() } else { parts.join(" · ") }
+}
+
+/// Place d'une cue par rapport à la cue en cours de l'executor.
+#[derive(Clone, Copy, PartialEq)]
+enum CueState {
+    Past,
+    Current,
+    Next,
+    Later,
+}
+
+/// Petite étiquette en capitales : « EN COURS », « SUIVANTE ».
+fn tag(ui: &mut egui::Ui, text: &str, fill: Color32, stroke: Color32, color: Color32) {
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, stroke))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(text).size(10.5).color(color).extra_letter_spacing(0.6)).selectable(false));
+        });
+}
+
+/// Menu du clic droit d'une cue : renommer.
+fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, name: &str) -> Action {
+    let id = egui::Id::unique(("rename-cue", number));
+    // Le texte en cours de saisie est gardé tant que le menu est ouvert.
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.to_string());
+    let mut action = None;
+    ui.horizontal(|ui| {
+        let label = ui.label("Nom");
+        let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0)).labelled_by(label.id);
+        if !edit.has_focus() && !edit.lost_focus() && text == name {
+            edit.request_focus();
+        }
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if ui.button("Renommer").on_hover_text(format!("Renommer la cue {number}")).clicked() || enter {
+            action = Some(console.label_cue(number, text.trim().to_string()));
+        }
+    });
+    if action.is_some() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        ui.close();
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    }
+    action
+}
+
+/// Une ligne de la liste : numéro (Goto, ou compléter quand Store est armé),
+/// nom et contenu, puis fondu, délai et suppression. Clic droit : renommer.
+fn cue_row(
+    ui: &mut egui::Ui,
+    console: &mut Console,
+    number: CueNumber,
+    cue: &Cue,
+    state: CueState,
+    store_armed: &mut bool,
+) -> Action {
+    let mut action = None;
+    let (fill, stroke) = match state {
+        CueState::Current => (theme::EXECUTOR.gamma_multiply(0.12), theme::EXECUTOR.gamma_multiply(0.55)),
+        CueState::Next => (Color32::TRANSPARENT, theme::LINE),
+        _ => (Color32::TRANSPARENT, Color32::TRANSPARENT),
+    };
+    let text_color = if state == CueState::Past { theme::MUTED } else { theme::TEXT };
+    // Le fond de la ligne est enregistré avant son contenu : les contrôles gardent leurs clics.
+    let row = ui.scope_builder(egui::UiBuilder::new().id_salt(("cue-row", number)).sense(egui::Sense::click()), |ui| {
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, stroke))
+            .corner_radius(theme::RADIUS)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                // Champs de temps discrets : fond de la ligne, texte atténué hors cue en cours.
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.weak_bg_fill = theme::SURFACE_1;
+                widgets.inactive.fg_stroke.color = if state == CueState::Current { theme::TEXT } else { theme::MUTED };
+                ui.horizontal(|ui| {
+                    let (number_fill, number_color) = match state {
+                        CueState::Current => (theme::EXECUTOR, Color32::from_rgb(42, 26, 4)),
+                        CueState::Past => (theme::SURFACE_1, theme::MUTED),
+                        _ => (theme::SURFACE_2, theme::TEXT),
+                    };
+                    let number_stroke = if *store_armed {
+                        egui::Stroke::new(2.0, theme::DANGER)
+                    } else {
+                        egui::Stroke::new(1.0, if state == CueState::Current { theme::EXECUTOR } else { theme::LINE })
+                    };
+                    let button = egui::Button::new(RichText::new(number.to_string()).monospace().size(13.0).color(number_color))
+                        .fill(number_fill)
+                        .stroke(number_stroke)
+                        .selected(state == CueState::Current)
+                        .min_size(egui::vec2(52.0, 26.0));
+                    let help = if *store_armed { "Compléter cette cue avec le programmer" } else { "Aller à cette cue" };
+                    if ui.add(button).on_hover_text(help).clicked() {
+                        action = Some(if *store_armed {
+                            *store_armed = false;
+                            console.store_cue(Some(number), None, None)
+                        } else {
+                            console.goto(number)
+                        });
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let delete = egui::Button::new(RichText::new("×").size(15.0).color(theme::MUTED)).frame(false);
+                        if ui.add(delete).on_hover_text(format!("Supprimer la cue {number}")).clicked() {
+                            action = Some(console.delete_cue(number));
+                        }
+                        let (mut fade, mut delay) = (cue.fade, cue.delay);
+                        fn time(value: &mut f32) -> egui::DragValue<'_> {
+                            egui::DragValue::new(value).range(0.0..=3600.0).speed(0.1).max_decimals(2).suffix(" s")
+                        }
+                        ui.add_sized([62.0, 22.0], time(&mut delay)).on_hover_text(format!("Délai de la cue {number}"));
+                        ui.add_sized([62.0, 22.0], time(&mut fade)).on_hover_text(format!("Fondu de la cue {number}"));
+                        if fade != cue.fade || delay != cue.delay {
+                            action = Some(console.set_cue_times(number, fade, delay));
+                        }
+                        let layout = egui::Layout::top_down(egui::Align::Min);
+                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 34.0), layout, |ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                let name = if cue.name.is_empty() { RichText::new("sans nom").italics().color(theme::MUTED) } else {
+                                    let name = RichText::new(&cue.name).color(text_color);
+                                    if state == CueState::Current { name.family(theme::medium()) } else { name }
+                                };
+                                ui.add(egui::Label::new(name).truncate().selectable(false));
+                                match state {
+                                    CueState::Current => tag(ui, "EN COURS", theme::EXECUTOR, theme::EXECUTOR, Color32::from_rgb(42, 26, 4)),
+                                    CueState::Next => tag(ui, "SUIVANTE", Color32::TRANSPARENT, theme::MUTED, theme::MUTED),
+                                    _ => {}
+                                }
+                            });
+                            ui.add(egui::Label::new(RichText::new(cue_contents(cue)).size(11.5).color(theme::MUTED)).truncate().selectable(false));
+                        });
+                    });
+                });
+            });
+    });
+    egui::Popup::context_menu(&row.response).show(|ui| {
+        if let Some(a) = cue_menu(ui, console, number, &cue.name) {
+            action = Some(a);
+        }
+    });
+    action
+}
+
+/// Liste des cues de la séquence de l'executor sélectionné : en-tête en carte,
+/// cue en cours en ambre, suivante repérée, passées atténuées.
 pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot, store_armed: &mut bool) -> Action {
     let mut action = None;
     let executor = console.selected_executor();
-    ui.horizontal(|ui| {
-        let label = ui.label("Executor");
-        let mut selected = executor;
-        ui.add(egui::DragValue::new(&mut selected).range(1..=*BUTTON_EXECUTORS.end())).labelled_by(label.id);
-        if selected != executor {
-            action = Some(Ok(console.select_executor(selected)));
-        }
-        if let Some((_, sequence)) = console.selected_sequence() {
-            ui.label(RichText::new(&sequence.name).strong());
-        }
-    });
     let status = snapshot.executors.get(&executor);
-    transition_bar(ui, status, ui.available_width());
+    theme::card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let label = ui.label(RichText::new("EXECUTOR").size(11.0).color(theme::MUTED).extra_letter_spacing(0.8));
+            let mut selected = executor;
+            ui.add(egui::DragValue::new(&mut selected).range(1..=*BUTTON_EXECUTORS.end())).labelled_by(label.id);
+            if selected != executor {
+                action = Some(Ok(console.select_executor(selected)));
+            }
+            match console.selected_sequence() {
+                Some((_, sequence)) => {
+                    ui.label(RichText::new(&sequence.name).family(theme::medium()).size(15.0));
+                    let count = sequence.cues.len();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let text = format!("{count} cue{}", if count > 1 { "s" } else { "" });
+                        ui.label(RichText::new(text).size(12.0).color(theme::MUTED));
+                    });
+                }
+                None => {
+                    ui.label(RichText::new("aucune séquence").color(theme::MUTED));
+                }
+            }
+        });
+        ui.add_space(2.0);
+        transition_bar(ui, status, ui.available_width());
+    });
     if *store_armed {
-        ui.colored_label(ARMED, "Store armé : cliquez un numéro pour compléter cette cue");
+        egui::Frame::new()
+            .fill(ARMED.gamma_multiply(0.14))
+            .stroke(egui::Stroke::new(1.0, ARMED))
+            .corner_radius(theme::RADIUS)
+            .inner_margin(egui::Margin::symmetric(10, 5))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.colored_label(Color32::from_rgb(255, 138, 132), "Store armé : cliquez un numéro pour compléter cette cue");
+            });
     }
-    ui.separator();
 
     let Some((_, sequence)) = console.selected_sequence() else {
+        ui.add_space(4.0);
         ui.label("Aucune cue. Réglez des valeurs puis tapez « Store Cue », ou :");
         ui.monospace("Fixture 1 Thru 4 At 100   puis   Store Cue 1 \"Entrée\"");
         return action;
     };
     let current = status.and_then(|s| s.cue);
-    let cues: Vec<(CueNumber, String, f32, f32)> =
-        sequence.cues.iter().map(|(n, c)| (*n, c.name.clone(), c.fade, c.delay)).collect();
+    let next = current.map_or(0, |c| c + 1);
+    let cues: Vec<(CueNumber, Cue)> = sequence.cues.iter().map(|(n, c)| (*n, c.clone())).collect();
 
-    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        egui::Grid::new("cues").num_columns(5).striped(true).spacing([14.0, 6.0]).show(ui, |ui| {
-            ui.strong("N°");
-            ui.strong("Nom");
-            ui.strong("Fondu (s)");
-            ui.strong("Délai (s)");
-            ui.label("");
-            ui.end_row();
-            for (index, (number, name, fade, delay)) in cues.into_iter().enumerate() {
-                let is_current = current == Some(index);
-                let text = |t: String| {
-                    let t = RichText::new(t);
-                    if is_current { t.color(CURRENT).strong() } else { t }
-                };
-                let help = if *store_armed { "Compléter cette cue avec le programmer" } else { "Aller à cette cue" };
-                let goto = ui.selectable_label(is_current, text(number.to_string())).on_hover_text(help);
-                if goto.clicked() {
-                    action = Some(if *store_armed {
-                        *store_armed = false;
-                        console.store_cue(Some(number), None, None)
-                    } else {
-                        console.goto(number)
-                    });
-                }
-                ui.label(text(name));
-                let (mut new_fade, mut new_delay) = (fade, delay);
-                ui.add(egui::DragValue::new(&mut new_fade).range(0.0..=3600.0).speed(0.1).max_decimals(2))
-                    .on_hover_text(format!("Fondu de la cue {number}"));
-                ui.add(egui::DragValue::new(&mut new_delay).range(0.0..=3600.0).speed(0.1).max_decimals(2))
-                    .on_hover_text(format!("Délai de la cue {number}"));
-                if new_fade != fade || new_delay != delay {
-                    action = Some(console.set_cue_times(number, new_fade, new_delay));
-                }
-                if ui.small_button("Supprimer").on_hover_text(format!("Supprimer la cue {number}")).clicked() {
-                    action = Some(console.delete_cue(number));
-                }
-                ui.end_row();
-            }
+    ui.horizontal(|ui| {
+        theme::section(ui, "Cues");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Au-dessus des champs de temps de chaque ligne (marges et touche × comprises).
+            let head = |text: &str| egui::Label::new(RichText::new(text).size(11.0).color(theme::MUTED));
+            ui.add_space(30.0);
+            ui.add_sized([62.0, 14.0], head("délai"));
+            ui.add_sized([62.0, 14.0], head("fondu"));
+            ui.add_space(12.0);
+            ui.label(RichText::new("Clic droit : renommer").size(11.0).color(theme::MUTED));
         });
+    });
+    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        for (index, (number, cue)) in cues.iter().enumerate() {
+            let state = match current {
+                Some(c) if index < c => CueState::Past,
+                Some(c) if index == c => CueState::Current,
+                _ if index == next => CueState::Next,
+                _ => CueState::Later,
+            };
+            if let Some(a) = cue_row(ui, console, *number, cue, state, store_armed) {
+                action = Some(a);
+            }
+        }
     });
     action
 }
