@@ -109,6 +109,34 @@ impl Console {
         self.engine.send(EngineCommand::SetSequences(Arc::new(playback_data(&self.show))));
     }
 
+    /// Presets tenus par la cue en cours de chaque executor, tracking compris :
+    /// pour chaque preset, les executors qui le jouent. `current` : executor ->
+    /// index de sa cue en cours.
+    pub fn presets_in_use(&self, current: &BTreeMap<u32, usize>) -> BTreeMap<(FeatureGroup, u32), Vec<u32>> {
+        let mut used: BTreeMap<(FeatureGroup, u32), Vec<u32>> = BTreeMap::new();
+        for (executor, index) in current {
+            let Some((_, sequence)) = self.executor(*executor) else { continue };
+            // Dernière valeur de chaque paramètre jusqu'à la cue en cours.
+            let mut state: BTreeMap<(FixtureId, &str), CueValue> = BTreeMap::new();
+            for cue in sequence.cues.values().take(index + 1) {
+                for (fixture, parameters) in &cue.values {
+                    for (name, value) in parameters {
+                        state.insert((*fixture, name.as_str()), *value);
+                    }
+                }
+            }
+            for value in state.values() {
+                if let CueValue::Preset(family, number) = value {
+                    let list = used.entry((*family, *number)).or_default();
+                    if !list.contains(executor) {
+                        list.push(*executor);
+                    }
+                }
+            }
+        }
+        used
+    }
+
     pub fn set_executor_options(&mut self, executor: u32, options: ExecutorOptions) -> Result<Outcome, CommandError> {
         let Some(x) = self.show.executors.get_mut(&executor) else {
             return invalid(format!("l'executor {executor} est vide"));

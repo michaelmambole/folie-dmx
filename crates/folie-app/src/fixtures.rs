@@ -10,11 +10,9 @@ use folie_fixture::{
 };
 
 use crate::app::DisplayMode;
+use crate::theme::{self, Source};
 
-/// Couleur des valeurs saisies dans le programmer (rouge, comme sur MA).
-pub const PROGRAMMED: Color32 = Color32::from_rgb(255, 95, 95);
-const NAME_WIDTH: f32 = 150.0;
-const VALUE_WIDTH: f32 = 110.0;
+const NAME_WIDTH: f32 = 140.0;
 const MENU_WIDTH: f32 = 210.0;
 
 pub(crate) struct AddForm {
@@ -302,7 +300,7 @@ impl FixturesView {
         }
     }
 
-    /// Réglage des attributs des fixtures sélectionnées.
+    /// Le Programmer : réglage des attributs de la sélection.
     pub fn attribute_panel(
         &self,
         ui: &mut egui::Ui,
@@ -311,31 +309,40 @@ impl FixturesView {
         display: DisplayMode,
     ) {
         let Some(&reference) = console.selection().first() else {
-            ui.add_space(20.0);
-            ui.label("Sélectionnez des fixtures dans le patch (Cmd-clic, Maj-clic pour plusieurs)");
-            ui.label("ou tapez une commande : Fixture 1 Thru 4 At 50");
+            ui.add_space(24.0);
+            ui.vertical_centered(|ui| {
+                ui.label(RichText::new("Aucune sélection").size(18.0).family(theme::medium()));
+                ui.add_space(4.0);
+                ui.label(RichText::new("Cliquez des fixtures dans la fenêtre Patch, ou tapez une commande :").color(theme::MUTED));
+                ui.monospace("Fixture 1 Thru 4 At 50");
+            });
             return;
         };
         let Some(fixture) = console.show.patch.get(reference.fixture).cloned() else { return };
-        let count = console.selection().len();
 
-        ui.horizontal(|ui| {
-            ui.heading(match (count, reference.head) {
-                (1, None) => fixture.name.clone(),
-                (1, Some(_)) => format!("{} · {reference}", fixture.name),
-                (n, _) => format!("{n} sélectionnées"),
+        theme::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                let count = console.selection().len();
+                let title = match (count, reference.head) {
+                    (1, None) => fixture.name.clone(),
+                    (1, Some(_)) => format!("{} · {reference}", fixture.name),
+                    (n, _) => format!("{n} sélectionnées"),
+                };
+                ui.label(RichText::new(title).size(18.0).family(theme::medium()));
+                ui.label(RichText::new(fixture.fixture_type.display_name()).color(theme::MUTED));
+                ui.add_space(12.0);
+                if ui.add(theme::primary_button("Full")).on_hover_text("Dimmer à 100 %, shutter ouvert").clicked() {
+                    console.full();
+                }
+                if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut").clicked() {
+                    console.release_selection();
+                }
             });
-            ui.label(RichText::new(fixture.fixture_type.display_name()).weak());
+            selection_chips(ui, console.selection());
         });
-        ui.horizontal(|ui| {
-            if ui.button("Full").on_hover_text("Dimmer à 100 %, shutter ouvert").clicked() {
-                console.full();
-            }
-            if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut").clicked() {
-                console.release_selection();
-            }
-        });
-        ui.separator();
+        ui.add_space(6.0);
+        theme::legend(ui);
+        ui.add_space(4.0);
 
         // Une ligne par fonction : les 10 « Dimmer N » d'un Sunstrip entier n'en font qu'une.
         let mut rows: Vec<(usize, Parameter)> = Vec::new();
@@ -348,21 +355,60 @@ impl FixturesView {
         groups.sort();
         groups.dedup();
 
-        // Le curseur prend la place restante : le panneau central varie avec la fenêtre.
-        let slider_width = (ui.available_width() - NAME_WIDTH - VALUE_WIDTH - MENU_WIDTH - 70.0).clamp(100.0, 320.0);
-        egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+        // Paramètres animés par un effet du programmer.
+        let animated: BTreeSet<ParamKey> = console
+            .programmer_effects()
+            .iter()
+            .flat_map(|e| folie_control::effects::instance(e, 0, &console.show.patch).lines)
+            .flat_map(|l| l.params.into_iter().map(|(k, _)| k))
+            .collect();
+
+        let bar_width = (ui.available_width() - NAME_WIDTH - MENU_WIDTH - 60.0).clamp(140.0, 420.0);
+        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for group in groups {
-                ui.add_space(6.0);
-                ui.label(RichText::new(group.label()).strong().size(15.0));
-                egui::Grid::new(("attributes", group)).num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
-                    for (index, parameter) in rows.iter().filter(|(_, p)| p.attribute.group() == group) {
-                        let row = Row { index: *index, parameter, reference, snapshot, display, slider_width };
-                        row.show(ui, console);
-                        ui.end_row();
-                    }
+                theme::card(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    theme::section(ui, group.label());
+                    egui::Grid::new(("attributes", group)).num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
+                        for (index, parameter) in rows.iter().filter(|(_, p)| p.attribute.group() == group) {
+                            let row = Row { index: *index, parameter, fixture: &fixture, reference, snapshot, display, bar_width };
+                            row.show(ui, console, &animated);
+                            ui.end_row();
+                        }
+                    });
                 });
+                ui.add_space(6.0);
             }
         });
+    }
+}
+
+/// Numéros des cibles sélectionnées, en pastilles jaunes ; au-delà de 16, un compteur.
+fn selection_chips(ui: &mut egui::Ui, selection: &[Target]) {
+    const SHOWN: usize = 16;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        for target in selection.iter().take(SHOWN) {
+            egui::Frame::new()
+                .stroke(egui::Stroke::new(1.0, theme::SELECTION))
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(6, 1))
+                .show(ui, |ui| ui.label(RichText::new(target.to_string()).monospace().size(12.0).color(theme::SELECTION)));
+        }
+        if selection.len() > SHOWN {
+            ui.label(RichText::new(format!("+{}", selection.len() - SHOWN)).color(theme::MUTED));
+        }
+    });
+}
+
+/// Valeur réellement envoyée pour un paramètre, relue dans la sortie DMX.
+fn live_value(snapshot: &Snapshot, fixture: &PatchedFixture, parameter: &Parameter) -> Option<u16> {
+    let universe = snapshot.output.get(fixture.universe)?;
+    let byte = |offset: u16| universe.get(fixture.address + offset).ok();
+    match parameter.offsets.as_slice() {
+        [coarse] => byte(*coarse).map(|v| v as u16 * 257),
+        [coarse, fine, ..] => Some(((byte(*coarse)? as u16) << 8) | byte(*fine)? as u16),
+        [] => None,
     }
 }
 
@@ -378,47 +424,67 @@ fn target_row(ui: &mut egui::Ui, selection: &[Target], target: Target, name: &st
 struct Row<'a> {
     index: usize,
     parameter: &'a Parameter,
+    fixture: &'a PatchedFixture,
     reference: Target,
     snapshot: &'a Snapshot,
     display: DisplayMode,
-    slider_width: f32,
+    bar_width: f32,
 }
 
 impl Row<'_> {
-    fn show(&self, ui: &mut egui::Ui, console: &mut Console) {
+    fn show(&self, ui: &mut egui::Ui, console: &mut Console, animated: &BTreeSet<ParamKey>) {
         let parameter = self.parameter;
         let key = ParamKey { fixture: self.reference.fixture, parameter: self.index };
-        let programmed = self.snapshot.attributes.get(&key).copied();
-        let value = programmed.unwrap_or(parameter.default);
+        let source = if animated.contains(&key) {
+            Source::Effect
+        } else if console.programmer().contains_key(&key) {
+            Source::Programmer
+        } else if self.snapshot.stage.contains_key(&key) {
+            Source::Executor
+        } else {
+            Source::Default
+        };
+        // Ce qui sort vraiment (effets compris) ; à défaut, la valeur du programmer.
+        let value = live_value(self.snapshot, self.fixture, parameter)
+            .or_else(|| console.programmer().get(&key).copied())
+            .unwrap_or(parameter.default);
 
         // Fixture entière : nom de la fonction ; sous-fixture : nom complet ("Dimmer 3").
         let label = if self.reference.head.is_some() { &parameter.name } else { &parameter.base_name };
-        let name = RichText::new(label);
-        let name = if programmed.is_some() { name.color(PROGRAMMED) } else { name };
-        // Largeurs fixes : les colonnes restent alignées d'un groupe d'attributs à l'autre.
-        let name_label = fixed_width(ui, NAME_WIDTH, |ui| ui.label(name));
+        let name_color = if source == Source::Default { theme::TEXT } else { source.color() };
+        let name_label = fixed_width(ui, NAME_WIDTH, |ui| {
+            ui.add(egui::Label::new(RichText::new(label).color(name_color)).sense(Sense::click()))
+        });
 
-        let mut percent = value as f32 / u16::MAX as f32 * 100.0;
-        ui.spacing_mut().slider_width = self.slider_width;
-        let slider = egui::Slider::new(&mut percent, 0.0..=100.0).show_value(false);
-        if ui.add(slider).labelled_by(name_label.id).changed() {
-            console.set_like(parameter, (percent / 100.0 * u16::MAX as f32).round() as u16);
+        let mut level = value as f32 / u16::MAX as f32;
+        let text = self.value_text(value);
+        let help = "Glisser : régler (Maj : fin) · clic : placer · Option-clic : relâcher";
+        let bar = theme::value_bar(ui, &mut level, source.color(), &text, self.bar_width)
+            .labelled_by(name_label.id)
+            .on_hover_text(help);
+        let alt = ui.input(|i| i.modifiers.alt);
+        if alt && (bar.clicked() || name_label.clicked()) {
+            console.release_like(parameter);
+        } else if bar.changed() {
+            console.set_like(parameter, (level * u16::MAX as f32).round() as u16);
         }
+        self.capability_menu(ui, console, value, name_label.id);
+    }
 
-        let mut text = match self.display {
-            DisplayMode::Percent => format!("{percent:.1} %"),
-            DisplayMode::Dmx if parameter.resolution_bits() > 8 => format!("{}/{}", value >> 8, value & 0xFF),
-            DisplayMode::Dmx => (value >> 8).to_string(),
-        };
+    /// Valeur lisible : degrés pour un angle, sinon % ou DMX selon l'affichage choisi.
+    fn value_text(&self, value: u16) -> String {
+        let parameter = self.parameter;
         if let Some(cap) = parameter.capability_at(value)
             && let Some((start, end)) = cap.angle
         {
             let t = (value - cap.range.start()) as f32 / (cap.range.end() - cap.range.start()).max(1) as f32;
-            text.push_str(&format!("  {:.0}°", start + (end - start) * t));
+            return format!("{:.0}°", start + (end - start) * t);
         }
-        fixed_width(ui, VALUE_WIDTH, |ui| ui.monospace(text));
-
-        self.capability_menu(ui, console, value, name_label.id);
+        match self.display {
+            DisplayMode::Percent => format!("{:.1} %", value as f32 / u16::MAX as f32 * 100.0),
+            DisplayMode::Dmx if parameter.resolution_bits() > 8 => format!("{}/{}", value >> 8, value & 0xFF),
+            DisplayMode::Dmx => (value >> 8).to_string(),
+        }
     }
 
     fn capability_menu(&self, ui: &mut egui::Ui, console: &mut Console, value: u16, label: egui::Id) {

@@ -71,6 +71,72 @@ pub fn matching(patch: &Patch, target: Target, reference: &Parameter) -> Vec<usi
     parameters.iter().filter(|(_, p)| p.attribute == reference.attribute).map(|(i, _)| *i).collect()
 }
 
+/// Couleur affichable d'une fixture d'après des valeurs nommées (celles d'un
+/// preset) : couleur de roue si elle est choisie, sinon le mélange. Les
+/// composantes absentes gardent leur valeur par défaut.
+fn fixture_color(fixture: &folie_fixture::PatchedFixture, values: &std::collections::BTreeMap<String, u16>) -> Option<[f32; 3]> {
+    let parameters = &fixture.mode().parameters;
+    let level = |p: &Parameter| values.get(&p.name).copied().unwrap_or(p.default) as f32 / u16::MAX as f32;
+    // La roue (réelle ou simulée) passe devant le mélange quand une couleur y est choisie.
+    for p in parameters.iter().filter(|p| p.attribute == Attribute::ColorMacro && values.contains_key(&p.name)) {
+        let value = values[&p.name];
+        if let Some(CapabilityKind::ColorPreset { colors }) = p.capability_at(value).map(|c| &c.kind)
+            && let Some([r, g, b]) = colors.first()
+        {
+            return Some([*r as f32 / 255.0, *g as f32 / 255.0, *b as f32 / 255.0]);
+        }
+    }
+    let (mut light, mut filter, mut any) = ([0.0f32; 3], [1.0f32; 3], false);
+    for p in parameters {
+        let Attribute::ColorMix(color) = &p.attribute else { continue };
+        any = true;
+        let v = level(p);
+        let add = |light: &mut [f32; 3], rgb: [f32; 3]| (0..3).for_each(|i| light[i] += rgb[i] * v);
+        match color.as_str() {
+            "Red" => add(&mut light, [1.0, 0.0, 0.0]),
+            "Green" => add(&mut light, [0.0, 1.0, 0.0]),
+            "Blue" => add(&mut light, [0.0, 0.0, 1.0]),
+            "White" => add(&mut light, [0.9, 0.9, 0.9]),
+            "Warm White" => add(&mut light, [1.0, 0.82, 0.6]),
+            "Cold White" => add(&mut light, [0.82, 0.9, 1.0]),
+            "Amber" => add(&mut light, [1.0, 0.6, 0.0]),
+            "Lime" => add(&mut light, [0.6, 1.0, 0.0]),
+            "UV" => add(&mut light, [0.25, 0.0, 0.5]),
+            // Soustractif : chaque filtre retire une primaire.
+            "Cyan" => filter[0] *= 1.0 - v,
+            "Magenta" => filter[1] *= 1.0 - v,
+            "Yellow" => filter[2] *= 1.0 - v,
+            _ => {}
+        }
+    }
+    if !any {
+        return None;
+    }
+    // Sans source additive (machine CMY), la lumière est blanche avant les filtres.
+    if light == [0.0; 3] && filter != [1.0; 3] {
+        light = [1.0; 3];
+    }
+    let mixed = [light[0] * filter[0], light[1] * filter[1], light[2] * filter[2]];
+    let peak = mixed.iter().copied().fold(0.0f32, f32::max);
+    Some(if peak > 1.0 { mixed.map(|c| c / peak) } else { mixed })
+}
+
+/// Couleur que donne un preset, moyenne de ses fixtures ; `None` s'il ne touche
+/// aucune couleur.
+pub fn preset_color(preset: &Preset, patch: &Patch) -> Option<[u8; 3]> {
+    let colors: Vec<[f32; 3]> = preset
+        .values
+        .iter()
+        .filter_map(|(id, values)| patch.get(*id).and_then(|f| fixture_color(f, values)))
+        .collect();
+    if colors.is_empty() {
+        return None;
+    }
+    let n = colors.len() as f32;
+    let channel = |i: usize| (colors.iter().map(|c| c[i]).sum::<f32>() / n * 255.0).round().clamp(0.0, 255.0) as u8;
+    Some([channel(0), channel(1), channel(2)])
+}
+
 pub struct Console {
     pub show: Show,
     /// Sélection dans l'ordre où elle a été faite.
@@ -119,6 +185,11 @@ impl Console {
     /// Valeurs saisies, en attente d'être enregistrées.
     pub fn programmer(&self) -> &HashMap<ParamKey, u16> {
         &self.programmer
+    }
+
+    /// Presets appliqués dans le programmer (au moins une valeur en vient encore).
+    pub fn programmer_presets(&self) -> std::collections::BTreeSet<(FeatureGroup, u32)> {
+        self.origins.values().copied().collect()
     }
 
     pub fn select(&mut self, targets: impl IntoIterator<Item = Target>, mode: SelectMode) {
@@ -205,6 +276,19 @@ impl Console {
             }
         }
         self.selection_used = true;
+    }
+
+    /// Relâche un paramètre (et ses équivalents) sur toute la sélection : il revient
+    /// à ce qui est dessous, executor ou valeur par défaut.
+    pub fn release_like(&mut self, reference: &Parameter) {
+        for target in self.selection.clone() {
+            for parameter in matching(&self.show.patch, target, reference) {
+                let key = ParamKey { fixture: target.fixture, parameter };
+                self.origins.remove(&key);
+                self.programmer.remove(&key);
+                self.engine.send(EngineCommand::ReleaseAttribute(key));
+            }
+        }
     }
 
     /// Dimmer à 100 % et shutter ouvert sur la sélection.
@@ -644,6 +728,20 @@ mod tests {
     }
 
     #[test]
+    fn release_a_single_parameter() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 Thru 2 At 100");
+        let fixture = c.show.patch.get(FixtureId(1)).unwrap().clone();
+        let red = fixture.mode().parameters[2].clone();
+        c.set_like(&red, u16::MAX);
+        settled(&c);
+        c.release_like(&red);
+        assert_eq!((dmx(&c, 4), dmx(&c, 18)), (0, 0), "rouge relâché sur les deux fixtures");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 255), "le dimmer reste programmé");
+        assert_eq!(c.programmer().len(), 2);
+    }
+
+    #[test]
     fn clear_twice_like_ma() {
         let mut c = console();
         run(&mut c, "Fixture 1 At 100");
@@ -720,6 +818,50 @@ mod tests {
         run(&mut c, "Store Preset 4.1");
         run(&mut c, "ClearAll");
         assert_eq!(dmx(&c, 32), 128);
+    }
+
+    #[test]
+    fn preset_colors() {
+        let c = console();
+        let preset = |values: &[(&str, u16)], fixture| folie_show::Preset {
+            name: String::new(),
+            values: std::collections::BTreeMap::from([(
+                FixtureId(fixture),
+                values.iter().map(|(n, v)| (n.to_string(), *v)).collect(),
+            )]),
+        };
+        // MH 6 : rouge seul, puis rouge + vert = jaune ; la roue (couleur 12, vert) prime.
+        assert_eq!(preset_color(&preset(&[("Red", 65_535)], 1), &c.show.patch), Some([255, 0, 0]));
+        assert_eq!(preset_color(&preset(&[("Red", 65_535), ("Green", 65_535)], 1), &c.show.patch), Some([255, 255, 0]));
+        let wheel = preset(&[("Red", 65_535), ("Color Wheel", 66 * 257)], 1);
+        assert_eq!(preset_color(&wheel, &c.show.patch), Some([0, 255, 0]));
+        // Le Sunstrip n'a pas de couleur.
+        assert_eq!(preset_color(&preset(&[("Dimmer 1", 65_535)], 10), &c.show.patch), None);
+    }
+
+    #[test]
+    fn presets_in_programmer_and_in_executors() {
+        use std::collections::BTreeMap;
+        let mut c = console();
+        let red = c.show.patch.get(FixtureId(1)).unwrap().mode().parameters[2].clone();
+        run(&mut c, "Fixture 1");
+        c.set_like(&red, u16::MAX);
+        run(&mut c, "Store Preset 4.1");
+        run(&mut c, "ClearAll");
+        run(&mut c, "Fixture 1");
+        run(&mut c, "Preset 4.1");
+        assert!(c.programmer_presets().contains(&(FeatureGroup::Color, 1)));
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        assert!(c.programmer_presets().is_empty());
+        run(&mut c, "Fixture 2 At 50");
+        run(&mut c, "Store Cue 2 Fade 0");
+        run(&mut c, "ClearAll");
+
+        // La cue 2 ne touche pas la fixture 1 : le preset reste joué par tracking.
+        let used = c.presets_in_use(&BTreeMap::from([(1, 1)]));
+        assert_eq!(used.get(&(FeatureGroup::Color, 1)), Some(&vec![1]));
+        assert!(c.presets_in_use(&BTreeMap::new()).is_empty());
     }
 
     #[test]

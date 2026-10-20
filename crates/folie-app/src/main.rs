@@ -8,6 +8,7 @@ mod playback_ui;
 mod pools;
 mod screens;
 mod storage;
+mod theme;
 mod workspace;
 
 fn main() -> eframe::Result {

@@ -115,8 +115,8 @@ pub struct FolieApp {
 
 impl FolieApp {
     pub fn new(cc: &eframe::CreationContext<'_>, storage: Storage) -> Self {
-        // Toujours sombre : une console est utilisée en régie, dans le noir.
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
+        // Identité visuelle : sombre (régie), polices et couleurs de Folie-DMX.
+        crate::theme::apply(&cc.egui_ctx);
         let engine = folie_engine::spawn(
             EngineConfig::default(),
             vec![OutputBinding { universe: 0, output: Box::new(NullOutput) }],
@@ -359,7 +359,7 @@ mod tests {
     }
 
     fn harness(storage: Storage) -> Harness<'static, FolieApp> {
-        harness_with(storage, test_workspace(), egui::vec2(1900.0, 900.0))
+        harness_with(storage, test_workspace(), egui::vec2(1900.0, 1200.0))
     }
 
     fn harness_with(storage: Storage, workspace: Workspace, size: egui::Vec2) -> Harness<'static, FolieApp> {
@@ -407,16 +407,23 @@ mod tests {
 
         harness.get_by_label("Full").click();
         settle(&mut harness);
+        // Option-clic sur la barre du Dimmer : relâché sur les 4, le shutter reste ouvert.
+        harness.get_by_role_and_label(Role::Slider, "Dimmer").click_modifiers(egui::Modifiers::ALT);
+        settle(&mut harness);
+        assert_eq!(harness.state().snapshot.output[0].get(2), Ok(0), "dimmer relâché");
+        assert_eq!(harness.state().snapshot.output[0].get(1), Ok(8), "shutter toujours ouvert");
+        harness.get_by_label("Full").click();
+        settle(&mut harness);
         harness.get_by_role_and_label(Role::ComboBox, "Color Wheel").click();
         harness.run_steps(2);
-        harness.get_by_label("Color 12 (R0 G255 B0 W0)").click();
+        harness.get_by_label("Color 5 (R255 G245 B0 W0)").click(); // entièrement visible dans la liste
         settle(&mut harness);
 
         let out = &harness.state().snapshot.output[0];
         for base in [0, 14, 28, 42] {
             assert_eq!(out.get(base + 2), Ok(255), "dimmer fixture à {}", base + 1);
             assert_eq!(out.get(base + 3), Ok(255), "dimmer fin");
-            assert_eq!(out.get(base + 8), Ok(66), "couleur 12 sur la roue simulée");
+            assert_eq!(out.get(base + 8), Ok(31), "couleur 5 sur la roue simulée (DMX 31 à 35)");
         }
 
         // FOLIE_UI_CAPTURE=<dossier> enregistre une image de l'écran pour vérifier la mise en page.
@@ -642,6 +649,14 @@ mod tests {
         harness.run_steps(2);
         assert!(!harness.state().windows.workspace.is_open(WindowKind::Groups));
 
+        // Les raccourcis de fenêtre basculent : ⌘2 rouvre les Groupes, ⌘2 les referme.
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num2);
+        harness.run_steps(2);
+        assert!(harness.state().windows.workspace.is_open(WindowKind::Groups));
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num2);
+        harness.run_steps(2);
+        assert!(!harness.state().windows.workspace.is_open(WindowKind::Groups));
+
         // … et ⌥⌘1 les rouvre avec le reste de la disposition.
         harness.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::Num1);
         harness.run_steps(2);
@@ -694,7 +709,7 @@ mod tests {
         settle(&mut harness);
         assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 0));
         harness.get_by_label("1 Face"); // cue en cours affichée dans les executors
-        harness.get_by_label("ensuite 2 Contre");
+        harness.get_by_label("› 2 Contre");
         go(&harness);
         settle(&mut harness);
         assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 255));
@@ -718,7 +733,7 @@ mod tests {
         harness.get_by_label("Boucler en fin de séquence").click();
         harness.run_steps(2);
         assert!(harness.state().console.show.executors[&1].options.wrap);
-        harness.get_by_label("boucle"); // repère affiché sur la carte
+        harness.get_by_label("Go · boucle"); // mode et options sur la carte
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("executor-menu.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
@@ -792,6 +807,48 @@ mod tests {
         assert_eq!(go(&harness), before, "la carte ne bouge pas au Go");
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("delay.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+    }
+
+    #[test]
+    fn presets_pool_shows_colors_and_states() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Presets,
+            placement: Placement::at_size(egui::pos2(1500.0, 40.0), egui::vec2(700.0, 480.0)),
+            preset_family: Some("color".into()),
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1000.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        let console = &mut harness.state_mut().console;
+        let parameter = |console: &Console, name: &str| {
+            let fixture = console.show.patch.fixtures()[0].clone();
+            fixture.mode().parameters.iter().find(|p| p.name == name).unwrap().clone()
+        };
+        let store = |console: &mut Console, line: &str, color: &str, number: u32, name: &str| {
+            console.execute(line).unwrap();
+            let p = parameter(console, color);
+            console.set_like(&p, u16::MAX);
+            console.store_preset(FeatureGroup::Color, number, Some(name.into())).unwrap();
+            console.execute("ClearAll").unwrap();
+        };
+        store(console, "Fixture 1 Thru 2", "Red", 1, "Rouge");
+        store(console, "Fixture 1", "Blue", 2, "Bleu");
+        store(console, "Fixture 1 Thru 2", "Green", 3, "Vert");
+        // « Bleu » joué par l'executor 1, « Vert » dans le programmer, fixture 1 sélectionnée.
+        console.execute("Fixture 1").unwrap();
+        console.execute("Preset 4.2").unwrap();
+        console.execute("Store Cue 1 Fade 0").unwrap();
+        console.execute("ClearAll").unwrap();
+        console.execute("Go").unwrap();
+        console.execute("Fixture 2").unwrap();
+        console.execute("Preset 4.3").unwrap();
+        settle(&mut harness);
+        harness.get_by_label("1\nRouge");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("presets-pool.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
     }

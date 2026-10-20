@@ -180,12 +180,9 @@ impl FolieApp {
         }
         for kind in WindowKind::ALL {
             let shortcut = KeyboardShortcut::new(Modifiers::COMMAND, kind.key());
+            // Bascule, comme dans le menu Fenêtres : ouvre si fermée, ferme si ouverte.
             if ctx.input_mut(|i| i.consume_shortcut(&shortcut)) {
-                if self.windows.workspace.is_open(kind) {
-                    ctx.send_viewport_cmd_to(viewport_id(kind), ViewportCommand::Focus);
-                } else {
-                    self.windows.open(kind);
-                }
+                self.windows.toggle(kind);
             }
         }
         if self.store_armed && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -401,7 +398,7 @@ impl FolieApp {
                 let Some(window) = self.windows.workspace.window_mut(kind) else { return };
                 let mut family = window.family();
                 let result = egui::ScrollArea::vertical()
-                    .show(ui, |ui| self.pools.presets(ui, &mut self.console, &mut family, &mut self.store_armed))
+                    .show(ui, |ui| self.pools.presets(ui, &mut self.console, &self.snapshot, &mut family, &mut self.store_armed))
                     .inner;
                 if let Some(window) = self.windows.workspace.window_mut(kind) {
                     window.preset_family = Some(family.key().to_string());

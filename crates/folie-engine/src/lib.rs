@@ -127,6 +127,9 @@ pub struct Snapshot {
     pub tempo: f32,
     /// Effets en cours, programmer et executors confondus.
     pub running_effects: usize,
+    /// Valeurs tenues par les executors (avant le programmer) : permet de dire
+    /// d'où vient ce qui sort.
+    pub stage: HashMap<ParamKey, u16>,
 }
 
 /// Point d'accès au moteur depuis l'interface.
@@ -463,6 +466,7 @@ impl Engine {
         }
         let values: HashMap<ParamKey, u16> = merged.into_iter().map(|(k, (_, v))| (k, v)).collect();
         self.stage.clone_from(&values);
+        self.state.stage.clone_from(&values);
         values
     }
 
