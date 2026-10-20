@@ -575,6 +575,26 @@ mod tests {
         settle(&mut harness);
         assert_eq!(harness.state().console.selection().len(), 2);
 
+        // Clic droit sur la case : renommer (le nom actuel est déjà dans le champ).
+        harness.get_by_label("1\nFace").click_secondary();
+        harness.run_steps(2);
+        let field = harness.get_by_role_and_label(Role::TextInput, "Nom");
+        field.focus();
+        field.type_text(" cour");
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.groups[&1].name, "Face cour");
+        assert!(harness.state().file.dirty);
+
+        // … et supprimer, puis recréer pour la suite du test.
+        harness.get_by_label("1\nFace cour").click_secondary();
+        harness.run_steps(2);
+        harness.get_all_by_label("Supprimer").last().unwrap().click(); // celui du menu, pas du patch
+        harness.run_steps(2);
+        assert!(harness.state().console.show.groups.is_empty());
+        command(&mut harness, r#"Store Group 1 "Face""#);
+
         // Preset de dimmer enregistré avec Store armé, puis rappelé d'un clic.
         harness.get_by_label("Full").click();
         settle(&mut harness);
@@ -692,6 +712,18 @@ mod tests {
         assert_eq!(harness.state().console.show.executors[&2].sequence, 2);
         harness.get_by_label("Cue 1 enregistrée sur l'executor 2 (fondu 2 s)");
 
+        // Clic droit sur le numéro de l'executor 1 : options.
+        harness.get_all(By::new().role(Role::Button).label("1")).find(|n| n.rect().min.y > 800.0).unwrap().click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("Boucler en fin de séquence").click();
+        harness.run_steps(2);
+        assert!(harness.state().console.show.executors[&1].options.wrap);
+        harness.get_by_label("boucle"); // repère affiché sur la carte
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-menu.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("cues.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
@@ -732,5 +764,35 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state().console.programmer_effects().is_empty());
         assert_eq!(harness.state().snapshot.running_effects, 0);
+    }
+
+    #[test]
+    fn transition_bar_shows_delay_without_moving_the_layout() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Executors,
+            placement: Placement::at_size(egui::pos2(900.0, 820.0), egui::vec2(1000.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2000.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, "Store Cue 1 Fade 3");
+        command(&mut harness, "ClearAll");
+        harness.state_mut().console.set_cue_times(folie_show::CueNumber::whole(1), 3.0, 2.0).unwrap();
+        settle(&mut harness);
+
+        let go = |h: &Harness<'_, FolieApp>| h.get_all(By::new().role(Role::Button).label("Go")).next().unwrap().rect();
+        let before = go(&harness);
+        harness.get_all(By::new().role(Role::Button).label("Go")).next().unwrap().click();
+        settle(&mut harness);
+        let status = harness.state().snapshot.executors[&1].clone();
+        assert!(status.in_transition() && status.elapsed < status.delay, "encore dans le délai : {status:?}");
+        assert_eq!(go(&harness), before, "la carte ne bouge pas au Go");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("delay.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 }

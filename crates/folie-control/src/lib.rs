@@ -284,6 +284,7 @@ impl Console {
             Command::SetFader(executor, percent) => self.set_fader(executor, percent),
             Command::ApplyEffect(number) => self.apply_effect(number),
             Command::StoreExecutor(executor) => self.store_in_executor(executor),
+            Command::OffAll => Ok(self.off_all()),
             Command::SetTempo(bpm) => Ok(self.set_tempo(bpm)),
             Command::Clear => {
                 if self.selection.is_empty() {
@@ -480,7 +481,8 @@ impl Console {
         )))
     }
 
-    fn label(&mut self, object: Object, name: String) -> Result<Outcome, CommandError> {
+    /// Renomme un groupe ou un preset (`Label Group 3 "Cour"`).
+    pub fn label(&mut self, object: Object, name: String) -> Result<Outcome, CommandError> {
         let slot = match object {
             Object::Group(n) => self.show.groups.get_mut(&n).map(|g| &mut g.name),
             Object::Preset(f, n) => self.show.presets.get_mut(&(f, n)).map(|p| &mut p.name),
@@ -495,7 +497,8 @@ impl Console {
         }
     }
 
-    fn delete(&mut self, object: Object) -> Result<Outcome, CommandError> {
+    /// Supprime un groupe ou un preset (`Delete Group 3`).
+    pub fn delete(&mut self, object: Object) -> Result<Outcome, CommandError> {
         let removed = match object {
             Object::Group(n) => self.show.groups.remove(&n).map(|g| format!("Groupe {n} « {} » supprimé", g.name)),
             Object::Preset(f, n) => self
@@ -806,6 +809,23 @@ mod tests {
         assert_eq!(dmx(&c, 2), 255);
         c.flash(3, false);
         assert_eq!(dmx(&c, 2), 0);
+
+        // Options : protégé, l'executor 3 résiste à Off All ; l'executor 1, non.
+        c.set_executor_mode(3, ExecutorMode::Go).unwrap();
+        let protected = folie_show::ExecutorOptions { protected: true, ..Default::default() };
+        c.set_executor_options(3, protected).unwrap();
+        run(&mut c, "Fixture 2 At 100");
+        run(&mut c, "Store Cue Fade 0");
+        run(&mut c, "Executor 1");
+        run(&mut c, "Store Cue Fade 0");
+        run(&mut c, "ClearAll");
+        run(&mut c, "Go Executor 1");
+        run(&mut c, "Go Executor 3");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 255));
+        assert_eq!(run(&mut c, "Off All").message, "Executors éteints, sauf 1 protégé(s)");
+        assert_eq!(dmx(&c, 2), 255, "executor 3 protégé : toujours allumé");
+        run(&mut c, "Off Executor 3");
+        c.clear_executor(1).unwrap();
 
         c.rename_executor(3, "Face".into()).unwrap();
         assert_eq!(c.executor(3).unwrap().1.name, "Face");

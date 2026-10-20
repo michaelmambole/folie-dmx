@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-pub use cues::{Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, Sequence};
+pub use cues::{
+    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, Priority, Sequence,
+};
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
 
 use effects::EffectEntry;
@@ -145,6 +147,54 @@ struct CueEntry {
     /// Absent : les effets précédents continuent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effects: Option<Vec<EffectEntry>>,
+}
+
+/// Options d'un executor dans le fichier ; tout champ absent prend sa valeur par défaut.
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+struct OptionsEntry {
+    wrap: bool,
+    auto_start: bool,
+    auto_stop: bool,
+    fader: String,
+    off_time: f32,
+    back_time: Option<f32>,
+    priority: String,
+    protected: bool,
+}
+
+impl Default for OptionsEntry {
+    fn default() -> Self {
+        Self::from_options(&ExecutorOptions::default())
+    }
+}
+
+impl OptionsEntry {
+    fn from_options(o: &ExecutorOptions) -> Self {
+        Self {
+            wrap: o.wrap,
+            auto_start: o.auto_start,
+            auto_stop: o.auto_stop,
+            fader: o.fader.key().into(),
+            off_time: o.off_time,
+            back_time: o.back_time,
+            priority: o.priority.key().into(),
+            protected: o.protected,
+        }
+    }
+
+    fn into_options(self) -> ExecutorOptions {
+        ExecutorOptions {
+            wrap: self.wrap,
+            auto_start: self.auto_start,
+            auto_stop: self.auto_stop,
+            fader: FaderFunction::from_key(&self.fader).unwrap_or_default(),
+            off_time: self.off_time.clamp(0.0, 3600.0),
+            back_time: self.back_time.map(|t| t.clamp(0.0, 3600.0)),
+            priority: Priority::from_key(&self.priority).unwrap_or_default(),
+            protected: self.protected,
+        }
+    }
 }
 
 fn cue_value_to_json(value: &CueValue) -> Value {
@@ -275,7 +325,10 @@ pub fn to_json(show: &Show) -> String {
     let executors = show
         .executors
         .iter()
-        .map(|(e, x)| (e.to_string(), serde_json::json!({ "sequence": x.sequence, "mode": x.mode.key() })))
+        .map(|(e, x)| {
+            let options = serde_json::to_value(OptionsEntry::from_options(&x.options)).unwrap_or_default();
+            (e.to_string(), serde_json::json!({ "sequence": x.sequence, "mode": x.mode.key(), "options": options }))
+        })
         .collect();
     let file = ShowFile {
         format: FORMAT.into(),
@@ -405,17 +458,21 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
     }
     let mut executors = BTreeMap::new();
     for (executor, raw) in file.executors {
-        let (sequence, mode) = match &raw {
-            Value::Number(n) => (n.as_u64(), Some(ExecutorMode::Go)),
+        let (sequence, mode, options) = match &raw {
+            Value::Number(n) => (n.as_u64(), Some(ExecutorMode::Go), ExecutorOptions::default()),
             Value::Object(o) => (
                 o.get("sequence").and_then(Value::as_u64),
                 o.get("mode").and_then(Value::as_str).map_or(Some(ExecutorMode::Go), ExecutorMode::from_key),
+                o.get("options")
+                    .and_then(|v| serde_json::from_value::<OptionsEntry>(v.clone()).ok())
+                    .map(OptionsEntry::into_options)
+                    .unwrap_or_default(),
             ),
-            _ => (None, None),
+            _ => (None, None, ExecutorOptions::default()),
         };
         match (executor.parse::<u32>(), sequence.map(|s| s as u32), mode) {
             (Ok(executor), Some(sequence), Some(mode)) if sequences.contains_key(&sequence) => {
-                executors.insert(executor, Executor { sequence, mode });
+                executors.insert(executor, Executor { sequence, mode, options });
             }
             _ => warnings.push(format!("Executor {executor} : illisible ou séquence introuvable, retiré")),
         }
@@ -538,7 +595,23 @@ mod tests {
         let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
         let executors = BTreeMap::from([
             (1, Executor::new(1)),
-            (11, Executor { sequence: 1, mode: ExecutorMode::Flash }),
+            (11, Executor { sequence: 1, mode: ExecutorMode::Flash, options: ExecutorOptions::default() }),
+            (
+                2,
+                Executor {
+                    sequence: 1,
+                    mode: ExecutorMode::Go,
+                    options: ExecutorOptions {
+                        wrap: true,
+                        fader: FaderFunction::Temp,
+                        off_time: 3.0,
+                        back_time: Some(1.5),
+                        priority: Priority::High,
+                        protected: true,
+                        ..Default::default()
+                    },
+                },
+            ),
         ]);
         Show { patch, groups, presets, sequences, executors, tempo: 98.0 }
     }

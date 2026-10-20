@@ -61,12 +61,15 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Commandes `Go`, `Back`, `Off`, `Goto Cue`, `Executor n At`, `Store Cue n Fade s "nom"`
 - [x] Fenêtres Cues (⌘5) et Executors (⌘6)
 - [x] Sauvegarde automatique, reprise après plantage
-- [ ] `Block` (figer les valeurs suivies), temps de Back et d'Off, bouclage en fin de liste
-- [ ] Fondu des attributs LTP depuis la couche inférieure (aujourd'hui : départ franc)
+- [ ] `Block` (figer les valeurs suivies)
+- [x] Fondu des attributs LTP depuis et vers ce qui est dessous (valeur par défaut ou executor inférieur)
 - [x] Executors en modes Go, Flash et Bascule ; 10 à fader et 10 à boutons
 - [x] Touche Store globale : Store puis clic sur un executor, une case de pool ou une cue
 - [x] Executors toujours complets (cue en cours et suivante, progression), menu au clic droit
-- [ ] Pages d'executors, mode Temp, temps par attribut
+- [x] Options d'executor : bouclage, Auto start/stop, fader Master/Temp/Vitesse, temps d'Off
+      et de Back, priorité basse/normale/haute, protection ; « Tout éteindre » (`Off All`)
+- [x] Pools : renommer et supprimer une case au clic droit
+- [ ] Pages d'executors, mode chenillard, temps par attribut
 - **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
   `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)
 

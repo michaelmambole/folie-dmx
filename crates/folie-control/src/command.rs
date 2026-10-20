@@ -43,13 +43,14 @@ pub enum Keyword {
     Fade,
     Effect,
     Tempo,
+    All,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
 const ALIASES: [(&str, Keyword); 4] =
     [("g", Keyword::Group), ("exec", Keyword::Executor), ("t", Keyword::Thru), ("eff", Keyword::Effect)];
 
-const KEYWORDS: [(&str, Keyword); 20] = [
+const KEYWORDS: [(&str, Keyword); 21] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -70,6 +71,7 @@ const KEYWORDS: [(&str, Keyword); 20] = [
     ("fade", Keyword::Fade),
     ("effect", Keyword::Effect),
     ("tempo", Keyword::Tempo),
+    ("all", Keyword::All),
 ];
 
 impl Keyword {
@@ -95,6 +97,7 @@ impl Keyword {
             Self::Fade => "Fade",
             Self::Effect => "Effect",
             Self::Tempo => "Tempo",
+            Self::All => "All",
         }
     }
 
@@ -221,6 +224,8 @@ pub enum Command {
     SetTempo(f32),
     /// `Store Executor 3` : le programmer devient la cue suivante de l'executor 3.
     StoreExecutor(u32),
+    /// `Off All` : tout éteindre, sauf les executors protégés.
+    OffAll,
 }
 
 struct Parser {
@@ -406,6 +411,10 @@ impl Parser {
                 }
                 Command::Store { object, name, fade }
             }
+            Some(Token::Keyword(Keyword::Off)) if self.tokens.get(self.position + 1) == Some(&Token::Keyword(Keyword::All)) => {
+                self.position += 2;
+                Command::OffAll
+            }
             Some(Token::Keyword(k @ (Keyword::Go | Keyword::Back | Keyword::Off))) => {
                 let k = *k;
                 self.position += 1;
@@ -575,6 +584,7 @@ mod tests {
         assert!(parse("Goto 5").unwrap_err().0.contains("Goto Cue"));
         assert_eq!(parse("eff 3"), Ok(Command::ApplyEffect(3)));
         assert_eq!(parse("Store Exec 4"), Ok(Command::StoreExecutor(4)));
+        assert_eq!(parse("off all"), Ok(Command::OffAll));
         assert_eq!(parse("Tempo 128"), Ok(Command::SetTempo(128.0)));
         assert!(parse("Tempo 0").is_err());
         assert!(parse("e 1").unwrap_err().0.contains("ambigu"), "Effect ou Executor");

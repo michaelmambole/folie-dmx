@@ -3,9 +3,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use folie_engine::{Command as EngineCommand, CueState, Sequences};
+use folie_engine::{Command as EngineCommand, CueState, FaderMode, PlaybackOptions, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
-use folie_show::{Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, Preset, Sequence, Show};
+use folie_show::{
+    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, Preset, Sequence, Show,
+};
 
 use crate::{CommandError, Console, Outcome, invalid};
 
@@ -81,10 +83,49 @@ pub fn playback_data(show: &Show) -> Sequences {
         .collect()
 }
 
+/// Options d'un executor, telles que le moteur les attend.
+fn playback_options(o: &ExecutorOptions) -> PlaybackOptions {
+    PlaybackOptions {
+        wrap: o.wrap,
+        auto_start: o.auto_start,
+        auto_stop: o.auto_stop,
+        fader: match o.fader {
+            FaderFunction::Master => FaderMode::Master,
+            FaderFunction::Temp => FaderMode::Temp,
+            FaderFunction::Speed => FaderMode::Speed,
+        },
+        off_time: o.off_time,
+        back_time: o.back_time,
+        priority: o.priority.level(),
+        protected: o.protected,
+    }
+}
+
 impl Console {
-    /// À appeler après toute modification des cues, des presets ou du patch.
+    /// À appeler après toute modification des cues, des presets, du patch ou des executors.
     pub fn sync_playback(&self) {
+        let options = self.show.executors.iter().map(|(e, x)| (*e, playback_options(&x.options))).collect();
+        self.engine.send(EngineCommand::SetExecutorOptions(options));
         self.engine.send(EngineCommand::SetSequences(Arc::new(playback_data(&self.show))));
+    }
+
+    pub fn set_executor_options(&mut self, executor: u32, options: ExecutorOptions) -> Result<Outcome, CommandError> {
+        let Some(x) = self.show.executors.get_mut(&executor) else {
+            return invalid(format!("l'executor {executor} est vide"));
+        };
+        x.options = options;
+        self.sync_playback();
+        Ok(Outcome::changed(format!("Options de l'executor {executor} enregistrées")))
+    }
+
+    /// Éteint tous les executors, sauf ceux qui sont protégés.
+    pub fn off_all(&self) -> Outcome {
+        self.engine.send(EngineCommand::OffAll);
+        let protected = self.show.executors.values().filter(|x| x.options.protected).count();
+        match protected {
+            0 => Outcome::info("Tous les executors éteints"),
+            n => Outcome::info(format!("Executors éteints, sauf {n} protégé(s)")),
+        }
     }
 
     pub fn selected_executor(&self) -> u32 {
@@ -302,8 +343,9 @@ impl Console {
             return invalid(format!("la séquence {sequence} n'existe pas"));
         }
         self.engine.send(EngineCommand::Off(executor));
-        let mode = self.show.executors.get(&executor).map_or(ExecutorMode::Go, |x| x.mode);
-        self.show.executors.insert(executor, Executor { sequence, mode });
+        let (mode, options) =
+            self.show.executors.get(&executor).map_or((ExecutorMode::Go, ExecutorOptions::default()), |x| (x.mode, x.options));
+        self.show.executors.insert(executor, Executor { sequence, mode, options });
         self.sync_playback();
         Ok(Outcome::changed(format!("Executor {executor} : séquence {sequence}")))
     }

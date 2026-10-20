@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use eframe::egui::{self, Color32, RichText};
 use folie_control::{CommandError, Console, Outcome};
 use folie_engine::{ExecutorStatus, Snapshot};
-use folie_show::{CueNumber, ExecutorMode};
+use folie_show::{CueNumber, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
 
 type Action = Option<Result<Outcome, CommandError>>;
 
@@ -18,6 +18,27 @@ const ARMED: Color32 = Color32::from_rgb(200, 30, 30);
 const FADER_LENGTH: f32 = 150.0;
 const CARD_WIDTH: f32 = 112.0;
 const MODE: Color32 = Color32::from_rgb(120, 170, 255);
+const DELAY: Color32 = Color32::from_rgb(230, 160, 40);
+const FADE: Color32 = Color32::from_rgb(60, 130, 230);
+const BAR_HEIGHT: f32 = 14.0;
+
+/// Jauge de transition, toujours à la même place pour que rien ne bouge :
+/// ambre pendant le délai, bleue pendant le fondu, vide au repos.
+fn transition_bar(ui: &mut egui::Ui, status: Option<&ExecutorStatus>, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, BAR_HEIGHT), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+    let Some(s) = status.filter(|s| s.in_transition()) else { return };
+    let (fraction, color, text) = if s.elapsed < s.delay {
+        (s.elapsed / s.delay, DELAY, format!("délai {:.1} s", s.delay - s.elapsed))
+    } else {
+        let into_fade = s.elapsed - s.delay;
+        (into_fade / s.fade.max(f32::EPSILON), FADE, format!("fondu {:.1} s", (s.fade - into_fade).max(0.0)))
+    };
+    let filled = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * fraction.clamp(0.0, 1.0), rect.height()));
+    painter.rect_filled(filled, 3.0, color);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(11.0), Color32::WHITE);
+}
 
 /// Cadre d'un executor, de largeur fixe, contenu centré.
 fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -117,6 +138,10 @@ fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Act
         }
     }
     ui.separator();
+    if let Some(a) = options_menu(ui, console, executor, x.options) {
+        action = Some(a);
+    }
+    ui.separator();
     let id = egui::Id::unique(("rename-executor", executor));
     let mut name = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or(sequence);
     ui.horizontal(|ui| {
@@ -145,12 +170,71 @@ fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Act
     action
 }
 
+/// Options de fonctionnement, appliquées dès qu'on les change.
+fn options_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32, current: ExecutorOptions) -> Action {
+    let mut o = current;
+    ui.label(RichText::new("Options").weak());
+    ui.checkbox(&mut o.wrap, "Boucler en fin de séquence");
+    ui.checkbox(&mut o.auto_start, "Auto start (lever le fader lance la cue 1)");
+    ui.checkbox(&mut o.auto_stop, "Auto stop (fader à 0 : éteint)");
+    ui.horizontal(|ui| {
+        ui.label("Fader");
+        for f in FaderFunction::ALL {
+            ui.selectable_value(&mut o.fader, f, f.label());
+        }
+    });
+    ui.horizontal(|ui| {
+        let label = ui.label("Temps d'Off");
+        ui.add(egui::DragValue::new(&mut o.off_time).range(0.0..=3600.0).speed(0.1).suffix(" s")).labelled_by(label.id);
+    });
+    ui.horizontal(|ui| {
+        let mut own = o.back_time.is_some();
+        ui.checkbox(&mut own, "Temps de Back");
+        if own {
+            let mut t = o.back_time.unwrap_or(1.0);
+            ui.add(egui::DragValue::new(&mut t).range(0.0..=3600.0).speed(0.1).suffix(" s"))
+                .on_hover_text("Durée du Back");
+            o.back_time = Some(t);
+        } else {
+            o.back_time = None;
+            ui.weak("fondu de la cue");
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Priorité");
+        for p in Priority::ALL {
+            ui.selectable_value(&mut o.priority, p, p.label());
+        }
+    });
+    ui.checkbox(&mut o.protected, "Protégé (ignore « Tout éteindre »)");
+    (o != current).then(|| console.set_executor_options(executor, o))
+}
+
+/// Repères des options actives, pour la carte de l'executor.
+fn option_tags(options: &ExecutorOptions) -> String {
+    let mut tags = Vec::new();
+    if options.wrap {
+        tags.push("boucle".to_string());
+    }
+    if options.fader != FaderFunction::Master {
+        tags.push(options.fader.label().to_lowercase());
+    }
+    if options.priority != Priority::Normal {
+        tags.push(format!("prio {}", options.priority.label().to_lowercase()));
+    }
+    if options.protected {
+        tags.push("protégé".into());
+    }
+    tags.join(" · ")
+}
+
 /// En-tête d'un executor : numéro (clic = sélection), mode, nom de séquence, cues.
 fn executor_header(ui: &mut egui::Ui, console: &mut Console, executor: u32, status: Option<&ExecutorStatus>) -> Action {
     let mut action = None;
     let selected = console.selected_executor() == executor;
     let mode = console.executor(executor).map(|(x, _)| x.mode.label());
     let name = console.executor(executor).map(|(_, s)| s.name.clone());
+    let tags = console.executor(executor).map(|(x, _)| option_tags(&x.options)).unwrap_or_default();
     ui.horizontal(|ui| {
         let title = RichText::new(executor.to_string()).strong();
         let title = if selected { title.color(CURRENT) } else { title };
@@ -160,7 +244,8 @@ fn executor_header(ui: &mut egui::Ui, console: &mut Console, executor: u32, stat
         if response.clicked() {
             action = Some(Ok(console.select_executor(executor)));
         }
-        response.context_menu(|ui| {
+        // Le menu reste ouvert pendant qu'on coche les options ; un clic à côté le ferme.
+        egui::Popup::context_menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             if let Some(a) = executor_menu(ui, console, executor) {
                 action = Some(a);
             }
@@ -170,14 +255,15 @@ fn executor_header(ui: &mut egui::Ui, console: &mut Console, executor: u32, stat
         }
     });
     ui.label(RichText::new(name.unwrap_or_else(|| " ".into())).size(12.0));
+    if !tags.is_empty() {
+        ui.label(RichText::new(tags).size(11.0).color(MODE));
+    }
     let (now, next) = cue_lines(console, executor, status);
     let active = status.is_some_and(|s| s.cue.is_some());
     let now = RichText::new(now).size(13.0);
     ui.label(if active { now.color(CURRENT).strong() } else { now.weak() });
     ui.label(RichText::new(next).size(12.0).weak());
-    if let Some(status) = status.filter(|s| s.cue.is_some() && s.progress < 1.0) {
-        ui.add(egui::ProgressBar::new(status.progress).desired_height(4.0).desired_width(CARD_WIDTH - 12.0));
-    }
+    transition_bar(ui, status, CARD_WIDTH - 12.0);
     action
 }
 
@@ -197,9 +283,7 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
         }
     });
     let status = snapshot.executors.get(&executor);
-    if let Some(status) = status.filter(|s| s.cue.is_some()) {
-        ui.add(egui::ProgressBar::new(status.progress).desired_height(6.0));
-    }
+    transition_bar(ui, status, ui.available_width());
     if *store_armed {
         ui.colored_label(ARMED, "Store armé : cliquez un numéro pour compléter cette cue");
     }
@@ -273,7 +357,10 @@ pub fn executors_window(
     };
     ui.horizontal(|ui| {
         crate::pools::store_button(ui, store_armed);
-        ui.weak("Store, puis « Enregistrer ici » · clic droit sur un numéro : mode, nom, séquence");
+        if ui.button("Tout éteindre").on_hover_text("Off sur tous les executors, sauf les protégés (Off All)").clicked() {
+            keep(Some(Ok(console.off_all())));
+        }
+        ui.weak("Store, puis « Enregistrer ici » · clic droit sur un numéro : mode, options, nom");
     });
     ui.add_space(4.0);
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
@@ -294,7 +381,8 @@ pub fn executors_window(
                     if response.changed() {
                         keep(Some(console.set_fader(executor, level)));
                     }
-                    ui.monospace(format!("{level:.0} %"));
+                    let speed = console.executor(executor).is_some_and(|(x, _)| x.options.fader == FaderFunction::Speed);
+                    ui.monospace(if speed { format!("× {:.2}", level / 50.0) } else { format!("{level:.0} %") });
                     keep(mode_buttons(ui, console, executor, held));
                 });
             }

@@ -121,16 +121,127 @@ impl ExecutorMode {
     }
 }
 
-/// Un executor : la séquence qu'il joue et le comportement de sa touche.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Ce que fait le fader d'un executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FaderFunction {
+    /// Dose l'intensité.
+    #[default]
+    Master,
+    /// Dose l'intensité ; l'executor ne joue que tant que le fader est levé.
+    Temp,
+    /// L'intensité reste pleine ; le fader règle la vitesse des effets.
+    Speed,
+}
+
+impl FaderFunction {
+    pub const ALL: [FaderFunction; 3] = [Self::Master, Self::Temp, Self::Speed];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Master => "master",
+            Self::Temp => "temp",
+            Self::Speed => "speed",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Master => "Master",
+            Self::Temp => "Temp",
+            Self::Speed => "Vitesse",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub enum Priority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+impl Priority {
+    pub const ALL: [Priority; 3] = [Self::Low, Self::Normal, Self::High];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Basse",
+            Self::Normal => "Normale",
+            Self::High => "Haute",
+        }
+    }
+
+    pub fn level(self) -> i8 {
+        match self {
+            Self::Low => -1,
+            Self::Normal => 0,
+            Self::High => 1,
+        }
+    }
+}
+
+/// Options de fonctionnement d'un executor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExecutorOptions {
+    /// Après la dernière cue, Go revient à la première.
+    pub wrap: bool,
+    /// Lever le fader depuis 0 lance la cue 1.
+    pub auto_start: bool,
+    /// Fader à 0 : l'executor s'éteint.
+    pub auto_stop: bool,
+    pub fader: FaderFunction,
+    /// Durée de l'extinction, en secondes (0 = instantanée).
+    pub off_time: f32,
+    /// Durée du Back ; `None` : le fondu de la cue visée.
+    pub back_time: Option<f32>,
+    pub priority: Priority,
+    /// Ignoré par « Tout éteindre ».
+    pub protected: bool,
+}
+
+impl Default for ExecutorOptions {
+    fn default() -> Self {
+        Self {
+            wrap: false,
+            auto_start: false,
+            auto_stop: false,
+            fader: FaderFunction::Master,
+            off_time: 0.0,
+            back_time: None,
+            priority: Priority::Normal,
+            protected: false,
+        }
+    }
+}
+
+/// Un executor : la séquence qu'il joue, le comportement de sa touche et ses options.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Executor {
     pub sequence: u32,
     pub mode: ExecutorMode,
+    pub options: ExecutorOptions,
 }
 
 impl Executor {
     pub fn new(sequence: u32) -> Self {
-        Self { sequence, mode: ExecutorMode::Go }
+        Self { sequence, mode: ExecutorMode::Go, options: ExecutorOptions::default() }
     }
 }
 
