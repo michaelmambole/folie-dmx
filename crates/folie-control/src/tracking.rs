@@ -208,5 +208,19 @@ mod tests {
         assert!(played[&1][1].times.is_empty(), "rien de propre dans la cue 2");
         c.set_param_times(third, FixtureId(1), "Dimmer", ParamTiming::default()).unwrap();
         assert!(c.show.sequences[&1].cues[&third].param_times.is_empty(), "temps vides : retirés");
+
+        // Écrire une valeur dans une cue où elle n'était que suivie, puis la retirer.
+        let second = c.show.sequences[&1].cues.keys().nth(1).copied().unwrap();
+        c.set_cue_value(second, FixtureId(1), "Dimmer", CueValue::Value(32_768)).unwrap();
+        let held = |c: &Console, cue: usize| {
+            c.tracking_sheet(1).unwrap().rows.iter().find(|r| r.fixture == FixtureId(1) && r.parameter == "Dimmer").unwrap().cells[cue].value
+        };
+        assert_eq!(held(&c, 1), TrackedValue::Held { value: CueValue::Value(32_768), origin: 1 });
+        c.set_param_times(second, FixtureId(1), "Dimmer", ParamTiming { fade: Some(3.0), delay: None }).unwrap();
+        c.remove_cue_value(second, FixtureId(1), "Dimmer").unwrap();
+        assert_eq!(held(&c, 1), TrackedValue::Held { value: CueValue::Value(65_535), origin: 0 }, "de nouveau suivie");
+        assert!(c.show.sequences[&1].cues[&second].param_times.is_empty(), "ses temps propres partent avec elle");
+        assert!(c.remove_cue_value(second, FixtureId(1), "Dimmer").is_err());
+        assert!(c.set_cue_value(second, FixtureId(99), "Dimmer", CueValue::Release).is_err());
     }
 }

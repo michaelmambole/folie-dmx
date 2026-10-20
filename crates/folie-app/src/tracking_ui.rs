@@ -91,15 +91,14 @@ fn times_text((fade, delay): (f32, f32)) -> String {
 
 /// Une case dessinée : fond (teinté pour la cue en cours), trait violet si un effet l'anime,
 /// temps propres en bleu, pastille de preset, valeur alignée à droite.
-/// Une valeur enregistrée dans la cue se règle au clic droit.
-fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool, editable: bool) -> egui::Response {
-    let sense = if editable { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(CELL_WIDTH, ROW_HEIGHT), sense);
+/// Clic droit : valeur et temps du paramètre dans cette cue.
+fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(CELL_WIDTH, ROW_HEIGHT), egui::Sense::click());
     let painter = ui.painter();
     if current {
         painter.rect_filled(rect, 0.0, theme::EXECUTOR.gamma_multiply(0.10));
     }
-    if editable && response.hovered() {
+    if response.hovered() {
         painter.rect_stroke(rect.shrink(1.0), 3.0, egui::Stroke::new(1.0, theme::SURFACE_3), egui::StrokeKind::Inside);
     }
     painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, theme::SURFACE_2));
@@ -124,9 +123,46 @@ fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool, edi
     if look.tooltip.is_empty() { response } else { response.on_hover_text(&look.tooltip) }
 }
 
-/// Menu du clic droit d'une valeur : fondu et délai propres au paramètre dans cette cue.
-fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, row: &TrackingRow) -> Action {
+/// Valeur réglable d'une case, en % ou en DMX selon l'affichage. Grisée tant qu'elle n'est
+/// pas enregistrée dans cette cue. Renvoie la nouvelle valeur 16 bits si elle a changé.
+fn value_field(ui: &mut egui::Ui, value: u16, own: bool, display: DisplayMode, help: String) -> Option<u16> {
+    ui.scope(|ui| {
+        theme::menu_fields(ui);
+        if !own {
+            ui.visuals_mut().widgets.inactive.fg_stroke.color = theme::DEFAULT;
+        }
+        match display {
+            DisplayMode::Percent => {
+                let mut percent = value as f32 / u16::MAX as f32 * 100.0;
+                let field = egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).max_decimals(1).suffix(" %");
+                ui.add_sized([80.0, 22.0], field)
+                    .on_hover_text(help)
+                    .changed()
+                    .then(|| (percent / 100.0 * u16::MAX as f32).round() as u16)
+            }
+            DisplayMode::Dmx => {
+                let mut dmx = value >> 8;
+                let field = egui::DragValue::new(&mut dmx).range(0..=255);
+                ui.add_sized([80.0, 22.0], field).on_hover_text(help).changed().then(|| dmx * 257)
+            }
+        }
+    })
+    .inner
+}
+
+/// Menu du clic droit d'une case : valeur (ou preset) du paramètre dans cette cue,
+/// relâcher, retirer, puis ses temps propres s'il y est enregistré.
+fn cell_menu(
+    ui: &mut egui::Ui,
+    console: &mut Console,
+    sheet: &TrackingSheet,
+    row: &TrackingRow,
+    index: usize,
+    display: DisplayMode,
+) -> Action {
     theme::menu_fields(ui);
+    let number = sheet.cues[index].0;
+    let cell = row.cells[index];
     let (_, sequence) = console.selected_sequence()?;
     let cue = sequence.cues.get(&number).cloned()?;
     let family = console
@@ -135,32 +171,111 @@ fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber,
         .get(row.fixture)
         .and_then(|f| f.mode().parameters.iter().find(|p| p.name == row.parameter))
         .map_or(FeatureGroup::Control, |p| p.attribute.group());
-    // Sans temps propre, le paramètre suit sa famille, sinon la cue.
-    let base = cue.family_times.get(&family).map_or((cue.fade, cue.delay), |t| t.or((cue.fade, cue.delay)));
-    let mut timing = cue.param_times.get(&row.fixture).and_then(|p| p.get(&row.parameter)).copied().unwrap_or_default();
+    let what = format!("{}, fixture {}, cue {number}", row.parameter, row.fixture);
     let mut action = None;
+    let muted = |text: &str| egui::Label::new(RichText::new(text).color(theme::MUTED)).selectable(false);
+
     ui.label(RichText::new(format!("{} · fixture {} · cue {number}", row.parameter, row.fixture)).family(theme::medium()));
-    let mut changed = false;
-    egui::Grid::new(("param-times", number, row.fixture, &row.parameter)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-        ui.add(egui::Label::new(RichText::new("Fondu").color(theme::MUTED)).selectable(false));
-        ui.horizontal(|ui| {
-            let help = format!("Fondu de {}, fixture {}, cue {number}", row.parameter, row.fixture);
-            changed |= crate::playback_ui::optional_time(ui, &mut timing.fade, base.0, help);
-        });
+    let own = cell.changed_here(index);
+    let preset_value = |family: FeatureGroup, n: u32| {
+        console.show.presets.get(&(family, n)).and_then(|p| p.values.get(&row.fixture)?.get(&row.parameter).copied())
+    };
+    let (status, current, current_preset) = match cell.value {
+        TrackedValue::Held { value, origin } => {
+            let (raw, preset) = match value {
+                CueValue::Value(v) => (v, None),
+                CueValue::Preset(f, n) => (preset_value(f, n).unwrap_or(0), Some((f, n))),
+                CueValue::Release => (0, None),
+            };
+            let status = if origin == index {
+                "Enregistrée dans cette cue".to_string()
+            } else {
+                let (n, name) = &sheet.cues[origin];
+                format!("Suivie depuis la cue {}", cue_title(n, name))
+            };
+            (status, raw, preset)
+        }
+        TrackedValue::Released => ("Relâché dans cette cue".to_string(), 0, None),
+        TrackedValue::Empty => ("Pas encore tenue par la séquence".to_string(), 0, None),
+    };
+    ui.add(egui::Label::new(RichText::new(status).size(11.5).color(theme::MUTED)).selectable(false));
+
+    theme::section(ui, "Valeur");
+    egui::Grid::new(("cell-value", number, row.fixture, &row.parameter)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+        ui.add(muted("Valeur"));
+        if let Some(v) = value_field(ui, current, own && current_preset.is_none(), display, format!("Valeur de {what}")) {
+            action = Some(console.set_cue_value(number, row.fixture, &row.parameter, CueValue::Value(v)));
+        }
         ui.end_row();
-        ui.add(egui::Label::new(RichText::new("Délai").color(theme::MUTED)).selectable(false));
-        ui.horizontal(|ui| {
-            let help = format!("Délai de {}, fixture {}, cue {number}", row.parameter, row.fixture);
-            changed |= crate::playback_ui::optional_time(ui, &mut timing.delay, base.1, help);
-        });
-        ui.end_row();
+        // Presets de la famille qui donnent une valeur à ce paramètre de cette fixture.
+        let presets: Vec<(u32, String)> = console
+            .show
+            .presets
+            .iter()
+            .filter(|((f, _), p)| *f == family && p.values.get(&row.fixture).is_some_and(|v| v.contains_key(&row.parameter)))
+            .map(|((_, n), p)| (*n, p.name.clone()))
+            .collect();
+        if !presets.is_empty() {
+            ui.add(muted("Preset"));
+            let label = |n: u32, name: &str| format!("{}.{n} {name}", family.preset_number());
+            let selected = presets
+                .iter()
+                .find(|(n, _)| current_preset == Some((family, *n)))
+                .map_or("aucun".to_string(), |(n, name)| label(*n, name));
+            // Un sous-menu, et non une liste déroulante : celle-ci fermerait le menu en s'ouvrant.
+            let response = ui.menu_button(selected, |ui| {
+                for (n, name) in &presets {
+                    let chosen = current_preset == Some((family, *n));
+                    if ui.selectable_label(chosen, label(*n, name)).clicked() {
+                        action = Some(console.set_cue_value(number, row.fixture, &row.parameter, CueValue::Preset(family, *n)));
+                        ui.close();
+                    }
+                }
+            });
+            response.response.on_hover_text(format!("Preset de {what}"));
+            ui.end_row();
+        }
     });
-    if changed {
-        action = Some(console.set_param_times(number, row.fixture, &row.parameter, timing));
+    ui.horizontal(|ui| {
+        if ui.button("Relâcher ici").on_hover_text(format!("Relâcher {what}")).clicked() {
+            action = Some(console.set_cue_value(number, row.fixture, &row.parameter, CueValue::Release));
+        }
+        if own {
+            let text = RichText::new("Retirer de la cue").color(Color32::from_rgb(255, 138, 132));
+            let button = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::DANGER));
+            let help = "La cue ne tient plus ce paramètre : elle reprend la valeur suivie";
+            if ui.add(button).on_hover_text(help).clicked() {
+                action = Some(console.remove_cue_value(number, row.fixture, &row.parameter));
+            }
+        }
+    });
+    if !own {
+        let help = "Changer la valeur l'enregistre dans cette cue.";
+        ui.add(egui::Label::new(RichText::new(help).size(11.0).color(theme::MUTED)).selectable(false));
     }
-    let origin = if cue.family_times.contains_key(&family) { format!("temps de {}", family.label()) } else { "temps de la cue".into() };
-    let help = format!("Glissez un champ, ou cliquez-le pour taper un temps. En gris : {origin}.");
-    ui.add(egui::Label::new(RichText::new(help).size(11.0).color(theme::MUTED)).selectable(false));
+
+    // Temps propres : seulement pour une valeur enregistrée dans cette cue.
+    if own && cell.holds_value() {
+        ui.separator();
+        theme::section(ui, "Temps");
+        let base = cue.family_times.get(&family).map_or((cue.fade, cue.delay), |t| t.or((cue.fade, cue.delay)));
+        let mut timing = cue.param_times.get(&row.fixture).and_then(|p| p.get(&row.parameter)).copied().unwrap_or_default();
+        let mut changed = false;
+        egui::Grid::new(("param-times", number, row.fixture, &row.parameter)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.add(muted("Fondu"));
+            ui.horizontal(|ui| changed |= crate::playback_ui::optional_time(ui, &mut timing.fade, base.0, format!("Fondu de {what}")));
+            ui.end_row();
+            ui.add(muted("Délai"));
+            ui.horizontal(|ui| changed |= crate::playback_ui::optional_time(ui, &mut timing.delay, base.1, format!("Délai de {what}")));
+            ui.end_row();
+        });
+        if changed {
+            action = Some(console.set_param_times(number, row.fixture, &row.parameter, timing));
+        }
+        let origin = if cue.family_times.contains_key(&family) { format!("temps de {}", family.label()) } else { "temps de la cue".into() };
+        let help = format!("Glissez un champ, ou cliquez-le pour taper un temps. En gris : {origin}.");
+        ui.add(egui::Label::new(RichText::new(help).size(11.0).color(theme::MUTED)).selectable(false));
+    }
     action
 }
 
@@ -266,18 +381,13 @@ pub fn tracking_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snap
                 );
                 for (index, c) in row.cells.iter().enumerate() {
                     let look = look(console, &sheet, c, index, display, changes_only);
-                    let editable = matches!(c.value, TrackedValue::Held { origin, .. } if origin == index);
-                    let response = cell(ui, &look, c, current == Some(index), editable);
-                    if editable {
-                        let number = sheet.cues[index].0;
-                        let menu = egui::Popup::context_menu(&response)
-                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-                        menu.show(|ui| {
-                            if let Some(a) = param_times_menu(ui, console, number, row) {
-                                action = Some(a);
-                            }
-                        });
-                    }
+                    let response = cell(ui, &look, c, current == Some(index));
+                    let menu = egui::Popup::context_menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                    menu.show(|ui| {
+                        if let Some(a) = cell_menu(ui, console, &sheet, row, index, display) {
+                            action = Some(a);
+                        }
+                    });
                 }
             });
         }

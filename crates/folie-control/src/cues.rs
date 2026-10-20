@@ -367,6 +367,51 @@ impl Console {
         Ok(Outcome::changed(format!("Cue {number} renommée « {name} »")))
     }
 
+    /// Écrit la valeur d'un paramètre dans une cue (valeur, preset ou relâchement),
+    /// depuis la fenêtre Tracking.
+    pub fn set_cue_value(
+        &mut self,
+        number: CueNumber,
+        fixture: FixtureId,
+        parameter: &str,
+        value: CueValue,
+    ) -> Result<Outcome, CommandError> {
+        if self.show.patch.get(fixture).is_none() {
+            return invalid(format!("Fixture {fixture} n'est pas patchée"));
+        }
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number);
+        let Some(cue) = cue else { return invalid(format!("la cue {number} n'existe pas")) };
+        cue.values.entry(fixture).or_default().insert(parameter.to_string(), value);
+        self.sync_playback();
+        let what = match value {
+            CueValue::Release => "relâché".to_string(),
+            CueValue::Preset(family, n) => format!("preset {}.{n}", family.preset_number()),
+            CueValue::Value(_) => "réglé".to_string(),
+        };
+        Ok(Outcome::changed(format!("Cue {number} : {parameter} de la fixture {fixture} {what}")))
+    }
+
+    /// Retire un paramètre d'une cue (et ses temps propres) : la cue reprend la valeur suivie.
+    pub fn remove_cue_value(&mut self, number: CueNumber, fixture: FixtureId, parameter: &str) -> Result<Outcome, CommandError> {
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number);
+        let Some(cue) = cue else { return invalid(format!("la cue {number} n'existe pas")) };
+        let removed = cue.values.get_mut(&fixture).and_then(|p| p.remove(parameter)).is_some();
+        if cue.values.get(&fixture).is_some_and(BTreeMap::is_empty) {
+            cue.values.remove(&fixture);
+        }
+        if let Some(times) = cue.param_times.get_mut(&fixture) {
+            times.remove(parameter);
+            if times.is_empty() {
+                cue.param_times.remove(&fixture);
+            }
+        }
+        if !removed {
+            return invalid(format!("la cue {number} ne tient pas {parameter} de la fixture {fixture}"));
+        }
+        self.sync_playback();
+        Ok(Outcome::changed(format!("Cue {number} : {parameter} de la fixture {fixture} retiré")))
+    }
+
     /// Temps propres d'une famille dans une cue ; vides, la famille reprend le temps de la cue.
     pub fn set_family_times(&mut self, number: CueNumber, family: FeatureGroup, timing: ParamTiming) -> Result<Outcome, CommandError> {
         let cue = self.selected_sequence_mut()?.cues.get_mut(&number);

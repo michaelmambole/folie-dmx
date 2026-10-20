@@ -1130,11 +1130,50 @@ mod tests {
         harness.key_press(egui::Key::Escape);
         harness.run_steps(2);
 
+        // Une valeur suivie, réglée dans la cue 2 : elle y est enregistrée, puis retirée.
+        let value_of = |h: &Harness<'_, FolieApp>, cue: u32, fixture: u32| {
+            let cue = &h.state().console.show.sequences[&1].cues[&folie_show::CueNumber::whole(cue)];
+            cue.values.get(&FixtureId(fixture)).and_then(|p| p.get("Dimmer")).copied()
+        };
+        harness.get(described("Suivie depuis la cue 1 Face")).click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("Changer la valeur l'enregistre dans cette cue.");
+        harness.get(described("Valeur de Dimmer, fixture 1, cue 2")).set_value_accesskit(40.0);
+        harness.run_steps(2);
+        assert_eq!(value_of(&harness, 2, 1), Some(folie_show::CueValue::Value(26_214)), "40 %");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("tracking-value.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Retirer de la cue").click();
+        harness.run_steps(2);
+        assert_eq!(value_of(&harness, 2, 1), None, "la cue 2 reprend la valeur suivie");
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+
+        // Un preset choisi dans le menu, puis un relâchement.
+        harness.get(described("Enregistrée dans la cue 1 Face · temps propres 0s +1")).click_secondary();
+        harness.run_steps(2);
+        harness.get(described("Preset de Dimmer, fixture 1, cue 1")).click();
+        harness.run_steps(2);
+        harness.get_by_label("1.1 Demi").click();
+        harness.run_steps(2);
+        assert_eq!(value_of(&harness, 1, 1), Some(folie_show::CueValue::Preset(FeatureGroup::Dimmer, 1)));
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        harness.get(described("Suivie depuis la cue 2 Contre")).click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("Relâcher ici").click();
+        harness.run_steps(2);
+        assert_eq!(value_of(&harness, 3, 2), Some(folie_show::CueValue::Release));
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+
         // Seulement les changements : les valeurs suivies disparaissent.
         harness.get_by_label("Seulement les changements").click();
         harness.run_steps(2);
         assert_eq!(harness.query_all(described("Suivie depuis la cue 1 Face")).count(), 0);
-        harness.get(described("Enregistrée dans la cue 1 Face · temps propres 0s +1"));
+        harness.get(described("Enregistrée dans la cue 1 Face · preset 1.1 « Demi » · temps propres 0s +1"));
     }
 
     #[test]
