@@ -1134,6 +1134,44 @@ mod tests {
     }
 
     #[test]
+    fn dmx_output_window_forces_and_releases_channels() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Output,
+            placement: Placement::at_size(egui::pos2(40.0, 820.0), egui::vec2(1100.0, 720.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2000.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        settle(&mut harness);
+        harness.get_by_label("Canaux de l'univers 1");
+        harness.get_by_label("virtuelle"); // nom de la sortie donné par le moteur
+
+        // Page 2 des faders (canaux 17 à 32), puis le canal 20 forcé d'un clic au milieu du fader.
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Page suivante")).click();
+        harness.run_steps(2);
+        harness.get_by_label("canaux 17–32");
+        harness.get_by_role_and_label(Role::Slider, "Canal 20").click();
+        settle(&mut harness);
+        let forced = output(&harness, 20);
+        assert!((120..=135).contains(&forced), "canal 20 forcé vers la moitié : {forced}");
+        assert!(harness.state().snapshot.channel_overrides[0][19].is_some());
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("output.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        harness.get_by_label("Relâcher les canaux forcés (1)").click();
+        settle(&mut harness);
+        assert!(harness.state().snapshot.channel_overrides[0][19].is_none(), "canal rendu au moteur");
+        assert!(harness.query_by_label("Relâcher les canaux forcés (1)").is_none());
+    }
+
+    #[test]
     fn transition_bar_shows_delay_without_moving_the_layout() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

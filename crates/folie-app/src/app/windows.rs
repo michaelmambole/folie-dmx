@@ -11,7 +11,7 @@ use eframe::egui::{
 use super::FolieApp;
 use crate::screens;
 use crate::workspace::{LAYOUT_SLOTS, Layout, Placement, WindowKind, Workspace, layout_key};
-use crate::{effects_ui, faders, monitor, playback_ui, tracking_ui};
+use crate::{effects_ui, faders, monitor, playback_ui, theme, tracking_ui};
 
 /// Les déplacements de fenêtres sont enregistrés au plus à cette fréquence.
 const SAVE_WORKSPACE_EVERY: Duration = Duration::from_secs(5);
@@ -463,11 +463,44 @@ impl FolieApp {
             ui.add_space(6.0);
         });
         egui::CentralPanel::default().show(ui, |ui| {
+            self.output_status(ui);
+            ui.add_space(6.0);
+            let starts: BTreeSet<u16> =
+                self.console.show.patch.fixtures().iter().filter(|f| f.universe == 0).map(|f| f.address).collect();
+            let marks = monitor::Marks {
+                labels: &self.channel_labels,
+                starts: &starts,
+                overrides: &self.snapshot.channel_overrides[0],
+            };
             let output = &self.snapshot.output[0];
-            if let Some(channel) = monitor::show(ui, output, &self.channel_labels, self.display, self.selected) {
+            let clicked = egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| monitor::show(ui, output, &marks, self.display, self.selected))
+                .inner;
+            if let Some(channel) = clicked {
                 self.selected = Some(channel);
                 self.fader_page = (channel as usize - 1) / faders::FADERS_PER_PAGE;
             }
+        });
+    }
+
+    /// Carte d'état de la sortie : interface, fréquence, erreurs, légende de la grille.
+    fn output_status(&self, ui: &mut egui::Ui) {
+        let snapshot = &self.snapshot;
+        theme::card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                theme::section(ui, "Sortie");
+                ui.label(snapshot.output_names.join(", "));
+                ui.label(egui::RichText::new(format!("{:.1} Hz", self.rate.hz)).monospace().color(theme::MUTED));
+                let errors = egui::RichText::new(format!("erreurs {}", snapshot.output_errors));
+                ui.label(if snapshot.output_errors > 0 { errors.color(theme::DANGER) } else { errors.color(theme::MUTED) });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    theme::chip(ui, theme::DANGER, "forcé");
+                    theme::chip(ui, theme::TEXT, "niveau");
+                    theme::chip(ui, monitor::PATCHED, "patché");
+                });
+            });
         });
     }
 
