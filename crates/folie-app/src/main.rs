@@ -3,6 +3,7 @@ mod cmdline;
 mod faders;
 mod fixtures;
 mod monitor;
+mod playback_ui;
 mod pools;
 mod screens;
 mod storage;

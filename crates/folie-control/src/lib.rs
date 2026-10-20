@@ -6,10 +6,12 @@
 //! disponible partout à la fois.
 
 pub mod command;
+pub mod cues;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use folie_engine::{Command as EngineCommand, EngineHandle, Snapshot};
+use folie_engine::{Command as EngineCommand, EngineHandle};
 use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, ParamKey, Parameter, Patch, Target};
 use folie_show::{Group, Preset, Show};
 use thiserror::Error;
@@ -76,11 +78,28 @@ pub struct Console {
     /// d'ajouter, comme sur grandMA.
     selection_used: bool,
     engine: EngineHandle,
+    /// Executor visé par Go, Back, Store Cue… quand aucun n'est précisé.
+    selected_executor: u32,
+    /// Programmer : la console en tient la référence et le moteur en reçoit une
+    /// copie. Ainsi `At 100` suivi aussitôt de `Store Cue` enregistre bien 100,
+    /// même si le moteur n'a pas encore traité la première commande.
+    programmer: HashMap<ParamKey, u16>,
+    /// Valeurs du programmer venues d'un preset : enregistrées dans une cue,
+    /// elles restent des références au preset.
+    origins: HashMap<ParamKey, (FeatureGroup, u32)>,
 }
 
 impl Console {
     pub fn new(engine: EngineHandle) -> Self {
-        Self { show: Show::default(), selection: Vec::new(), selection_used: false, engine }
+        Self {
+            show: Show::default(),
+            selection: Vec::new(),
+            selection_used: false,
+            engine,
+            selected_executor: 1,
+            programmer: HashMap::new(),
+            origins: HashMap::new(),
+        }
     }
 
     pub fn engine(&self) -> &EngineHandle {
@@ -89,6 +108,11 @@ impl Console {
 
     pub fn selection(&self) -> &[Target] {
         &self.selection
+    }
+
+    /// Valeurs saisies, en attente d'être enregistrées.
+    pub fn programmer(&self) -> &HashMap<ParamKey, u16> {
+        &self.programmer
     }
 
     pub fn select(&mut self, targets: impl IntoIterator<Item = Target>, mode: SelectMode) {
@@ -130,17 +154,35 @@ impl Console {
         for preset in self.show.presets.values_mut() {
             preset.values.retain(|id, _| patch.get(*id).is_some());
         }
+        for sequence in self.show.sequences.values_mut() {
+            for cue in sequence.cues.values_mut() {
+                cue.values.retain(|id, _| patch.get(*id).is_some());
+            }
+        }
+        self.origins.retain(|key, _| patch.get(key.fixture).is_some());
+        self.programmer
+            .retain(|key, _| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
         self.engine.send(EngineCommand::SetPatch(Arc::new(patch.clone())));
+        self.sync_playback();
     }
 
-    fn send_value(&self, target: Target, parameter: usize, value: u16) {
+    fn clear_programmer(&mut self) {
+        self.programmer.clear();
+        self.origins.clear();
+        self.engine.send(EngineCommand::ClearProgrammer);
+    }
+
+    /// Valeur saisie à la main : elle n'est plus liée à un preset.
+    fn send_value(&mut self, target: Target, parameter: usize, value: u16) {
         let key = ParamKey { fixture: target.fixture, parameter };
+        self.origins.remove(&key);
+        self.programmer.insert(key, value);
         self.engine.send(EngineCommand::SetAttribute { key, value });
     }
 
     /// Donne à toute la sélection la valeur d'un paramètre de référence.
     pub fn set_like(&mut self, reference: &Parameter, value: u16) {
-        for &target in &self.selection {
+        for target in self.selection.clone() {
             for parameter in matching(&self.show.patch, target, reference) {
                 self.send_value(target, parameter, value);
             }
@@ -150,8 +192,10 @@ impl Console {
 
     /// Dimmer à 100 % et shutter ouvert sur la sélection.
     pub fn full(&mut self) {
-        for &target in &self.selection {
-            for (index, p) in self.show.patch.parameters_of(target) {
+        for target in self.selection.clone() {
+            let parameters: Vec<(usize, Parameter)> =
+                self.show.patch.parameters_of(target).into_iter().map(|(i, p)| (i, p.clone())).collect();
+            for (index, p) in parameters {
                 let value = match p.attribute {
                     Attribute::Dimmer => Some(u16::MAX),
                     Attribute::Shutter => p
@@ -170,10 +214,12 @@ impl Console {
     }
 
     /// Rend la sélection à ses valeurs par défaut.
-    pub fn release_selection(&self) {
+    pub fn release_selection(&mut self) {
         for &target in &self.selection {
             for (parameter, _) in self.show.patch.parameters_of(target) {
                 let key = ParamKey { fixture: target.fixture, parameter };
+                self.origins.remove(&key);
+                self.programmer.remove(&key);
                 self.engine.send(EngineCommand::ReleaseAttribute(key));
             }
         }
@@ -204,15 +250,24 @@ impl Console {
                 Ok(Outcome::info(message))
             }
             Command::ApplyPreset(family, number) => self.apply_preset(family, number),
-            Command::Store { object: Object::Group(number), name } => self.store_group(number, name),
-            Command::Store { object: Object::Preset(family, number), name } => {
+            Command::Store { object: Object::Group(number), name, .. } => self.store_group(number, name),
+            Command::Store { object: Object::Preset(family, number), name, .. } => {
                 self.store_preset(family, number, name)
             }
+            Command::Store { object: Object::Cue(number), name, fade } => self.store_cue(number, fade, name),
+            Command::Label { object: Object::Cue(Some(number)), name } => self.label_cue(number, name),
+            Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),
             Command::Delete(object) => self.delete(object),
+            Command::Go(executor) => self.go(executor),
+            Command::Back(executor) => self.back(executor),
+            Command::Off(executor) => self.off(executor),
+            Command::Goto(number) => self.goto(number),
+            Command::SelectExecutor(executor) => Ok(self.select_executor(executor)),
+            Command::SetFader(executor, percent) => self.set_fader(executor, percent),
             Command::Clear => {
                 if self.selection.is_empty() {
-                    self.engine.send(EngineCommand::ClearProgrammer);
+                    self.clear_programmer();
                     Ok(Outcome::info("Programmer vidé"))
                 } else {
                     self.selection.clear();
@@ -221,7 +276,7 @@ impl Console {
             }
             Command::ClearAll => {
                 self.selection.clear();
-                self.engine.send(EngineCommand::ClearProgrammer);
+                self.clear_programmer();
                 Ok(Outcome::info("Sélection et programmer vidés"))
             }
         }
@@ -280,7 +335,7 @@ impl Console {
         }
         let value = (percent / 100.0 * u16::MAX as f32).round() as u16;
         let mut touched = 0;
-        for &target in &self.selection {
+        for target in self.selection.clone() {
             let dimmers: Vec<usize> = self
                 .show
                 .patch
@@ -332,7 +387,6 @@ impl Console {
         number: u32,
         name: Option<String>,
     ) -> Result<Outcome, CommandError> {
-        let snapshot: Snapshot = self.engine.snapshot();
         let targets: Vec<Target> = if self.selection.is_empty() {
             self.show.patch.fixtures().iter().map(|f| Target::whole(f.id)).collect()
         } else {
@@ -345,7 +399,7 @@ impl Console {
                     continue;
                 }
                 let key = ParamKey { fixture: target.fixture, parameter: index };
-                if let Some(value) = snapshot.attributes.get(&key) {
+                if let Some(value) = self.programmer.get(&key) {
                     preset.values.entry(target.fixture).or_default().insert(parameter.name.clone(), *value);
                 }
             }
@@ -366,6 +420,7 @@ impl Console {
             plural(preset.values.len(), "fixture")
         );
         self.show.presets.insert(key, preset);
+        self.sync_playback(); // les cues qui l'utilisent changent avec lui
         Ok(Outcome::changed(message))
     }
 
@@ -386,6 +441,8 @@ impl Console {
                 if let Some(value) = values.get(&parameter.name) {
                     let key = ParamKey { fixture: target.fixture, parameter: index };
                     self.engine.send(EngineCommand::SetAttribute { key, value: *value });
+                    self.programmer.insert(key, *value);
+                    self.origins.insert(key, (family, number));
                     any = true;
                 }
             }
@@ -407,6 +464,7 @@ impl Console {
         let slot = match object {
             Object::Group(n) => self.show.groups.get_mut(&n).map(|g| &mut g.name),
             Object::Preset(f, n) => self.show.presets.get_mut(&(f, n)).map(|p| &mut p.name),
+            Object::Cue(_) => None,
         };
         match slot {
             Some(slot) => {
@@ -425,7 +483,11 @@ impl Console {
                 .presets
                 .remove(&(f, n))
                 .map(|p| format!("Preset {}.{n} « {} » supprimé", f.preset_number(), p.name)),
+            Object::Cue(_) => None,
         };
+        if removed.is_some() {
+            self.sync_playback();
+        }
         match removed {
             Some(message) => Ok(Outcome::changed(message)),
             None => invalid("rien à supprimer à ce numéro"),
@@ -439,8 +501,9 @@ mod tests {
     use std::time::Duration;
 
     use folie_dmx::NullOutput;
-    use folie_engine::{EngineConfig, OutputBinding};
+    use folie_engine::{EngineConfig, OutputBinding, Snapshot};
     use folie_fixture::{FixtureId, Library, PatchedFixture};
+    use folie_show::{CueNumber, CueValue};
 
     use super::*;
     use crate::command::fixture;
@@ -576,5 +639,85 @@ mod tests {
         assert_eq!(err(&mut c, "Preset 4.9"), "le preset 4.9 n'existe pas");
         assert!(err(&mut c, "Fixture 1.2").contains("n'est pas patchée"), "la MH 6 n'a pas de sous-fixture");
         assert!(err(&mut c, "Fixture 1 Thru 10.2").contains("Thru"));
+    }
+
+    #[test]
+    fn cues_track_go_and_back() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 At 100");
+        run(&mut c, r#"Store Cue 1 Fade 0 "Face""#);
+        run(&mut c, "ClearAll");
+        run(&mut c, "Fixture 2 At 50");
+        let stored = run(&mut c, "Store Cue Fade 0");
+        assert!(stored.message.starts_with("Cue 2 enregistrée"), "{}", stored.message);
+        run(&mut c, "ClearAll");
+        assert_eq!(dmx(&c, 2), 0, "programmer vidé : rien ne sort");
+
+        run(&mut c, "Go");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 0));
+        run(&mut c, "Go");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 128), "la fixture 1 est suivie (tracking)");
+        run(&mut c, "Back");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 0));
+
+        // Release : la fixture 1 ne tient plus à partir de la cue 3.
+        run(&mut c, "Fixture 1 At 0");
+        run(&mut c, "Store Cue 3 Fade 0");
+        run(&mut c, "ClearAll");
+        run(&mut c, "Goto Cue 3");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (0, 128));
+        run(&mut c, "Off");
+        assert_eq!(dmx(&c, 16), 0);
+    }
+
+    #[test]
+    fn cues_follow_their_presets() {
+        let mut c = console();
+        let red = c.show.patch.get(FixtureId(3)).unwrap().mode().parameters[2].clone();
+        run(&mut c, "Fixture 3");
+        c.set_like(&red, u16::MAX);
+        settled(&c);
+        run(&mut c, r#"Store Preset 4.1 "Rouge""#);
+        run(&mut c, "ClearAll");
+
+        run(&mut c, "Fixture 3");
+        run(&mut c, "Preset 4.1");
+        settled(&c);
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        let cue = &c.show.sequences[&1].cues[&CueNumber::whole(1)];
+        assert_eq!(cue.values[&FixtureId(3)]["Red"], CueValue::Preset(FeatureGroup::Color, 1));
+
+        run(&mut c, "Go");
+        assert_eq!(dmx(&c, 32), 255);
+        // On retouche le preset : la cue suit sans être réenregistrée.
+        run(&mut c, "Fixture 3");
+        c.set_like(&red, 0x8000);
+        settled(&c);
+        run(&mut c, "Store Preset 4.1");
+        run(&mut c, "ClearAll");
+        assert_eq!(dmx(&c, 32), 128);
+    }
+
+    #[test]
+    fn executors_and_cue_errors() {
+        let mut c = console();
+        assert!(run(&mut c, "Executor 2").message.contains("vide"));
+        assert_eq!(c.execute("Store Cue").unwrap_err().to_string(), "programmer vide : rien à enregistrer");
+        run(&mut c, "Fixture 4 At 100");
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        assert_eq!(c.show.executors[&2], 1, "première séquence créée pour l'executor 2");
+
+        run(&mut c, "Go Executor 2");
+        assert_eq!(dmx(&c, 44), 255);
+        run(&mut c, "Executor 2 At 50");
+        assert_eq!(dmx(&c, 44), 128, "le fader dose l'intensité");
+
+        let err = |c: &mut Console, line| c.execute(line).unwrap_err().to_string();
+        assert_eq!(err(&mut c, "Go Executor 9"), "l'executor 9 n'a pas de séquence");
+        assert_eq!(err(&mut c, "Goto Cue 7"), "la cue 7 n'existe pas");
+        assert!(run(&mut c, "Delete Cue 1").show_changed);
+        assert_eq!(err(&mut c, "Delete Cue 1"), "la cue 1 n'existe pas");
     }
 }

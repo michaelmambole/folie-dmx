@@ -37,7 +37,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Ligne de commande style MA avec abréviations et historique :
       `Fixture 1 Thru 4 - 2 At 50`, `Group 2 At Full`, `Fixture 5.1 Thru 5.4`, `Preset 4.1`,
       `Store Group 3 "Cour"`, `Store Preset 4.1`, `Label`, `Delete`, `Clear`, `ClearAll`
-- [ ] Presets référencés (et non recopiés) : avec les cues, phase 4
+- [x] Presets référencés (et non recopiés) : faits avec les cues, phase 4
 - [ ] Commandes de valeur par attribut (`Attribute "Pan" At 50`), `At` relatif (`At + 10`)
 - **Couche de contrôle** entre les interfaces et le moteur : elle tient le show et le
   programmer, et le langage de commande en est l'**unique point d'entrée**
@@ -54,10 +54,16 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [ ] Dispositions embarquées dans le show
 
 ## Phase 4 — Cues et executors (≈ 2 à 3 mois, le cœur)
-- Listes de cues, Go / Back / Goto, temps de fondu et de délai
-- **Tracking** et cues bloquées (`Block`)
-- Executors sur faders, priorités, fusion HTP / LTP
-- Sauvegarde automatique, reprise après plantage
+- [x] Séquences de cues numérotées au millième (1, 1.5…), fondu et délai par cue
+- [x] **Tracking** calculé par la console, `Release` pour rendre un paramètre
+- [x] Presets référencés dans les cues : modifier le preset modifie les cues
+- [x] Moteur : fondus à 44 Hz, executors en HTP (intensité × fader) et LTP (dernier lancé)
+- [x] Commandes `Go`, `Back`, `Off`, `Goto Cue`, `Executor n At`, `Store Cue n Fade s "nom"`
+- [x] Fenêtres Cues (⌘5) et Executors (⌘6)
+- [x] Sauvegarde automatique, reprise après plantage
+- [ ] `Block` (figer les valeurs suivies), temps de Back et d'Off, bouclage en fin de liste
+- [ ] Fondu des attributs LTP depuis la couche inférieure (aujourd'hui : départ franc)
+- [ ] Pages d'executors, executors de type flash/temp, temps par attribut
 - **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
   `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)
 

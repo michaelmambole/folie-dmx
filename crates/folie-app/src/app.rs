@@ -351,13 +351,15 @@ mod tests {
     }
 
     fn harness(storage: Storage) -> Harness<'static, FolieApp> {
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1900.0, 900.0))
-            .build_eframe(move |cc| {
-                let mut app = FolieApp::new(cc, storage);
-                app.windows = windows::WindowsState::new(Some(test_workspace()), Default::default());
-                app
-            });
+        harness_with(storage, test_workspace(), egui::vec2(1900.0, 900.0))
+    }
+
+    fn harness_with(storage: Storage, workspace: Workspace, size: egui::Vec2) -> Harness<'static, FolieApp> {
+        let mut harness = Harness::builder().with_size(size).build_eframe(move |cc| {
+            let mut app = FolieApp::new(cc, storage);
+            app.windows = windows::WindowsState::new(Some(workspace), Default::default());
+            app
+        });
         harness.run_steps(2);
         harness
     }
@@ -631,5 +633,48 @@ mod tests {
             .build_eframe(move |cc| FolieApp::new(cc, storage));
         harness.run_steps(2);
         harness
+    }
+
+    #[test]
+    fn cues_and_executors_windows() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        let window = |kind, x: f32, y: f32, w: f32, h: f32| WindowState {
+            kind,
+            placement: Placement::at_size(egui::pos2(x, y), egui::vec2(w, h)),
+            preset_family: None,
+        };
+        workspace.windows.push(window(WindowKind::Cues, 1520.0, 40.0, 560.0, 380.0));
+        workspace.windows.push(window(WindowKind::Executors, 1000.0, 860.0, 1100.0, 380.0));
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2200.0, 1300.0));
+        harness.get_by_label("Aucune cue. Réglez des valeurs puis tapez « Store Cue », ou :");
+
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Face""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 2 At 100");
+        command(&mut harness, r#"Store Cue Fade 0 "Contre""#);
+        command(&mut harness, "ClearAll");
+        assert!(harness.state().file.dirty, "les cues sont à enregistrer dans le show");
+        assert_eq!(output(&harness, 2), 0);
+
+        // Go depuis la fenêtre Cues : la cue 1, puis la 2 (la 1 reste suivie).
+        harness.get_all_by_label("Go").next().unwrap().click();
+        settle(&mut harness);
+        assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 0));
+        harness.get_by_label("1 Face"); // cue en cours affichée dans les executors
+        harness.get_all_by_label("Go").next().unwrap().click();
+        settle(&mut harness);
+        assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 255));
+        harness.get_all_by_label("Back").next().unwrap().click();
+        settle(&mut harness);
+        assert_eq!(output(&harness, 16), 0);
+
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("cues.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 }

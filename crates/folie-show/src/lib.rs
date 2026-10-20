@@ -7,6 +7,8 @@
 //! La lecture est tolérante : une fixture qui ne peut pas être restaurée est
 //! écartée avec un avertissement, le reste du show est chargé.
 
+pub mod cues;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -16,6 +18,8 @@ use folie_fixture::{FeatureGroup, FixtureId, FixtureType, Library, Patch, Patche
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+
+pub use cues::{Cue, CueNumber, CueValue, DEFAULT_FADE, Sequence};
 
 pub const FORMAT: &str = "folie-show";
 /// Version du format écrite par ce programme. À incrémenter à chaque changement
@@ -35,7 +39,7 @@ pub enum ShowError {
     TooNew(u32),
 }
 
-/// Contenu d'un show. S'enrichira des cues.
+/// Contenu d'un show.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Show {
     pub patch: Patch,
@@ -43,6 +47,10 @@ pub struct Show {
     pub groups: BTreeMap<u32, Group>,
     /// Presets par (famille, numéro) : `Preset 4.1` = (Couleur, 1).
     pub presets: BTreeMap<(FeatureGroup, u32), Preset>,
+    /// Séquences (listes de cues) par numéro.
+    pub sequences: BTreeMap<u32, Sequence>,
+    /// Executor -> séquence qu'il joue.
+    pub executors: BTreeMap<u32, u32>,
 }
 
 /// Sélection enregistrée, dans l'ordre où elle a été faite (utile aux effets).
@@ -81,6 +89,51 @@ struct ShowFile {
     groups: Vec<GroupEntry>,
     #[serde(default)]
     presets: Vec<PresetEntry>,
+    #[serde(default)]
+    sequences: Vec<SequenceEntry>,
+    /// Executor (en texte, clé JSON) -> séquence.
+    #[serde(default)]
+    executors: BTreeMap<String, u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SequenceEntry {
+    number: u32,
+    name: String,
+    cues: Vec<CueEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CueEntry {
+    /// "1", "1.5"…
+    number: String,
+    name: String,
+    fade: f32,
+    #[serde(default)]
+    delay: f32,
+    /// Fixture -> paramètre -> valeur : un nombre, "preset 4.1" ou "release".
+    values: BTreeMap<String, BTreeMap<String, Value>>,
+}
+
+fn cue_value_to_json(value: &CueValue) -> Value {
+    match value {
+        CueValue::Value(v) => Value::from(*v),
+        CueValue::Preset(family, number) => Value::from(format!("preset {}.{number}", family.preset_number())),
+        CueValue::Release => Value::from("release"),
+    }
+}
+
+fn cue_value_from_json(value: &Value) -> Option<CueValue> {
+    match value {
+        Value::Number(n) => n.as_u64().and_then(|v| u16::try_from(v).ok()).map(CueValue::Value),
+        Value::String(s) if s == "release" => Some(CueValue::Release),
+        Value::String(s) => {
+            let (family, number) = s.strip_prefix("preset ")?.split_once('.')?;
+            let family = FeatureGroup::from_preset_number(family.parse().ok()?)?;
+            Some(CueValue::Preset(family, number.parse().ok()?))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -161,6 +214,32 @@ pub fn to_json(show: &Show) -> String {
             values: p.values.iter().map(|(id, v)| (id.to_string(), v.clone())).collect(),
         })
         .collect();
+    let sequences = show
+        .sequences
+        .iter()
+        .map(|(number, sequence)| SequenceEntry {
+            number: *number,
+            name: sequence.name.clone(),
+            cues: sequence
+                .cues
+                .iter()
+                .map(|(n, cue)| CueEntry {
+                    number: n.to_string(),
+                    name: cue.name.clone(),
+                    fade: cue.fade,
+                    delay: cue.delay,
+                    values: cue
+                        .values
+                        .iter()
+                        .map(|(id, params)| {
+                            (id.to_string(), params.iter().map(|(p, v)| (p.clone(), cue_value_to_json(v))).collect())
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    let executors = show.executors.iter().map(|(e, s)| (e.to_string(), *s)).collect();
     let file = ShowFile {
         format: FORMAT.into(),
         version: VERSION,
@@ -169,6 +248,8 @@ pub fn to_json(show: &Show) -> String {
         patch,
         groups,
         presets,
+        sequences,
+        executors,
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -245,7 +326,52 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         presets.insert((family, entry.number), Preset { name: entry.name, values });
     }
 
-    Ok(Loaded { show: Show { patch, groups, presets }, warnings })
+    let mut sequences = BTreeMap::new();
+    for entry in file.sequences {
+        let mut cues = BTreeMap::new();
+        for cue_entry in entry.cues {
+            let what = format!("Séquence {}, cue {}", entry.number, cue_entry.number);
+            let Ok(number) = cue_entry.number.parse::<CueNumber>() else {
+                warnings.push(format!("{what} : numéro illisible, cue retirée"));
+                continue;
+            };
+            let mut cue = Cue {
+                name: cue_entry.name,
+                fade: cue_entry.fade.max(0.0),
+                delay: cue_entry.delay.max(0.0),
+                values: BTreeMap::new(),
+            };
+            for (id, params) in cue_entry.values {
+                let Some(id) = id.parse::<u32>().ok().map(FixtureId).filter(|id| patch.get(*id).is_some()) else {
+                    warnings.push(format!("{what} : fixture {id} absente du patch, valeurs retirées"));
+                    continue;
+                };
+                let mut values = BTreeMap::new();
+                for (param, raw) in params {
+                    match cue_value_from_json(&raw) {
+                        Some(v) => {
+                            values.insert(param, v);
+                        }
+                        None => warnings.push(format!("{what} : valeur illisible pour {param}")),
+                    }
+                }
+                cue.values.insert(id, values);
+            }
+            cues.insert(number, cue);
+        }
+        sequences.insert(entry.number, Sequence { name: entry.name, cues });
+    }
+    let mut executors = BTreeMap::new();
+    for (executor, sequence) in file.executors {
+        match executor.parse::<u32>() {
+            Ok(executor) if sequences.contains_key(&sequence) => {
+                executors.insert(executor, sequence);
+            }
+            _ => warnings.push(format!("Executor {executor} : séquence {sequence} introuvable")),
+        }
+    }
+
+    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors }, warnings })
 }
 
 /// Fiche à utiliser pour chaque type du show : la copie embarquée en priorité,
@@ -343,7 +469,21 @@ mod tests {
         )]);
         let values = BTreeMap::from([(FixtureId(1), BTreeMap::from([("Red".to_string(), 65_535)]))]);
         let presets = BTreeMap::from([((FeatureGroup::Color, 1), Preset { name: "Rouge".into(), values })]);
-        Show { patch, groups, presets }
+        let mut cue = Cue::new("Entrée".into());
+        cue.fade = 4.5;
+        cue.values.insert(
+            FixtureId(1),
+            BTreeMap::from([
+                ("Dimmer".to_string(), CueValue::Value(65_535)),
+                ("Red".to_string(), CueValue::Preset(FeatureGroup::Color, 1)),
+                ("Pan".to_string(), CueValue::Release),
+            ]),
+        );
+        let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
+        cues.insert("1.5".parse().unwrap(), Cue::new("Noir".into()));
+        let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
+        let executors = BTreeMap::from([(1, 1)]);
+        Show { patch, groups, presets, sequences, executors }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -368,6 +508,8 @@ mod tests {
         assert_eq!(loaded.show.patch.fixtures()[2].mode().name, "Individual");
         assert_eq!(loaded.show.groups, show.groups);
         assert_eq!(loaded.show.presets, show.presets);
+        assert_eq!(loaded.show.sequences, show.sequences);
+        assert_eq!(loaded.show.executors, show.executors);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
@@ -389,8 +531,8 @@ mod tests {
         file["patch"][1]["address"] = 600.into();
         let loaded = from_json(&file.to_string(), &library).unwrap();
         assert_eq!(loaded.show.patch.fixtures().len(), 1);
-        // 2 fixtures écartées, puis le groupe et le preset qui les utilisaient sont nettoyés.
-        assert_eq!(loaded.warnings.len(), 4, "{:?}", loaded.warnings);
+        // 2 fixtures écartées, puis le groupe, le preset et la cue qui les utilisaient sont nettoyés.
+        assert_eq!(loaded.warnings.len(), 5, "{:?}", loaded.warnings);
     }
 
     #[test]

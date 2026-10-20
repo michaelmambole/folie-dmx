@@ -5,14 +5,19 @@
 //! et publie un [`Snapshot`] en lecture seule à chaque trame. Une interface
 //! lente ou bloquée ne peut donc jamais retarder la sortie DMX.
 
-use std::collections::HashMap;
+mod playback;
+
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use folie_dmx::{CHANNELS_PER_UNIVERSE, DmxOutput, Universe};
-use folie_fixture::{ParamKey, Patch};
+use folie_fixture::{Attribute, ParamKey, Patch};
+
+pub use playback::{CueState, ExecutorStatus, Sequences};
+use playback::Playback;
 
 /// Fréquence par défaut : une trame DMX complète de 512 canaux dure environ
 /// 22,7 ms, soit ~44 trames par seconde au maximum.
@@ -41,6 +46,18 @@ pub enum Command {
     /// Oublie toutes les valeurs saisies : les fixtures reviennent à leurs valeurs par défaut.
     ClearProgrammer,
     Blackout(bool),
+    /// Remplace les séquences jouées par les executors (après toute modification du show).
+    SetSequences(Arc<Sequences>),
+    /// Cue suivante de l'executor.
+    Go(u32),
+    /// Cue précédente de l'executor.
+    Back(u32),
+    /// Va directement à une cue, par son index dans la séquence.
+    Goto { executor: u32, cue: usize },
+    /// Éteint l'executor.
+    Off(u32),
+    /// Niveau du fader de l'executor, de 0 à 1 (intensité seulement).
+    SetFader { executor: u32, level: f32 },
     /// Remplace toutes les sorties, sans interrompre le moteur.
     SetOutputs(Vec<OutputBinding>),
     /// Envoie une dernière trame puis arrête le moteur.
@@ -90,6 +107,8 @@ pub struct Snapshot {
     pub late_frames: u64,
     /// Nom de chaque sortie active.
     pub output_names: Vec<String>,
+    /// Executors qui ont une séquence, et ce qu'ils jouent.
+    pub executors: BTreeMap<u32, ExecutorStatus>,
 }
 
 /// Point d'accès au moteur depuis l'interface.
@@ -151,6 +170,10 @@ struct Engine {
     /// Contient aussi le programmer (`attributes`, `channel_overrides`), qui deviendra
     /// une pile de couches (executors, effets…) fusionnées en HTP/LTP.
     state: Snapshot,
+    sequences: Arc<Sequences>,
+    playbacks: BTreeMap<u32, Playback>,
+    /// Compteur de déclenchements, pour la priorité LTP.
+    activations: u64,
     shutting_down: bool,
 }
 
@@ -177,6 +200,9 @@ impl Engine {
             published,
             outputs,
             state,
+            sequences: Arc::default(),
+            playbacks: BTreeMap::new(),
+            activations: 0,
             shutting_down: false,
         }
     }
@@ -239,6 +265,31 @@ impl Engine {
                     self.state.channel_overrides.iter_mut().for_each(|o| o.fill(None));
                 }
                 Command::Blackout(on) => self.state.blackout = on,
+                Command::SetSequences(sequences) => {
+                    self.playbacks.retain(|executor, _| sequences.contains_key(executor));
+                    for (executor, cues) in sequences.iter() {
+                        self.playbacks.entry(*executor).or_insert_with(Playback::new).clamp(cues.len());
+                    }
+                    self.sequences = sequences;
+                }
+                Command::Go(executor) => self.transition(executor, |current, len| match current {
+                    None if len > 0 => Some(Some(0)),
+                    Some(c) if c + 1 < len => Some(Some(c + 1)),
+                    _ => None, // fin de séquence : on reste sur la dernière cue
+                }),
+                Command::Back(executor) => self.transition(executor, |current, _| match current {
+                    Some(c) if c > 0 => Some(Some(c - 1)),
+                    _ => None,
+                }),
+                Command::Goto { executor, cue } => {
+                    self.transition(executor, |_, len| (cue < len).then_some(Some(cue)))
+                }
+                Command::Off(executor) => self.transition(executor, |current, _| current.map(|_| None)),
+                Command::SetFader { executor, level } => {
+                    if let Some(playback) = self.playbacks.get_mut(&executor) {
+                        playback.level = level.clamp(0.0, 1.0);
+                    }
+                }
                 Command::SetOutputs(outputs) => {
                     self.outputs = valid_bindings(outputs, self.state.output.len());
                     self.state.output_names =
@@ -247,6 +298,49 @@ impl Engine {
                 Command::Shutdown => self.shutting_down = true,
             }
         }
+    }
+
+    fn is_intensity(patch: &Patch, key: &ParamKey) -> bool {
+        patch
+            .get(key.fixture)
+            .and_then(|f| f.mode().parameters.get(key.parameter))
+            .is_some_and(|p| p.attribute == Attribute::Dimmer)
+    }
+
+    /// `next(cue en cours, nombre de cues)` donne la cue visée, ou `None` pour ne rien faire.
+    fn transition(&mut self, executor: u32, next: impl Fn(Option<usize>, usize) -> Option<Option<usize>>) {
+        let (Some(cues), Some(playback)) = (self.sequences.get(&executor), self.playbacks.get_mut(&executor)) else {
+            log::warn!("executor {executor} sans séquence");
+            return;
+        };
+        if let Some(target) = next(playback.current(), cues.len()) {
+            self.activations += 1;
+            let patch = &self.state.patch;
+            playback.go_to(target, cues, Instant::now(), self.activations, |k| Self::is_intensity(patch, k));
+        }
+    }
+
+    /// Valeurs des executors, mélangées : HTP pour l'intensité (multipliée par
+    /// le fader), LTP pour le reste (le dernier executor lancé gagne).
+    fn playback_values(&mut self, now: Instant) -> HashMap<ParamKey, u16> {
+        let patch = &self.state.patch;
+        let mut order: Vec<(&u32, &mut Playback)> = self.playbacks.iter_mut().collect();
+        order.sort_by_key(|(_, p)| p.activated);
+        let mut merged = HashMap::new();
+        for (executor, playback) in order {
+            let Some(cues) = self.sequences.get(executor) else { continue };
+            for (key, value) in playback.values(cues, now, |k| Self::is_intensity(patch, k)) {
+                if Self::is_intensity(patch, &key) {
+                    let scaled = (value as f32 * playback.level).round() as u16;
+                    let slot = merged.entry(key).or_insert(0);
+                    *slot = (*slot).max(scaled);
+                } else {
+                    merged.insert(key, value);
+                }
+            }
+            playback.settle(now);
+        }
+        merged
     }
 
     fn set_override(&mut self, universe: usize, channel: u16, value: Option<u8>) {
@@ -262,12 +356,22 @@ impl Engine {
     }
 
     fn render(&mut self) {
+        let now = Instant::now();
+        let mut values = self.playback_values(now);
+        self.state.executors = self
+            .playbacks
+            .iter()
+            .map(|(e, p)| (*e, p.status(now, self.sequences.get(e).map_or(0, |c| c.len()))))
+            .collect();
+
         let state = &mut self.state;
         state.output.iter_mut().for_each(Universe::clear);
         if state.blackout {
             return;
         }
-        state.patch.render(&state.attributes, &mut state.output);
+        // Le programmer passe devant les executors.
+        values.extend(state.attributes.iter().map(|(k, v)| (*k, *v)));
+        state.patch.render(&values, &mut state.output);
         for (out, overrides) in state.output.iter_mut().zip(&state.channel_overrides) {
             for (slot, forced) in out.as_mut_slice().iter_mut().zip(overrides.iter()) {
                 if let Some(value) = forced {
@@ -388,5 +492,73 @@ mod tests {
         let out = last.lock().unwrap().clone().unwrap();
         assert_eq!(out.get(101), Ok(12));
         assert_eq!(out.get(102), Ok(0));
+    }
+
+    #[test]
+    fn executors_mix_htp_ltp_and_programmer_wins() {
+        use folie_fixture::{FixtureId, PatchedFixture, ofl};
+
+        let json = include_str!("../../../library/martin/rush-mh-6-wash.json");
+        let mh6 = Arc::new(ofl::parse(json, "martin/rush-mh-6-wash", "Martin").unwrap());
+        let mut patch = Patch::default();
+        let fixture = PatchedFixture {
+            id: FixtureId(1),
+            name: "MH6".into(),
+            fixture_type: mh6,
+            mode: 0,
+            universe: 0,
+            address: 1,
+        };
+        patch.add(fixture).unwrap();
+        // Paramètres de la MH 6 : 1 = Dimmer (canaux 2-3), 8 = Pan (canaux 10-11).
+        let (dimmer, pan) = (ParamKey { fixture: FixtureId(1), parameter: 1 }, ParamKey { fixture: FixtureId(1), parameter: 8 });
+        let state = |d: u16, p: u16| CueState {
+            label: String::new(),
+            values: HashMap::from([(dimmer, d), (pan, p)]),
+            fade: 0.0,
+            delay: 0.0,
+        };
+        let sequences: Sequences = HashMap::from([
+            (1, Arc::new(vec![state(0x8000, 0x1000), state(0xFF00, 0x2000)])),
+            (2, Arc::new(vec![state(0x4000, 0xA000)])),
+        ]);
+
+        let last = Arc::new(StdMutex::new(None));
+        let engine = spawn(
+            EngineConfig { universes: 1, rate_hz: 200.0 },
+            vec![OutputBinding { universe: 0, output: Box::new(Capture(last.clone())) }],
+        );
+        let out = |channel| {
+            std::thread::sleep(Duration::from_millis(30));
+            last.lock().unwrap().as_ref().unwrap().get(channel).unwrap()
+        };
+        engine.send(Command::SetPatch(Arc::new(patch)));
+        engine.send(Command::SetSequences(Arc::new(sequences)));
+
+        engine.send(Command::Go(1));
+        assert_eq!((out(2), out(10)), (0x80, 0x10));
+        engine.send(Command::Go(2));
+        assert_eq!(out(2), 0x80, "HTP : le dimmer le plus haut gagne");
+        assert_eq!(out(10), 0xA0, "LTP : le dernier executor lancé gagne");
+
+        engine.send(Command::SetFader { executor: 1, level: 0.25 });
+        assert_eq!(out(2), 0x40, "fader à 25 % : 0x80 → 0x20, l'executor 2 (0x40) passe devant");
+
+        engine.send(Command::Go(1)); // cue 2 de l'executor 1, relancé : il reprend le pan
+        assert_eq!(out(10), 0x20);
+        engine.send(Command::Back(1));
+        assert_eq!(out(10), 0x10);
+
+        engine.send(Command::SetAttribute { key: pan, value: 0xEE00 });
+        assert_eq!(out(10), 0xEE, "le programmer passe devant les executors");
+
+        engine.send(Command::ClearProgrammer);
+        engine.send(Command::Off(1));
+        engine.send(Command::Off(2));
+        assert_eq!((out(2), out(10)), (0, 0x80), "tout éteint : valeurs par défaut");
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.executors[&1].cue, None);
+        assert_eq!(snapshot.executors[&1].cue_count, 2);
+        engine.shutdown();
     }
 }

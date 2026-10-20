@@ -5,12 +5,15 @@
 //! Fixture 1 + 3 - 2             Preset 4.1             Store Group 3 "Cour"
 //! Store Preset 4.1 "Rouge"      Label Group 3 "Jardin" Delete Preset 4.1
 //! Clear                         ClearAll
+//! Go   Back   Off               Go Executor 2           Goto Cue 5
+//! Store Cue 3 Fade 4 "Entrée"   Delete Cue 3            Executor 2 At 50
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
 //! pas d'ambiguïté : `fi 1 th 4 at 50`.
 
 use folie_fixture::{FeatureGroup, FixtureId, Target};
+use folie_show::CueNumber;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -30,9 +33,19 @@ pub enum Keyword {
     Store,
     Label,
     Delete,
+    Cue,
+    Executor,
+    Go,
+    Back,
+    Goto,
+    Off,
+    Fade,
 }
 
-const KEYWORDS: [(&str, Keyword); 11] = [
+/// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
+const ALIASES: [(&str, Keyword); 2] = [("g", Keyword::Group), ("exec", Keyword::Executor)];
+
+const KEYWORDS: [(&str, Keyword); 18] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -44,6 +57,13 @@ const KEYWORDS: [(&str, Keyword); 11] = [
     ("store", Keyword::Store),
     ("label", Keyword::Label),
     ("delete", Keyword::Delete),
+    ("cue", Keyword::Cue),
+    ("executor", Keyword::Executor),
+    ("go", Keyword::Go),
+    ("back", Keyword::Back),
+    ("goto", Keyword::Goto),
+    ("off", Keyword::Off),
+    ("fade", Keyword::Fade),
 ];
 
 impl Keyword {
@@ -60,13 +80,20 @@ impl Keyword {
             Self::Store => "Store",
             Self::Label => "Label",
             Self::Delete => "Delete",
+            Self::Cue => "Cue",
+            Self::Executor => "Executor",
+            Self::Go => "Go",
+            Self::Back => "Back",
+            Self::Goto => "Goto",
+            Self::Off => "Off",
+            Self::Fade => "Fade",
         }
     }
 
     /// Mot exact, sinon préfixe sans ambiguïté.
     fn parse(word: &str) -> Result<Self, SyntaxError> {
         let word = word.to_lowercase();
-        if let Some((_, k)) = KEYWORDS.iter().find(|(name, _)| *name == word) {
+        if let Some((_, k)) = KEYWORDS.iter().chain(&ALIASES).find(|(name, _)| *name == word) {
             return Ok(*k);
         }
         let candidates: Vec<Keyword> =
@@ -159,6 +186,8 @@ pub enum Value {
 pub enum Object {
     Group(u32),
     Preset(FeatureGroup, u32),
+    /// Cue de la séquence de l'executor sélectionné ; sans numéro pour `Store Cue`.
+    Cue(Option<CueNumber>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,11 +195,19 @@ pub enum Command {
     /// Sélection éventuellement suivie d'une valeur de dimmer : `Fixture 1 Thru 4 At 50`.
     Select { selection: Option<Selection>, value: Option<Value> },
     ApplyPreset(FeatureGroup, u32),
-    Store { object: Object, name: Option<String> },
+    Store { object: Object, name: Option<String>, fade: Option<f32> },
     Label { object: Object, name: String },
     Delete(Object),
     Clear,
     ClearAll,
+    /// `None` : l'executor sélectionné.
+    Go(Option<u32>),
+    Back(Option<u32>),
+    Off(Option<u32>),
+    Goto(CueNumber),
+    SelectExecutor(u32),
+    /// Fader d'un executor, en pourcentage.
+    SetFader(u32, f32),
 }
 
 struct Parser {
@@ -226,14 +263,41 @@ impl Parser {
         Ok((family, number))
     }
 
+    fn cue_number(&mut self) -> Result<CueNumber, SyntaxError> {
+        self.number("numéro de cue")?.parse().map_err(SyntaxError)
+    }
+
+    fn optional_cue_number(&mut self) -> Result<Option<CueNumber>, SyntaxError> {
+        match self.peek() {
+            Some(Token::Number(_)) => Ok(Some(self.cue_number()?)),
+            _ => Ok(None),
+        }
+    }
+
+    /// `Executor 2` facultatif après Go, Back, Off.
+    fn optional_executor(&mut self) -> Result<Option<u32>, SyntaxError> {
+        if self.eat(Keyword::Executor) { Ok(Some(self.integer("numéro d'executor")?)) } else { Ok(None) }
+    }
+
+    fn seconds(&mut self) -> Result<f32, SyntaxError> {
+        let text = self.number("durée en secondes")?;
+        text.parse::<f32>()
+            .ok()
+            .filter(|s| (0.0..=3600.0).contains(s))
+            .ok_or_else(|| SyntaxError(format!("durée invalide : {text} (0 à 3600 s)")))
+    }
+
     fn object(&mut self) -> Result<Object, SyntaxError> {
+        if self.eat(Keyword::Cue) {
+            return Ok(Object::Cue(self.optional_cue_number()?));
+        }
         if self.eat(Keyword::Group) {
             Ok(Object::Group(self.integer("numéro de groupe")?))
         } else if self.eat(Keyword::Preset) {
             let (family, number) = self.preset_ref()?;
             Ok(Object::Preset(family, number))
         } else {
-            Err(SyntaxError("Group ou Preset attendu".into()))
+            Err(SyntaxError("Group, Preset ou Cue attendu".into()))
         }
     }
 
@@ -309,17 +373,65 @@ impl Parser {
             Some(Token::Keyword(Keyword::Store)) => {
                 self.position += 1;
                 let object = self.object()?;
-                Command::Store { object, name: self.text() }
+                // Nom et temps de fondu facultatifs, dans n'importe quel ordre.
+                let (mut name, mut fade) = (None, None);
+                loop {
+                    if self.eat(Keyword::Fade) {
+                        fade = Some(self.seconds()?);
+                    } else if let Some(text) = self.text() {
+                        name = Some(text);
+                    } else {
+                        break;
+                    }
+                }
+                if fade.is_some() && !matches!(object, Object::Cue(_)) {
+                    return Err(SyntaxError("Fade ne s'applique qu'aux cues".into()));
+                }
+                Command::Store { object, name, fade }
+            }
+            Some(Token::Keyword(k @ (Keyword::Go | Keyword::Back | Keyword::Off))) => {
+                let k = *k;
+                self.position += 1;
+                let executor = self.optional_executor()?;
+                match k {
+                    Keyword::Go => Command::Go(executor),
+                    Keyword::Back => Command::Back(executor),
+                    _ => Command::Off(executor),
+                }
+            }
+            Some(Token::Keyword(Keyword::Goto)) => {
+                self.position += 1;
+                if !self.eat(Keyword::Cue) {
+                    return Err(SyntaxError("Goto Cue <numéro> attendu".into()));
+                }
+                Command::Goto(self.cue_number()?)
+            }
+            Some(Token::Keyword(Keyword::Executor)) => {
+                self.position += 1;
+                let executor = self.integer("numéro d'executor")?;
+                if self.eat(Keyword::At) {
+                    let Value::Percent(p) = self.value()?;
+                    Command::SetFader(executor, p)
+                } else {
+                    Command::SelectExecutor(executor)
+                }
             }
             Some(Token::Keyword(Keyword::Label)) => {
                 self.position += 1;
                 let object = self.object()?;
+                if object == Object::Cue(None) {
+                    return Err(SyntaxError("numéro de cue attendu".into()));
+                }
                 let name = self.text().ok_or_else(|| SyntaxError("nom entre guillemets attendu".into()))?;
                 Command::Label { object, name }
             }
             Some(Token::Keyword(Keyword::Delete)) => {
                 self.position += 1;
-                Command::Delete(self.object()?)
+                let object = self.object()?;
+                if object == Object::Cue(None) {
+                    return Err(SyntaxError("numéro de cue attendu".into()));
+                }
+                Command::Delete(object)
             }
             Some(Token::Keyword(Keyword::Preset)) => {
                 self.position += 1;
@@ -400,7 +512,7 @@ mod tests {
         assert_eq!(parse("Preset 4.1"), Ok(Command::ApplyPreset(FeatureGroup::Color, 1)));
         assert_eq!(
             parse(r#"st g 3 "Cour""#),
-            Ok(Command::Store { object: Object::Group(3), name: Some("Cour".into()) })
+            Ok(Command::Store { object: Object::Group(3), name: Some("Cour".into()), fade: None })
         );
         assert_eq!(
             parse(r#"Label Preset 2.5 "Face""#),
@@ -409,6 +521,27 @@ mod tests {
         assert_eq!(parse("del p 4.1"), Ok(Command::Delete(Object::Preset(FeatureGroup::Color, 1))));
         assert_eq!(parse("clear"), Ok(Command::Clear));
         assert_eq!(parse("ClearAll"), Ok(Command::ClearAll));
+    }
+
+    #[test]
+    fn playback_commands() {
+        let cue = |s: &str| s.parse::<CueNumber>().unwrap();
+        assert_eq!(parse("go"), Ok(Command::Go(None)));
+        assert_eq!(parse("Go Executor 3"), Ok(Command::Go(Some(3))));
+        assert_eq!(parse("b exec 2"), Ok(Command::Back(Some(2))));
+        assert_eq!(parse("Off"), Ok(Command::Off(None)));
+        assert_eq!(parse("Goto Cue 2.5"), Ok(Command::Goto(cue("2.5"))));
+        assert_eq!(parse("Executor 4"), Ok(Command::SelectExecutor(4)));
+        assert_eq!(parse("Exec 4 At 75"), Ok(Command::SetFader(4, 75.0)));
+        assert_eq!(
+            parse(r#"Store Cue 3 Fade 4 "Entrée""#),
+            Ok(Command::Store { object: Object::Cue(Some(cue("3"))), name: Some("Entrée".into()), fade: Some(4.0) })
+        );
+        assert_eq!(parse("st cu"), Ok(Command::Store { object: Object::Cue(None), name: None, fade: None }));
+        assert_eq!(parse("Delete Cue 1.5"), Ok(Command::Delete(Object::Cue(Some(cue("1.5"))))));
+        assert!(parse("Delete Cue").is_err());
+        assert!(parse("Store Group 1 Fade 3").is_err());
+        assert!(parse("Goto 5").unwrap_err().0.contains("Goto Cue"));
     }
 
     #[test]
