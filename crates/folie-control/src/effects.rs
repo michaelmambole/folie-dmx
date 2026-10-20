@@ -49,7 +49,11 @@ pub fn instance(effect: &Effect, id: u64, patch: &Patch) -> EffectInstance {
                         .map(move |(parameter, _)| (ParamKey { fixture: target.fixture, parameter }, phase))
                 })
                 .collect();
-            EngineLine { waveform: waveform(line.waveform), low: percent(line.low), high: percent(line.high), params }
+            // Relatif : écarts signés autour de la valeur en cours ; sinon valeurs de 0 à 100 %.
+            let level = |p: f32| {
+                if line.relative { (p.clamp(-100.0, 100.0) / 100.0 * u16::MAX as f32).round() as i32 } else { percent(p) as i32 }
+            };
+            EngineLine { waveform: waveform(line.waveform), low: level(line.low), high: level(line.high), relative: line.relative, params }
         })
         .collect();
     let rate = match effect.rate {

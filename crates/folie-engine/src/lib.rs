@@ -583,10 +583,13 @@ impl Engine {
             let mut values = playback.values(cues, now, |k| Self::is_intensity(patch, k), under);
             // Les effets de la cue en cours passent devant ses valeurs fixes.
             if let Some(cue) = playback.current().and_then(|c| cues.get(c)) {
+                let mut animated = HashMap::new();
                 for effect in &cue.effects {
                     let phase = phases.advance(effect, dt * playback.effect_speed(), bpm);
-                    values.extend(effect.values(phase));
+                    // Un effet relatif tourne autour de la valeur de la cue, sinon de ce qui est dessous.
+                    animated.extend(effect.values(phase, |k| values.get(k).copied().unwrap_or_else(|| under(k))));
                 }
+                values.extend(animated);
             }
             let priority = playback.options.priority;
             let swopped = swop && !playback.swopping && !playback.options.swop_protect;
@@ -639,11 +642,17 @@ impl Engine {
         self.last_frame = now;
         self.advance_chasers(dt);
         let mut values = self.playback_values(now, dt);
+        // Le programmer passe devant les executors, et ses effets devant ses valeurs fixes ;
+        // un effet relatif tourne autour de ce qui est dessous.
+        values.extend(self.state.attributes.iter().map(|(k, v)| (*k, *v)));
         let mut programmer_effects = HashMap::new();
         for effect in &self.programmer_effects {
             let phase = self.phases.advance(effect, dt, self.state.tempo);
-            programmer_effects.extend(effect.values(phase));
+            let patch = &self.state.patch;
+            programmer_effects
+                .extend(effect.values(phase, |k| values.get(k).copied().unwrap_or_else(|| Self::default_value(patch, k))));
         }
+        values.extend(programmer_effects);
         self.state.running_effects = self.phases.running();
         self.phases.end_frame();
         self.state.executors = self
@@ -657,9 +666,6 @@ impl Engine {
         if state.blackout {
             return;
         }
-        // Le programmer passe devant les executors, et ses effets devant ses valeurs fixes.
-        values.extend(state.attributes.iter().map(|(k, v)| (*k, *v)));
-        values.extend(programmer_effects);
         state.patch.render(&values, &mut state.output);
         for (out, overrides) in state.output.iter_mut().zip(&state.channel_overrides) {
             for (slot, forced) in out.as_mut_slice().iter_mut().zip(overrides.iter()) {
@@ -847,7 +853,7 @@ mod tests {
         let effect = EffectInstance {
             id: 1,
             rate: Rate::Hz(0.0),
-            lines: vec![EffectLine { waveform: Waveform::Square, low: 0x1000, high: 0xC000, params: vec![(pan, 0.0)] }],
+            lines: vec![EffectLine { waveform: Waveform::Square, low: 0x1000, high: 0xC000, relative: false, params: vec![(pan, 0.0)] }],
         };
         engine.send(Command::SetProgrammerEffects(vec![effect.clone()]));
         assert_eq!(out(10), 0xC0);

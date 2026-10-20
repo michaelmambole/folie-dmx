@@ -59,6 +59,8 @@ pub struct EffectLine {
     pub high: f32,
     /// Décalage propre à la ligne, en degrés (ex. tilt à 90° du pan pour un cercle).
     pub phase: f32,
+    /// Relatif : `low` et `high` sont des écarts (−100 à +100 %) autour de la valeur en cours.
+    pub relative: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,7 +97,12 @@ impl Effect {
 }
 
 fn line(attribute: Attribute, waveform: Waveform, low: f32, high: f32, phase: f32) -> EffectLine {
-    EffectLine { attribute, waveform, low, high, phase }
+    EffectLine { attribute, waveform, low, high, phase, relative: false }
+}
+
+/// Ligne relative : de `low` à `high` (en %) autour de la valeur en cours.
+fn around(attribute: Attribute, waveform: Waveform, low: f32, high: f32, phase: f32) -> EffectLine {
+    EffectLine { relative: true, ..line(attribute, waveform, low, high, phase) }
 }
 
 /// Effets modèles proposés dans la fenêtre Effets : `Effect 1` à `Effect 6`.
@@ -118,9 +125,10 @@ pub fn templates() -> Vec<Effect> {
             "Cercle",
             EffectRate::Beats(4.0),
             0.0,
+            // Autour de la position en cours, comme sur grandMA2.
             vec![
-                line(Attribute::Pan, Waveform::Sine, 40.0, 60.0, 0.0),
-                line(Attribute::Tilt, Waveform::Sine, 40.0, 60.0, 90.0),
+                around(Attribute::Pan, Waveform::Sine, -10.0, 10.0, 0.0),
+                around(Attribute::Tilt, Waveform::Sine, -10.0, 10.0, 90.0),
             ],
         ),
         effect(
@@ -165,6 +173,8 @@ struct LineEntry {
     low: f32,
     high: f32,
     phase: f32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    relative: bool,
 }
 
 impl EffectEntry {
@@ -184,6 +194,7 @@ impl EffectEntry {
                     low: l.low,
                     high: l.high,
                     phase: l.phase,
+                    relative: l.relative,
                 })
                 .collect(),
             spread: effect.spread,
@@ -199,12 +210,14 @@ impl EffectEntry {
             .lines
             .into_iter()
             .filter_map(|l| {
+                let range = if l.relative { -100.0..=100.0 } else { 0.0..=100.0 };
                 Some(EffectLine {
                     attribute: Attribute::from_key(&l.attribute)?,
                     waveform: Waveform::from_key(&l.waveform)?,
-                    low: l.low.clamp(0.0, 100.0),
-                    high: l.high.clamp(0.0, 100.0),
+                    low: l.low.clamp(*range.start(), *range.end()),
+                    high: l.high.clamp(*range.start(), *range.end()),
                     phase: l.phase,
+                    relative: l.relative,
                 })
             })
             .collect();

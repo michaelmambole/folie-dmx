@@ -1275,4 +1275,19 @@ mod tests {
         assert_eq!(err, "aucun paramètre « Couleur magique » dans la sélection");
         assert!(c.execute("Executor 1 At + 10").is_err(), "un fader prend une valeur absolue");
     }
+
+    #[test]
+    fn relative_circle_turns_around_the_current_position() {
+        let mut c = console();
+        run(&mut c, r#"Fixture 1 Attribute "Pan" At 50"#);
+        run(&mut c, r#"Attribute "Tilt" At 20"#);
+        run(&mut c, "Tempo 600"); // un cycle de 4 temps en 0,4 s
+        run(&mut c, "Effect 4"); // Cercle, relatif : ±10 % autour de la position
+        // MH 6 : Pan sur les canaux 10-11, Tilt sur 12-13.
+        let samples: Vec<(u8, u8)> = (0..8).map(|_| (dmx(&c, 10), dmx(&c, 12))).collect();
+        let (pans, tilts): (Vec<u8>, Vec<u8>) = samples.into_iter().unzip();
+        assert!(pans.iter().all(|p| (100..=155).contains(p)), "pan autour de 50 % (128) : {pans:?}");
+        assert!(tilts.iter().all(|t| (25..=78).contains(t)), "tilt autour de 20 % (51) : {tilts:?}");
+        assert!(pans.iter().max() != pans.iter().min(), "le pan bouge : {pans:?}");
+    }
 }

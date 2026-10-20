@@ -58,8 +58,12 @@ impl Rate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectLine {
     pub waveform: Waveform,
-    pub low: u16,
-    pub high: u16,
+    /// Valeurs basse et haute sur 16 bits ; relatives, ce sont des écarts (signés).
+    pub low: i32,
+    pub high: i32,
+    /// Relatif : l'effet oscille autour de la valeur qui est sous lui (programmer, cue,
+    /// valeur par défaut) au lieu d'aller d'une valeur fixe à une autre.
+    pub relative: bool,
     pub params: Vec<(ParamKey, f32)>,
 }
 
@@ -73,13 +77,19 @@ pub struct EffectInstance {
 }
 
 impl EffectInstance {
-    pub fn values(&self, phase: f64) -> HashMap<ParamKey, u16> {
+    /// Valeurs de l'effet à cette phase. `base` donne la valeur sous l'effet, autour de
+    /// laquelle tournent les lignes relatives.
+    pub fn values(&self, phase: f64, base: impl Fn(&ParamKey) -> u16) -> HashMap<ParamKey, u16> {
         let mut values = HashMap::new();
         for line in &self.lines {
             let (low, high) = (line.low as f64, line.high as f64);
             for (key, offset) in &line.params {
                 let level = line.waveform.level(phase + *offset as f64);
-                values.insert(*key, (low + (high - low) * level).round() as u16);
+                let mut value = low + (high - low) * level;
+                if line.relative {
+                    value += base(key) as f64;
+                }
+                values.insert(*key, value.round().clamp(0.0, u16::MAX as f64) as u16);
             }
         }
         values
@@ -151,13 +161,23 @@ mod tests {
                 waveform: Waveform::RampUp,
                 low: 0,
                 high: 1000,
+                relative: false,
                 params: vec![(key(1), 0.0), (key(2), 0.5)],
             }],
         };
         let mut phases = Phases::default();
         let phase = phases.advance(&effect, 0.25, 120.0);
-        let v = effect.values(phase);
+        let v = effect.values(phase, |_| 0);
         assert_eq!((v[&key(1)], v[&key(2)]), (250, 750), "la 2e fixture a une demi-période d'avance");
+
+        // Relatif : autour de la valeur sous l'effet, sans sortir de 0–65535.
+        let around = EffectInstance {
+            lines: vec![EffectLine { low: -2000, high: 2000, relative: true, ..effect.lines[0].clone() }],
+            ..effect.clone()
+        };
+        let v = around.values(0.25, |k| if k.fixture.0 == 1 { 30_000 } else { 65_000 });
+        assert_eq!(v[&key(1)], 29_000, "un quart de rampe : -1000 autour de 30000");
+        assert_eq!(v[&key(2)], 65_535, "borné en haut");
 
         // Changer la vitesse ne fait pas sauter la phase : elle repart d'où elle était.
         let faster = EffectInstance { rate: Rate::Hz(2.0), ..effect.clone() };

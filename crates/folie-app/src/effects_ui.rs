@@ -87,11 +87,14 @@ fn template_tile(ui: &mut egui::Ui, number: u32, template: &Effect) -> bool {
     response.on_hover_text("Lancer sur la sélection").clicked()
 }
 
-/// Plage basse–haute d'une ligne, de 0 à 100 % : bande violette dont on glisse
-/// le bord le plus proche. Renvoie `true` si la plage a changé.
-fn range_bar(ui: &mut egui::Ui, id: egui::Id, low: &mut f32, high: &mut f32, width: f32) -> bool {
+/// Plage basse–haute d'une ligne : bande violette dont on glisse le bord le plus proche.
+/// De 0 à 100 %, ou de −100 à +100 % autour de la valeur en cours (trait blanc) pour une
+/// ligne relative. Renvoie `true` si la plage a changé.
+fn range_bar(ui: &mut egui::Ui, id: egui::Id, low: &mut f32, high: &mut f32, relative: bool, width: f32) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 14.0), Sense::click_and_drag());
-    let value_at = |x: f32| ((x - rect.left()) / rect.width() * 100.0).clamp(0.0, 100.0);
+    let min = if relative { -100.0 } else { 0.0 };
+    let value_at = |x: f32| (min + (x - rect.left()) / rect.width() * (100.0 - min)).clamp(min, 100.0);
+    let x_of = |v: f32| rect.left() + rect.width() * (v - min) / (100.0 - min);
     let mut changed = false;
     if let Some(pos) = response.interact_pointer_pos() {
         // Bord saisi au début du geste : on le garde jusqu'au relâchement.
@@ -113,15 +116,17 @@ fn range_bar(ui: &mut egui::Ui, id: egui::Id, low: &mut f32, high: &mut f32, wid
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, theme::SURFACE_2);
     let (a, b) = (low.min(*high), low.max(*high));
-    let band = egui::Rect::from_x_y_ranges(
-        rect.left() + rect.width() * a / 100.0..=rect.left() + rect.width() * b / 100.0,
-        rect.y_range(),
-    );
+    let band = egui::Rect::from_x_y_ranges(x_of(a)..=x_of(b), rect.y_range());
     painter.rect_filled(band, 3.0, theme::EFFECT.gamma_multiply(0.55));
+    if relative {
+        // La valeur en cours, au centre : l'effet tourne autour.
+        let center = egui::Rect::from_center_size(egui::pos2(x_of(0.0), rect.center().y), vec2(2.0, rect.height() + 6.0));
+        painter.rect_filled(center, 1.0, theme::TEXT);
+    }
     if response.hovered() || response.dragged() {
         painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::MUTED), egui::StrokeKind::Inside);
     }
-    let text = format!("Plage {a:.0}–{b:.0} %");
+    let text = if relative { format!("Plage {a:+.0} à {b:+.0} % autour de la valeur") } else { format!("Plage {a:.0}–{b:.0} %") };
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, &text));
     changed
 }
@@ -252,17 +257,35 @@ fn effect_settings(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> bool
                 })
                 .response
                 .on_hover_text(format!("Forme d'onde : {name}"));
+            // Absolu (de bas en haut) ou relatif (autour de la valeur en cours).
+            let mut relative = line.relative;
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // Violet : c'est un réglage d'effet.
+                ui.visuals_mut().selection.bg_fill = theme::EFFECT.gamma_multiply(0.3);
+                ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, theme::EFFECT);
+                ui.selectable_value(&mut relative, false, "Absolu").on_hover_text(format!("{name} : entre deux valeurs fixes"));
+                ui.selectable_value(&mut relative, true, "Relatif").on_hover_text(format!("{name} : autour de la valeur en cours"));
+            });
+            if relative != line.relative {
+                line.relative = relative;
+                (line.low, line.high) = if relative { (-10.0, 10.0) } else { (0.0, 100.0) };
+                changed = true;
+            }
             let id = ui.make_persistent_id(("range-edge", index, line_index));
             let width = (ui.available_width() - 250.0).clamp(80.0, 260.0);
-            changed |= range_bar(ui, id, &mut line.low, &mut line.high, width);
-            changed |= ui
-                .add(egui::DragValue::new(&mut line.low).range(0.0..=100.0).prefix("bas ").suffix(" %"))
-                .on_hover_text(format!("Valeur basse : {name}"))
-                .changed();
-            changed |= ui
-                .add(egui::DragValue::new(&mut line.high).range(0.0..=100.0).prefix("haut ").suffix(" %"))
-                .on_hover_text(format!("Valeur haute : {name}"))
-                .changed();
+            changed |= range_bar(ui, id, &mut line.low, &mut line.high, line.relative, width);
+            let (range, low, high) =
+                if line.relative { (-100.0..=100.0, "de ", "à ") } else { (0.0..=100.0, "bas ", "haut ") };
+            // En relatif, le signe est toujours écrit : « de -10 % à +10 % ».
+            fn field<'a>(value: &'a mut f32, range: std::ops::RangeInclusive<f32>, prefix: &str, signed: bool) -> egui::DragValue<'a> {
+                let field = egui::DragValue::new(value).range(range).prefix(prefix).suffix(" %");
+                if signed { field.custom_formatter(|v, _| format!("{v:+}")) } else { field }
+            }
+            let signed = line.relative;
+            changed |=
+                ui.add(field(&mut line.low, range.clone(), low, signed)).on_hover_text(format!("Valeur basse : {name}")).changed();
+            changed |= ui.add(field(&mut line.high, range, high, signed)).on_hover_text(format!("Valeur haute : {name}")).changed();
             changed |= ui
                 .add(egui::DragValue::new(&mut line.phase).range(-360.0..=360.0).prefix("phase ").suffix("°"))
                 .on_hover_text(format!("Décalage : {name}"))

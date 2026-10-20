@@ -95,7 +95,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Effets dans le programmer, enregistrés dans les cues, suivis par tracking
 - [x] Fenêtre Effets (⌘7)
 - [ ] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
-- [ ] Effets relatifs (autour de la valeur en cours) et sur presets
+- [x] Effets relatifs (autour de la valeur en cours, donc aussi d'un preset rappelé) ; Cercle relatif
 - [ ] Pool d'effets personnalisés, rapport cyclique du carré, aléatoire
 - [ ] Effets visibles dans la fenêtre Programmer
 

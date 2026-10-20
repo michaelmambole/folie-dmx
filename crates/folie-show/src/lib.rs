@@ -702,7 +702,10 @@ mod tests {
         );
         let mut wave = effects::templates()[2].clone();
         wave.targets = vec!["1".parse().unwrap(), "10.2".parse().unwrap()];
-        cue.effects = Some(vec![wave]);
+        let mut circle = effects::templates()[3].clone();
+        circle.targets = vec!["1".parse().unwrap()];
+        assert!(circle.lines.iter().all(|l| l.relative), "le cercle tourne autour de la position");
+        cue.effects = Some(vec![wave, circle]);
         cue.family_times.insert(FeatureGroup::Position, ParamTiming { fade: Some(4.0), delay: None });
         cue.param_times
             .entry(FixtureId(1))

@@ -943,6 +943,21 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state().console.programmer_effects().is_empty());
         assert_eq!(harness.state().snapshot.running_effects, 0);
+
+        // Le Cercle tourne autour de la position en cours : ses deux lignes sont relatives.
+        harness.get_by_label("4 Cercle").click();
+        settle(&mut harness);
+        assert_eq!(harness.get_all_by_label("Plage -10 à +10 % autour de la valeur").count(), 2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("effects-relative.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        // Le Pan repasse en absolu : de 0 à 100 %.
+        harness.get_all_by_label("Absolu").next().unwrap().click();
+        harness.run_steps(2);
+        let pan = harness.state().console.programmer_effects()[0].lines[0].clone();
+        assert!(!pan.relative && pan.low == 0.0 && pan.high == 100.0, "{pan:?}");
+        harness.get_by_label("Plage 0–100 %");
     }
 
     #[test]
