@@ -976,6 +976,73 @@ mod tests {
     }
 
     #[test]
+    fn executor_options_menu_chaser_and_release() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Executors,
+            placement: Placement::at_size(egui::pos2(900.0, 700.0), egui::vec2(1350.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Jardin""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 2 At 100");
+        command(&mut harness, r#"Store Cue Fade 0 "Cour""#);
+        command(&mut harness, "ClearAll");
+
+        // Clic droit sur le numéro de l'executor 1 : les deux colonnes d'options.
+        harness.get_all(By::new().role(Role::Button).label("1")).find(|n| n.rect().min.y > 700.0).unwrap().click_secondary();
+        harness.run_steps(2);
+        for label in ["Chenillard (les cues défilent seules)", "Aller-retour", "Ooo : s'éteint quand tout est repris", "Kill", "Swop"] {
+            harness.get_all_by_label(label).next().unwrap().click();
+            harness.run_steps(2);
+        }
+        harness.get_all_by_label("Kill").nth(1).unwrap().click(); // celui des protections
+        harness.run_steps(2);
+        harness.get_by_label("= 0,50 s par pas");
+        let x = harness.state().console.show.executors[&1];
+        assert_eq!(x.mode, folie_show::ExecutorMode::Swop, "le dernier mode cliqué");
+        assert!(x.options.chaser && x.options.ooo);
+        assert!(x.options.kill_protect, "« Kill » de la colonne Protections");
+        assert_eq!(x.options.chaser_settings.direction, folie_show::ChaserDirection::Bounce);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-options.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        harness.get_by_label("Swop · chenillard 120 · Ooo");
+
+        // Le chenillard tourne : les deux cues défilent.
+        let options = folie_show::ExecutorOptions { chaser: true, ..Default::default() };
+        harness.state_mut().console.set_executor_options(1, options).unwrap();
+        harness.state_mut().console.set_executor_mode(1, folie_show::ExecutorMode::Go).unwrap();
+        settle(&mut harness);
+        harness.state_mut().console.press(1).unwrap();
+        settle(&mut harness);
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..12 {
+            settle(&mut harness);
+            seen.extend(harness.state().snapshot.executors[&1].cue);
+        }
+        assert_eq!(seen.len(), 2, "deux pas joués");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-chaser.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Release depuis la fenêtre Programmer.
+        command(&mut harness, "Fixture 1");
+        harness.get_by_label("Release").click();
+        harness.run_steps(2);
+        assert!(!harness.state().console.released().is_empty());
+    }
+
+    #[test]
     fn tracking_window_shows_origins() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

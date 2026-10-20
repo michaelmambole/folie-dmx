@@ -8,7 +8,7 @@
 mod effects;
 mod playback;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use folie_dmx::{CHANNELS_PER_UNIVERSE, DmxOutput, Universe};
 use folie_fixture::{Attribute, ParamKey, Patch};
 
 pub use effects::{EffectInstance, EffectLine, Rate, Waveform};
-pub use playback::{CueState, ExecutorStatus, FaderMode, PlaybackOptions, Sequences};
+pub use playback::{ChaserDirection, ChaserOptions, CueState, ExecutorStatus, FaderMode, PlaybackOptions, Restart, Sequences};
 use effects::Phases;
 use playback::{Playback, Timing, Transition};
 
@@ -65,6 +65,12 @@ pub enum Command {
     Flash { executor: u32, pressed: bool },
     /// Allume l'executor s'il est éteint, l'éteint sinon.
     Toggle(u32),
+    /// Comme Flash, et les autres executors (sauf protégés du Swop) s'éteignent tant que la touche est maintenue.
+    Swop { executor: u32, pressed: bool },
+    /// Go sur l'executor, et Off sur tous les autres, sauf ceux protégés du Kill.
+    Kill(u32),
+    /// L'executor reprend la main sur ce qu'il tient, au temps de sa cue en cours.
+    Assert(u32),
     /// Options de fonctionnement de chaque executor (remplace les précédentes).
     SetExecutorOptions(HashMap<u32, PlaybackOptions>),
     /// Éteint tous les executors, sauf ceux qui sont protégés.
@@ -308,43 +314,44 @@ impl Engine {
                     }
                     self.sequences = sequences;
                 }
-                Command::Flash { executor, pressed } => {
-                    if let Some(playback) = self.playbacks.get_mut(&executor) {
-                        playback.flashing = pressed;
-                    }
-                    let target = move |current: Option<usize>, len: usize| match (pressed, current) {
-                        (true, None) if len > 0 => Some(Some(0)),
-                        (false, Some(_)) => Some(None),
-                        _ => None,
-                    };
-                    self.transition_with(executor, |_| Timing::Snap, target);
-                }
+                Command::Flash { executor, pressed } => self.flash(executor, pressed, false),
+                Command::Swop { executor, pressed } => self.flash(executor, pressed, true),
                 Command::Toggle(executor) => {
                     let on = self.playbacks.get(&executor).is_some_and(|p| p.current().is_some());
                     if on {
                         self.off(executor);
                     } else {
-                        self.transition(executor, |_, len| (len > 0).then_some(Some(0)));
+                        self.start(executor, false);
                     }
                 }
-                Command::Go(executor) => {
-                    let wrap = self.playbacks.get(&executor).is_some_and(|p| p.options.wrap);
-                    self.transition(executor, move |current, len| match current {
-                        None if len > 0 => Some(Some(0)),
-                        Some(c) if c + 1 < len => Some(Some(c + 1)),
-                        // Fin de séquence : on boucle si l'option est active, sinon on reste.
-                        Some(_) if wrap && len > 0 => Some(Some(0)),
-                        _ => None,
-                    });
+                Command::Go(executor) => self.go(executor),
+                Command::Kill(executor) => {
+                    self.go(executor);
+                    let others: Vec<u32> = self
+                        .playbacks
+                        .iter()
+                        .filter(|(e, p)| **e != executor && p.current().is_some() && !p.options.kill_protect)
+                        .map(|(e, _)| *e)
+                        .collect();
+                    for other in others {
+                        self.off(other);
+                    }
                 }
-                Command::Back(executor) => self.transition_with(
-                    executor,
-                    |o| o.back_time.map_or(Timing::Cue, Timing::Fixed),
-                    |current, _| match current {
-                        Some(c) if c > 0 => Some(Some(c - 1)),
-                        _ => None,
-                    },
-                ),
+                Command::Assert(executor) => self.assert(executor),
+                Command::Back(executor) => {
+                    if self.playbacks.get(&executor).is_some_and(|p| p.options.chaser.is_some() && p.current().is_some()) {
+                        self.chaser_step(executor, false);
+                    } else {
+                        self.transition_with(
+                            executor,
+                            |o| o.back_time.map_or(Timing::Cue, Timing::Fixed),
+                            |current, _| match current {
+                                Some(c) if c > 0 => Some(Some(c - 1)),
+                                _ => None,
+                            },
+                        )
+                    }
+                }
                 Command::Goto { executor, cue } => {
                     self.transition(executor, |_, len| (cue < len).then_some(Some(cue)))
                 }
@@ -390,18 +397,143 @@ impl Engine {
         self.transition_with(executor, |o| Timing::Fixed(o.off_time), |current, _| current.map(|_| None));
     }
 
-    /// Fader : Temp et Auto start lancent la cue 1 en sortant de 0, Temp et Auto stop éteignent à 0.
+    /// Flash (ou Swop) : allume tout de suite, à fond, et éteint au relâchement.
+    fn flash(&mut self, executor: u32, pressed: bool, swop: bool) {
+        let Some(playback) = self.playbacks.get_mut(&executor) else { return };
+        playback.flashing = pressed;
+        playback.swopping = swop && pressed;
+        match (pressed, playback.current()) {
+            (true, None) => self.start(executor, true),
+            (false, Some(_)) => self.transition_with(executor, |_| Timing::Snap, |_, _| Some(None)),
+            _ => {}
+        }
+    }
+
+    /// Durée d'un pas de chenillard, en secondes ; `None` à l'arrêt (vitesse nulle).
+    fn step_seconds(&self, playback: &Playback) -> Option<f64> {
+        let chaser = playback.options.chaser?;
+        let rate = chaser.bpm.unwrap_or(self.state.tempo) as f64 / 60.0 * playback.effect_speed();
+        (rate > 0.0).then(|| 1.0 / rate)
+    }
+
+    /// Temps d'un départ ou d'un Go : celui de la cue, ou le fondu entre pas d'un chenillard.
+    fn go_timing(&self, executor: u32) -> Timing {
+        let Some(playback) = self.playbacks.get(&executor) else { return Timing::Cue };
+        match playback.options.chaser {
+            Some(chaser) => Timing::Fixed(self.step_seconds(playback).map_or(0.0, |s| s as f32 * chaser.step_fade)),
+            None => Timing::Cue,
+        }
+    }
+
+    /// Allume un executor éteint, sur la cue que donne son mode de reprise.
+    fn start(&mut self, executor: u32, snap: bool) {
+        let timing = if snap { Timing::Snap } else { self.go_timing(executor) };
+        let len = self.sequences.get(&executor).map_or(0, |c| c.len());
+        let Some(playback) = self.playbacks.get_mut(&executor) else { return };
+        let Some(cue) = playback.start_cue(len) else { return };
+        playback.reset_chaser();
+        self.transition_with(executor, move |_| timing, move |_, _| Some(Some(cue)));
+    }
+
+    /// Go : allume, sinon cue suivante (pas suivant pour un chenillard).
+    fn go(&mut self, executor: u32) {
+        let Some(playback) = self.playbacks.get(&executor) else {
+            log::warn!("executor {executor} sans séquence");
+            return;
+        };
+        if playback.current().is_none() {
+            self.start(executor, false);
+        } else if playback.options.chaser.is_some() {
+            self.chaser_step(executor, true);
+        } else {
+            let wrap = playback.options.wrap;
+            self.transition(executor, move |current, len| match current {
+                Some(c) if c + 1 < len => Some(Some(c + 1)),
+                // Fin de séquence : on boucle si l'option est active, sinon on reste.
+                Some(_) if wrap && len > 0 => Some(Some(0)),
+                _ => None,
+            });
+        }
+    }
+
+    /// Pas suivant (ou précédent) d'un chenillard en marche ; le pas repart de zéro.
+    fn chaser_step(&mut self, executor: u32, forward: bool) {
+        let timing = self.go_timing(executor);
+        let len = self.sequences.get(&executor).map_or(0, |c| c.len());
+        let Some(playback) = self.playbacks.get_mut(&executor) else { return };
+        let Some(next) = playback.chaser_next(len, forward) else { return };
+        playback.step_phase = 0.0;
+        self.transition_with(executor, move |_| timing, move |_, _| Some(Some(next)));
+    }
+
+    /// Fait avancer les chenillards en marche.
+    fn advance_chasers(&mut self, dt: f64) {
+        let running: Vec<(u32, f64)> = self
+            .playbacks
+            .iter()
+            .filter(|(_, p)| p.current().is_some())
+            .filter_map(|(e, p)| Some((*e, self.step_seconds(p)?)))
+            .collect();
+        for (executor, seconds) in running {
+            let Some(playback) = self.playbacks.get_mut(&executor) else { continue };
+            let phase = playback.step_phase + dt / seconds;
+            playback.step_phase = phase;
+            if phase >= 1.0 {
+                self.chaser_step(executor, true);
+                if let Some(playback) = self.playbacks.get_mut(&executor) {
+                    playback.step_phase = phase.fract();
+                }
+            }
+        }
+    }
+
+    fn assert(&mut self, executor: u32) {
+        let (Some(cues), Some(playback)) = (self.sequences.get(&executor), self.playbacks.get_mut(&executor)) else { return };
+        self.activations += 1;
+        let (patch, stage) = (&self.state.patch, &self.stage);
+        let under = |k: &ParamKey| stage.get(k).copied().unwrap_or_else(|| Self::default_value(patch, k));
+        let transition = Transition { now: Instant::now(), activated: self.activations, timing: Timing::Cue };
+        playback.assert(cues, transition, |k| Self::is_intensity(patch, k), under);
+    }
+
+    /// Fader : Temp et Auto start allument en sortant de 0, Temp et Auto stop éteignent à 0.
+    /// En crossfade, il mène la transition vers la cue suivante.
     fn set_fader(&mut self, executor: u32, level: f32) {
         let Some(playback) = self.playbacks.get_mut(&executor) else { return };
         let previous = playback.level;
         playback.level = level;
         let options = playback.options;
         let on = playback.current().is_some();
+        if options.fader == FaderMode::Crossfade {
+            self.crossfade(executor, previous, level);
+            return;
+        }
         let temp = options.fader == FaderMode::Temp;
         if (temp || options.auto_start) && previous == 0.0 && level > 0.0 && !on {
-            self.transition(executor, |_, len| (len > 0).then_some(Some(0)));
+            self.start(executor, false);
         } else if (temp || options.auto_stop) && level == 0.0 && on {
             self.off(executor);
+        }
+    }
+
+    /// Crossfade A/B : quitter une extrémité lance la transition vers la cue suivante
+    /// (la première si l'executor est éteint), atteindre l'autre la termine.
+    fn crossfade(&mut self, executor: u32, previous: f32, level: f32) {
+        let len = self.sequences.get(&executor).map_or(0, |c| c.len());
+        let Some(playback) = self.playbacks.get_mut(&executor) else { return };
+        if !playback.in_manual() && level != previous {
+            let target = match playback.current() {
+                None => playback.start_cue(len),
+                Some(c) if c + 1 < len => Some(c + 1),
+                Some(_) if playback.options.wrap && len > 0 => Some(0),
+                Some(_) => None,
+            };
+            let Some(target) = target else { return };
+            let origin = if previous >= 0.5 { 1.0 } else { 0.0 };
+            self.transition_with(executor, move |_| Timing::Manual(origin), move |_, _| Some(Some(target)));
+        }
+        if let Some(playback) = self.playbacks.get_mut(&executor) {
+            playback.set_manual(level);
         }
     }
 
@@ -436,13 +568,18 @@ impl Engine {
     fn playback_values(&mut self, now: Instant, dt: f64) -> HashMap<ParamKey, u16> {
         let patch = &self.state.patch;
         let (bpm, phases) = (self.state.tempo, &mut self.phases);
+        // Un Swop maintenu éteint l'intensité des autres executors, sauf les protégés.
+        let swop = self.playbacks.values().any(|p| p.swopping && p.current().is_some());
         let mut order: Vec<(&u32, &mut Playback)> = self.playbacks.iter_mut().collect();
         order.sort_by_key(|(_, p)| (p.options.priority, p.activated));
-        let mut merged: HashMap<ParamKey, (i8, u16)> = HashMap::new();
+        // Paramètre -> (priorité, valeur, executor qui la donne).
+        let mut merged: HashMap<ParamKey, (i8, u16, u32)> = HashMap::new();
+        // Executors en Ooo qui tiennent quelque chose : ceux qui ne donnent plus rien s'éteignent.
+        let mut ooo = Vec::new();
         for (executor, playback) in order {
             let Some(cues) = self.sequences.get(executor) else { continue };
             // Sous cet executor : ce que les précédents (priorité plus basse) ont déjà mis.
-            let under = |k: &ParamKey| merged.get(k).map_or_else(|| Self::default_value(patch, k), |(_, v)| *v);
+            let under = |k: &ParamKey| merged.get(k).map_or_else(|| Self::default_value(patch, k), |(_, v, _)| *v);
             let mut values = playback.values(cues, now, |k| Self::is_intensity(patch, k), under);
             // Les effets de la cue en cours passent devant ses valeurs fixes.
             if let Some(cue) = playback.current().and_then(|c| cues.get(c)) {
@@ -452,21 +589,35 @@ impl Engine {
                 }
             }
             let priority = playback.options.priority;
+            let swopped = swop && !playback.swopping && !playback.options.swop_protect;
+            let level = if swopped { 0.0 } else { playback.intensity_level() };
+            if playback.options.ooo && playback.current().is_some() && !values.is_empty() {
+                ooo.push(*executor);
+            }
             for (key, value) in values {
                 if Self::is_intensity(patch, &key) {
-                    let scaled = (value as f32 * playback.intensity_level()).round() as u16;
-                    let slot = merged.entry(key).or_insert((priority, 0));
-                    *slot = if priority > slot.0 { (priority, scaled) } else { (priority, slot.1.max(scaled)) };
+                    // HTP : la plus haute gagne ; à égalité, le dernier lancé la reprend.
+                    let scaled = (value as f32 * level).round() as u16;
+                    let slot = merged.entry(key).or_insert((priority, 0, *executor));
+                    if priority > slot.0 || scaled >= slot.1 {
+                        *slot = (priority, scaled, *executor);
+                    }
                 } else {
                     // Ordre croissant de priorité puis de déclenchement : le dernier écrit gagne.
-                    merged.insert(key, (priority, value));
+                    merged.insert(key, (priority, value, *executor));
                 }
             }
             playback.settle(now);
         }
-        let values: HashMap<ParamKey, u16> = merged.into_iter().map(|(k, (_, v))| (k, v)).collect();
+        let owners: HashSet<u32> = merged.values().map(|(_, _, e)| *e).collect();
+        let values: HashMap<ParamKey, u16> = merged.into_iter().map(|(k, (_, v, _))| (k, v)).collect();
         self.stage.clone_from(&values);
         self.state.stage.clone_from(&values);
+        if !swop {
+            for executor in ooo.into_iter().filter(|e| !owners.contains(e)) {
+                self.off(executor);
+            }
+        }
         values
     }
 
@@ -486,6 +637,7 @@ impl Engine {
         let now = Instant::now();
         let dt = now.saturating_duration_since(self.last_frame).as_secs_f64();
         self.last_frame = now;
+        self.advance_chasers(dt);
         let mut values = self.playback_values(now, dt);
         let mut programmer_effects = HashMap::new();
         for effect in &self.programmer_effects {
@@ -807,6 +959,139 @@ mod tests {
         assert_eq!((out(2), out(10)), (0x20, 0xA0));
         assert_eq!(engine.snapshot().executors[&1].cue, None);
         assert_eq!(engine.snapshot().executors[&2].cue, Some(0));
+        engine.shutdown();
+    }
+
+    #[test]
+    fn chasers_crossfade_swop_kill_ooo_and_assert() {
+        use folie_fixture::{FixtureId, PatchedFixture, ofl};
+
+        let json = include_str!("../../../library/martin/rush-mh-6-wash.json");
+        let mh6 = Arc::new(ofl::parse(json, "martin/rush-mh-6-wash", "Martin").unwrap());
+        let mut patch = Patch::default();
+        let fixture =
+            PatchedFixture { id: FixtureId(1), name: "MH6".into(), fixture_type: mh6, mode: 0, universe: 0, address: 1 };
+        patch.add(fixture).unwrap();
+        let (dimmer, pan) = (ParamKey { fixture: FixtureId(1), parameter: 1 }, ParamKey { fixture: FixtureId(1), parameter: 8 });
+        let state = |d: u16, p: u16| CueState {
+            label: String::new(),
+            values: HashMap::from([(dimmer, d), (pan, p)]),
+            fade: 0.0,
+            delay: 0.0,
+            times: HashMap::new(),
+            effects: Vec::new(),
+        };
+        let sequences: Sequences = HashMap::from([
+            (1, Arc::new(vec![state(0x4000, 0x1000), state(0x8000, 0x2000), state(0xC000, 0x3000)])),
+            (2, Arc::new(vec![state(0x2000, 0xA000)])),
+        ]);
+        let last = Arc::new(StdMutex::new(None));
+        let engine = spawn(
+            EngineConfig { universes: 1, rate_hz: 200.0 },
+            vec![OutputBinding { universe: 0, output: Box::new(Capture(last.clone())) }],
+        );
+        let out = |channel| {
+            std::thread::sleep(Duration::from_millis(30));
+            last.lock().unwrap().as_ref().unwrap().get(channel).unwrap()
+        };
+        let cue = |executor| {
+            std::thread::sleep(Duration::from_millis(30));
+            engine.snapshot().executors[&executor].cue
+        };
+        let options = |o1: PlaybackOptions, o2: PlaybackOptions| Command::SetExecutorOptions(HashMap::from([(1, o1), (2, o2)]));
+        engine.send(Command::SetPatch(Arc::new(patch)));
+        engine.send(Command::SetSequences(Arc::new(sequences)));
+
+        // Chenillard à 60 pas par minute : un pas par seconde, Go et Back font un pas à la main.
+        let chaser = |direction| ChaserOptions { bpm: Some(60.0), step_fade: 0.0, direction };
+        let chasing = PlaybackOptions { chaser: Some(chaser(ChaserDirection::Forward)), ..Default::default() };
+        engine.send(options(chasing, PlaybackOptions::default()));
+        engine.send(Command::Go(1));
+        assert_eq!(out(2), 0x40, "premier pas");
+        assert!(engine.snapshot().executors[&1].step.is_some());
+        std::thread::sleep(Duration::from_millis(1000));
+        assert_eq!(cue(1), Some(1), "pas suivant au bout d'une seconde");
+        engine.send(Command::Go(1));
+        assert_eq!(out(2), 0xC0, "Go : pas suivant tout de suite");
+        engine.send(Command::Go(1));
+        assert_eq!(cue(1), Some(0), "un chenillard boucle toujours");
+        engine.send(Command::Back(1));
+        assert_eq!(cue(1), Some(2), "Back : pas précédent");
+        // Fader Vitesse à 0 : le chenillard s'arrête sur son pas.
+        let frozen = PlaybackOptions { fader: FaderMode::Speed, ..chasing };
+        engine.send(options(frozen, PlaybackOptions::default()));
+        engine.send(Command::SetFader { executor: 1, level: 0.0 });
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(cue(1), Some(2), "vitesse nulle : figé");
+        engine.send(Command::Off(1));
+
+        // Reprise sur la cue en cours : Off, puis Go repart de la cue 3.
+        let restart = PlaybackOptions { restart: Restart::Current, ..Default::default() };
+        engine.send(options(restart, PlaybackOptions::default()));
+        engine.send(Command::Go(1));
+        assert_eq!(cue(1), Some(2));
+        engine.send(Command::Off(1));
+        assert_eq!(cue(1), None);
+        engine.send(Command::Go(1));
+        assert_eq!(cue(1), Some(2), "reprise là où il s'était arrêté");
+        engine.send(Command::Off(1));
+
+        // Crossfade : le fader (parti d'en haut) mène l'entrée de la cue 1, puis la transition vers la cue 2.
+        let xfade = PlaybackOptions { fader: FaderMode::Crossfade, ..Default::default() };
+        engine.send(Command::SetFader { executor: 1, level: 1.0 });
+        engine.send(options(xfade, PlaybackOptions::default()));
+        engine.send(Command::SetFader { executor: 1, level: 0.5 });
+        assert_eq!(out(2), 0x20, "mi-course : cue 1 à moitié");
+        assert_eq!(engine.snapshot().executors[&1].manual, Some(0.5));
+        engine.send(Command::SetFader { executor: 1, level: 0.0 });
+        assert_eq!(out(2), 0x40, "en bas : cue 1 entière, à pleine intensité");
+        engine.send(Command::SetFader { executor: 1, level: 0.25 });
+        assert_eq!((cue(1), out(2)), (Some(1), 0x50), "en remontant : vers la cue 2");
+        engine.send(Command::SetFader { executor: 1, level: 1.0 });
+        assert_eq!(out(2), 0x80);
+        assert_eq!(engine.snapshot().executors[&1].manual, None);
+        engine.send(Command::Off(1));
+
+        // Swop : tant qu'il est maintenu, seul l'executor 2 éclaire.
+        engine.send(options(PlaybackOptions::default(), PlaybackOptions::default()));
+        engine.send(Command::Go(1));
+        engine.send(Command::Swop { executor: 2, pressed: true });
+        assert_eq!(out(2), 0x20, "l'executor 1 est éteint par le Swop");
+        engine.send(Command::Swop { executor: 2, pressed: false });
+        assert_eq!(out(2), 0x40, "relâché : l'executor 1 revient, le 2 s'éteint");
+        engine.send(options(PlaybackOptions { swop_protect: true, ..Default::default() }, PlaybackOptions::default()));
+        engine.send(Command::Swop { executor: 2, pressed: true });
+        assert_eq!(out(2), 0x40, "protégé du Swop : il reste");
+        engine.send(Command::Swop { executor: 2, pressed: false });
+
+        // Kill : l'executor 2 éteint les autres, sauf les protégés du Kill.
+        engine.send(Command::Kill(2));
+        assert_eq!((cue(1), cue(2)), (None, Some(0)));
+        engine.send(options(PlaybackOptions { kill_protect: true, ..Default::default() }, PlaybackOptions::default()));
+        engine.send(Command::Off(2));
+        engine.send(Command::Go(1));
+        engine.send(Command::Kill(2));
+        assert_eq!((cue(1), cue(2)), (Some(0), Some(0)), "protégé du Kill : il reste");
+
+        // Assert : l'executor 1 reprend le pan que le 2, lancé après, lui avait pris.
+        assert_eq!(out(10), 0xA0);
+        engine.send(Command::Assert(1));
+        assert_eq!(out(10), 0x10);
+
+        // Ooo : l'executor 1 s'éteint quand le 2 a repris tout ce qu'il tient (pan et dimmer, plus haut).
+        engine.send(Command::Off(2));
+        let ooo = PlaybackOptions { ooo: true, ..Default::default() };
+        let high = Sequences::from([
+            (1, Arc::new(vec![state(0x4000, 0x1000)])),
+            (2, Arc::new(vec![state(0x8000, 0xA000)])),
+        ]);
+        engine.send(Command::SetSequences(Arc::new(high)));
+        engine.send(options(ooo, PlaybackOptions::default()));
+        engine.send(Command::Go(1));
+        assert_eq!(cue(1), Some(0), "rien de repris : il joue");
+        engine.send(Command::Go(2));
+        assert_eq!(out(2), 0x80);
+        assert_eq!(cue(1), None, "tout repris : éteint");
         engine.shutdown();
     }
 }

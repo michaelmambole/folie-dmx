@@ -9,6 +9,7 @@
 //! Store Cue 3 Fade 4 "Entrée"   Delete Cue 3            Executor 2 At 50
 //! Effect 2                      Tempo 128
 //! Page 2   Page +   Page -       Go Executor 2.5         Fix Executor 3
+//! Fixture 2 Release             Assert Executor 3
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
@@ -47,6 +48,8 @@ pub enum Keyword {
     All,
     Page,
     Fix,
+    Assert,
+    Release,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
@@ -60,7 +63,7 @@ const ALIASES: [(&str, Keyword); 6] = [
     ("p", Keyword::Preset),
 ];
 
-const KEYWORDS: [(&str, Keyword); 23] = [
+const KEYWORDS: [(&str, Keyword); 25] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -84,6 +87,8 @@ const KEYWORDS: [(&str, Keyword); 23] = [
     ("all", Keyword::All),
     ("page", Keyword::Page),
     ("fix", Keyword::Fix),
+    ("assert", Keyword::Assert),
+    ("release", Keyword::Release),
 ];
 
 impl Keyword {
@@ -112,6 +117,8 @@ impl Keyword {
             Self::All => "All",
             Self::Page => "Page",
             Self::Fix => "Fix",
+            Self::Assert => "Assert",
+            Self::Release => "Release",
         }
     }
 
@@ -259,6 +266,10 @@ pub enum Command {
     Page(PageMove),
     /// `Fix Executor 3` : fixe l'executor sur toutes les pages, ou le défixe.
     Fix(ExecutorRef),
+    /// `Fixture 2 Release` ou `Release` : marque la sélection comme relâchée dans le programmer.
+    Release(Option<Selection>),
+    /// `Assert Executor 3` : l'executor reprend la main sur ce qu'il tient.
+    Assert(Option<ExecutorRef>),
 }
 
 struct Parser {
@@ -476,6 +487,10 @@ impl Parser {
                     _ => Command::Off(executor),
                 }
             }
+            Some(Token::Keyword(Keyword::Assert)) => {
+                self.position += 1;
+                Command::Assert(self.optional_executor()?)
+            }
             Some(Token::Keyword(Keyword::Effect)) => {
                 self.position += 1;
                 Command::ApplyEffect(self.integer("numéro d'effet")?)
@@ -548,6 +563,9 @@ impl Parser {
             }
             _ => {
                 let selection = self.selection()?;
+                if self.eat(Keyword::Release) {
+                    return self.end(Command::Release(selection));
+                }
                 let value = if self.eat(Keyword::At) { Some(self.value()?) } else { None };
                 if selection.is_none() && value.is_none() {
                     return Err(SyntaxError(match self.peek() {
@@ -559,6 +577,11 @@ impl Parser {
                 Command::Select { selection, value }
             }
         };
+        self.end(command)
+    }
+
+    /// La commande doit s'arrêter là.
+    fn end(&self, command: Command) -> Result<Command, SyntaxError> {
         if let Some(token) = self.peek() {
             return Err(SyntaxError(format!("en trop en fin de commande : {token:?}")));
         }
@@ -676,6 +699,16 @@ mod tests {
         // Les abréviations courantes ne changent pas.
         assert!(matches!(parse("fi 1 at 50"), Ok(Command::Select { .. })));
         assert_eq!(parse("p 4.1"), Ok(Command::ApplyPreset(FeatureGroup::Color, 1)));
+    }
+
+    #[test]
+    fn assert_and_release() {
+        assert_eq!(parse("Assert"), Ok(Command::Assert(None)));
+        assert_eq!(parse("as exec 2.3"), Ok(Command::Assert(Some(ExecutorRef { page: Some(2), slot: 3 }))));
+        assert_eq!(parse("Release"), Ok(Command::Release(None)));
+        let Ok(Command::Release(Some(selection))) = parse("Fixture 1 Thru 2 Release") else { panic!() };
+        assert_eq!(selection.items, [(true, Item::Range(fixture(1), fixture(2)))]);
+        assert!(parse("Release 3").unwrap_err().0.contains("en trop"));
     }
 
     #[test]

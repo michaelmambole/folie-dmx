@@ -137,16 +137,27 @@ pub enum ExecutorMode {
     Flash,
     /// Un appui allume, le suivant éteint.
     Toggle,
+    /// Comme Flash, mais les autres executors s'éteignent tant que la touche est maintenue.
+    Swop,
+    /// Go, et tous les autres executors s'éteignent.
+    Kill,
 }
 
 impl ExecutorMode {
-    pub const ALL: [ExecutorMode; 3] = [Self::Go, Self::Flash, Self::Toggle];
+    pub const ALL: [ExecutorMode; 5] = [Self::Go, Self::Flash, Self::Toggle, Self::Swop, Self::Kill];
+
+    /// La touche agit tant qu'elle est maintenue.
+    pub fn is_held(self) -> bool {
+        matches!(self, Self::Flash | Self::Swop)
+    }
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Go => "go",
             Self::Flash => "flash",
             Self::Toggle => "toggle",
+            Self::Swop => "swop",
+            Self::Kill => "kill",
         }
     }
 
@@ -159,6 +170,8 @@ impl ExecutorMode {
             Self::Go => "Go",
             Self::Flash => "Flash",
             Self::Toggle => "Bascule",
+            Self::Swop => "Swop",
+            Self::Kill => "Kill",
         }
     }
 }
@@ -171,18 +184,22 @@ pub enum FaderFunction {
     Master,
     /// Dose l'intensité ; l'executor ne joue que tant que le fader est levé.
     Temp,
-    /// L'intensité reste pleine ; le fader règle la vitesse des effets.
+    /// L'intensité reste pleine ; le fader règle la vitesse des effets et du chenillard.
     Speed,
+    /// L'intensité reste pleine ; le fader fait à la main la transition vers la cue
+    /// suivante, en montant puis en descendant (A/B).
+    Crossfade,
 }
 
 impl FaderFunction {
-    pub const ALL: [FaderFunction; 3] = [Self::Master, Self::Temp, Self::Speed];
+    pub const ALL: [FaderFunction; 4] = [Self::Master, Self::Temp, Self::Speed, Self::Crossfade];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Master => "master",
             Self::Temp => "temp",
             Self::Speed => "speed",
+            Self::Crossfade => "crossfade",
         }
     }
 
@@ -195,6 +212,7 @@ impl FaderFunction {
             Self::Master => "Master",
             Self::Temp => "Temp",
             Self::Speed => "Vitesse",
+            Self::Crossfade => "Crossfade",
         }
     }
 }
@@ -239,6 +257,96 @@ impl Priority {
     }
 }
 
+/// Ordre dans lequel un chenillard parcourt ses cues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ChaserDirection {
+    #[default]
+    Forward,
+    Backward,
+    /// Aller-retour.
+    Bounce,
+    Random,
+}
+
+impl ChaserDirection {
+    pub const ALL: [ChaserDirection; 4] = [Self::Forward, Self::Backward, Self::Bounce, Self::Random];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Backward => "backward",
+            Self::Bounce => "bounce",
+            Self::Random => "random",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "Avant",
+            Self::Backward => "Arrière",
+            Self::Bounce => "Aller-retour",
+            Self::Random => "Hasard",
+        }
+    }
+}
+
+/// Réglages du chenillard : les cues défilent seules, à vitesse régulière.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChaserSettings {
+    /// Pas par minute.
+    pub bpm: f32,
+    /// Suit le tempo du show au lieu de `bpm`.
+    pub follow_tempo: bool,
+    /// Fondu entre deux pas, en fraction de la durée d'un pas (0 à 1).
+    pub step_fade: f32,
+    pub direction: ChaserDirection,
+}
+
+impl Default for ChaserSettings {
+    fn default() -> Self {
+        Self { bpm: 120.0, follow_tempo: false, step_fade: 0.0, direction: ChaserDirection::Forward }
+    }
+}
+
+/// Cue jouée quand on rallume un executor éteint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RestartMode {
+    #[default]
+    First,
+    /// Celle où il s'était arrêté.
+    Current,
+    /// Celle d'après.
+    Next,
+}
+
+impl RestartMode {
+    pub const ALL: [RestartMode; 3] = [Self::First, Self::Current, Self::Next];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Current => "current",
+            Self::Next => "next",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::First => "1re cue",
+            Self::Current => "Cue en cours",
+            Self::Next => "Suivante",
+        }
+    }
+}
+
 /// Options de fonctionnement d'un executor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExecutorOptions {
@@ -258,6 +366,19 @@ pub struct ExecutorOptions {
     pub protected: bool,
     /// Fixé : reste à sa place sur toutes les pages (touche Fix de grandMA2).
     pub fixed: bool,
+    /// Les cues défilent seules.
+    pub chaser: bool,
+    /// Réglages gardés même chenillard coupé.
+    pub chaser_settings: ChaserSettings,
+    pub restart: RestartMode,
+    /// Off on Overwritten : s'éteint quand d'autres executors ont repris tout ce qu'il tient.
+    pub ooo: bool,
+    /// Move in Black : les fixtures éteintes prennent d'avance leur position de la cue suivante.
+    pub mib: bool,
+    /// Ignore le Swop des autres executors.
+    pub swop_protect: bool,
+    /// Ignore le Kill des autres executors.
+    pub kill_protect: bool,
 }
 
 impl Default for ExecutorOptions {
@@ -272,6 +393,13 @@ impl Default for ExecutorOptions {
             priority: Priority::Normal,
             protected: false,
             fixed: false,
+            chaser: false,
+            chaser_settings: ChaserSettings::default(),
+            restart: RestartMode::First,
+            ooo: false,
+            mib: false,
+            swop_protect: false,
+            kill_protect: false,
         }
     }
 }

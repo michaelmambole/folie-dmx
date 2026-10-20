@@ -11,7 +11,7 @@ pub mod cues;
 pub mod effects;
 pub mod tracking;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, EngineHandle};
@@ -158,6 +158,9 @@ pub struct Console {
     /// Valeurs du programmer venues d'un preset : enregistrées dans une cue,
     /// elles restent des références au preset.
     origins: HashMap<ParamKey, (FeatureGroup, u32)>,
+    /// Paramètres marqués « relâchés » (Release) : enregistrés dans une cue, la
+    /// séquence cesse de les tenir à partir de cette cue.
+    released: HashSet<ParamKey>,
     /// Effets qui tournent dans le programmer.
     effects: Vec<Effect>,
     taps: effects::TapTempo,
@@ -174,6 +177,7 @@ impl Console {
             page: 1,
             programmer: HashMap::new(),
             origins: HashMap::new(),
+            released: HashSet::new(),
             effects: Vec::new(),
             taps: effects::TapTempo::default(),
         }
@@ -190,6 +194,11 @@ impl Console {
     /// Valeurs saisies, en attente d'être enregistrées.
     pub fn programmer(&self) -> &HashMap<ParamKey, u16> {
         &self.programmer
+    }
+
+    /// Paramètres marqués « relâchés » dans le programmer.
+    pub fn released(&self) -> &HashSet<ParamKey> {
+        &self.released
     }
 
     /// Presets appliqués dans le programmer (au moins une valeur en vient encore).
@@ -251,6 +260,7 @@ impl Console {
         self.effects.retain(|e| !e.targets.is_empty());
         self.effects_changed();
         self.origins.retain(|key, _| patch.get(key.fixture).is_some());
+        self.released.retain(|key| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
         self.programmer
             .retain(|key, _| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
         self.engine.send(EngineCommand::SetPatch(Arc::new(patch.clone())));
@@ -260,6 +270,7 @@ impl Console {
     fn clear_programmer(&mut self) {
         self.programmer.clear();
         self.origins.clear();
+        self.released.clear();
         self.effects.clear();
         self.effects_changed();
         self.engine.send(EngineCommand::ClearProgrammer);
@@ -269,6 +280,7 @@ impl Console {
     fn send_value(&mut self, target: Target, parameter: usize, value: u16) {
         let key = ParamKey { fixture: target.fixture, parameter };
         self.origins.remove(&key);
+        self.released.remove(&key);
         self.programmer.insert(key, value);
         self.engine.send(EngineCommand::SetAttribute { key, value });
     }
@@ -290,6 +302,7 @@ impl Console {
             for parameter in matching(&self.show.patch, target, reference) {
                 let key = ParamKey { fixture: target.fixture, parameter };
                 self.origins.remove(&key);
+                self.released.remove(&key);
                 self.programmer.remove(&key);
                 self.engine.send(EngineCommand::ReleaseAttribute(key));
             }
@@ -325,10 +338,32 @@ impl Console {
             for (parameter, _) in self.show.patch.parameters_of(target) {
                 let key = ParamKey { fixture: target.fixture, parameter };
                 self.origins.remove(&key);
+                self.released.remove(&key);
                 self.programmer.remove(&key);
                 self.engine.send(EngineCommand::ReleaseAttribute(key));
             }
         }
+    }
+
+    /// `Release` : marque tous les paramètres de la sélection comme relâchés. Store
+    /// les enregistre ainsi dans la cue : la séquence cesse de les tenir.
+    pub fn release_in_programmer(&mut self) -> Result<Outcome, CommandError> {
+        if self.selection.is_empty() {
+            return invalid("aucune sélection à relâcher");
+        }
+        let mut count = 0;
+        for &target in &self.selection {
+            for (parameter, _) in self.show.patch.parameters_of(target) {
+                let key = ParamKey { fixture: target.fixture, parameter };
+                self.origins.remove(&key);
+                self.programmer.remove(&key);
+                self.engine.send(EngineCommand::ReleaseAttribute(key));
+                count += usize::from(self.released.insert(key));
+            }
+        }
+        self.selection_used = true;
+        let s = if count > 1 { "s" } else { "" };
+        Ok(Outcome::info(format!("{} relâché{s} : Store les enregistre dans la cue", plural(count, "paramètre"))))
     }
 
     pub fn execute(&mut self, line: &str) -> Result<Outcome, CommandError> {
@@ -336,18 +371,7 @@ impl Console {
             Command::Select { selection, value } => {
                 let mut message = String::new();
                 if let Some(selection) = selection {
-                    let targets = self.resolve(&selection)?;
-                    if self.selection_used {
-                        self.selection.clear();
-                    }
-                    for (add, targets) in targets {
-                        if add {
-                            self.select(targets, SelectMode::Add);
-                        } else {
-                            self.selection.retain(|t| !targets.contains(t));
-                        }
-                    }
-                    self.selection_used = false;
+                    self.execute_selection(&selection)?;
                     message = format!("{} sélectionnée(s)", plural(self.selection.len(), "cible"));
                 }
                 if let Some(Value::Percent(percent)) = value {
@@ -365,6 +389,13 @@ impl Console {
             Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),
             Command::Delete(object) => self.delete(object),
+            Command::Release(selection) => {
+                if let Some(selection) = selection {
+                    self.execute_selection(&selection)?;
+                }
+                self.release_in_programmer()
+            }
+            Command::Assert(executor) => self.assert(executor.map(|x| self.resolve_executor(x))),
             Command::Go(executor) => self.go(executor.map(|x| self.resolve_executor(x))),
             Command::Back(executor) => self.back(executor.map(|x| self.resolve_executor(x))),
             Command::Off(executor) => self.off(executor.map(|x| self.resolve_executor(x))),
@@ -394,6 +425,23 @@ impl Console {
                 Ok(Outcome::info("Sélection et programmer vidés"))
             }
         }
+    }
+
+    /// Sélection tapée en ligne de commande : elle complète la précédente, sauf après une valeur.
+    fn execute_selection(&mut self, selection: &Selection) -> Result<(), CommandError> {
+        let targets = self.resolve(selection)?;
+        if self.selection_used {
+            self.selection.clear();
+        }
+        for (add, targets) in targets {
+            if add {
+                self.select(targets, SelectMode::Add);
+            } else {
+                self.selection.retain(|t| !targets.contains(t));
+            }
+        }
+        self.selection_used = false;
+        Ok(())
     }
 
     /// Cibles désignées par chaque élément d'une sélection, dans l'ordre.
@@ -1060,5 +1108,81 @@ mod tests {
         assert!(c.rename_page(2, " Acte 2 ".into()).show_changed);
         assert_eq!(c.page_name(2), "Acte 2");
         assert_eq!(run(&mut c, "Page 2").message, "Page 2 « Acte 2 »");
+    }
+
+    #[test]
+    fn release_is_stored_in_cues() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 + 2 At 100");
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        assert_eq!(c.execute("Release").unwrap_err().to_string(), "aucune sélection à relâcher");
+        assert_eq!(run(&mut c, "Fixture 1 Release").message, "11 paramètres relâchés : Store les enregistre dans la cue");
+        assert_eq!(c.released().len(), 11);
+        // Une valeur saisie ensuite n'est plus relâchée.
+        run(&mut c, "Fixture 1 At 50");
+        assert_eq!(c.released().len(), 10);
+        run(&mut c, "Fixture 1 Release");
+        run(&mut c, "Store Cue 2 Fade 0");
+        let cue = &c.selected_sequence().unwrap().1.cues[&CueNumber::whole(2)];
+        assert_eq!(cue.values[&FixtureId(1)]["Dimmer"], CueValue::Release);
+        run(&mut c, "ClearAll");
+        assert!(c.released().is_empty(), "Clear vide aussi les relâchements");
+
+        run(&mut c, "Go");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 255));
+        run(&mut c, "Go");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (0, 255), "cue 2 : la fixture 1 n'est plus tenue");
+    }
+
+    #[test]
+    fn swop_kill_assert_and_chaser_options() {
+        use folie_show::{ExecutorMode, ExecutorOptions};
+        let mut c = console();
+        run(&mut c, "Fixture 1 At 100");
+        run(&mut c, "Store Executor 1");
+        run(&mut c, "ClearAll");
+        run(&mut c, "Fixture 1 At 50");
+        run(&mut c, "Fixture 2 At 100");
+        run(&mut c, "Store Executor 2");
+        run(&mut c, "ClearAll");
+        for executor in [1, 2] {
+            c.select_executor(executor);
+            c.set_cue_times(CueNumber::whole(1), 0.0, 0.0).unwrap();
+        }
+
+        // Kill : la touche de l'executor 2 éteint l'executor 1.
+        c.set_executor_mode(2, ExecutorMode::Kill).unwrap();
+        run(&mut c, "Go Executor 1");
+        c.press(2).unwrap();
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (128, 255), "dimmer de la fixture 1 donné par l'executor 2 seul");
+        assert_eq!(settled(&c).executors[&1].cue, None);
+
+        // Swop : maintenu, seul l'executor 2 éclaire.
+        c.set_executor_mode(2, ExecutorMode::Swop).unwrap();
+        run(&mut c, "Go Executor 1");
+        c.flash(2, true);
+        assert_eq!(dmx(&c, 2), 128);
+        c.flash(2, false);
+        assert_eq!(dmx(&c, 2), 255);
+
+        // Assert en ligne de commande.
+        assert_eq!(run(&mut c, "Assert Executor 1").message, "Assert executor 1");
+        assert!(c.execute("Assert Executor 9").is_err());
+
+        // Les options du chenillard arrivent au moteur : il avance seul.
+        run(&mut c, "Fixture 3 At 100");
+        run(&mut c, "Store Executor 1");
+        run(&mut c, "ClearAll");
+        let mut options = ExecutorOptions { chaser: true, ..Default::default() };
+        options.chaser_settings.bpm = 600.0;
+        c.set_executor_options(1, options).unwrap();
+        run(&mut c, "Off Executor 1");
+        run(&mut c, "Go Executor 1");
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..20 {
+            seen.extend(settled(&c).executors[&1].cue);
+        }
+        assert_eq!(seen.len(), 2, "les deux pas ont défilé");
     }
 }

@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use folie_engine::{Command as EngineCommand, CueState, FaderMode, PlaybackOptions, Sequences};
+use folie_engine::{ChaserDirection as Direction, ChaserOptions, Command as EngineCommand, CueState, FaderMode, PlaybackOptions, Restart, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
 use folie_show::{
-    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, ParamTiming, Preset, Sequence,
-    Show, executor_id, executor_label, executor_place,
+    ChaserDirection, Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, ParamTiming,
+    Preset, RestartMode, Sequence, Show, executor_id, executor_label, executor_place,
 };
 
 use crate::command::ExecutorRef;
@@ -105,11 +105,34 @@ fn playback_options(o: &ExecutorOptions) -> PlaybackOptions {
             FaderFunction::Master => FaderMode::Master,
             FaderFunction::Temp => FaderMode::Temp,
             FaderFunction::Speed => FaderMode::Speed,
+            FaderFunction::Crossfade => FaderMode::Crossfade,
         },
         off_time: o.off_time,
         back_time: o.back_time,
         priority: o.priority.level(),
         protected: o.protected,
+        chaser: o.chaser.then(|| {
+            let c = o.chaser_settings;
+            ChaserOptions {
+                bpm: (!c.follow_tempo).then_some(c.bpm),
+                step_fade: c.step_fade,
+                direction: match c.direction {
+                    ChaserDirection::Forward => Direction::Forward,
+                    ChaserDirection::Backward => Direction::Backward,
+                    ChaserDirection::Bounce => Direction::Bounce,
+                    ChaserDirection::Random => Direction::Random,
+                },
+            }
+        }),
+        restart: match o.restart {
+            RestartMode::First => Restart::First,
+            RestartMode::Current => Restart::Current,
+            RestartMode::Next => Restart::Next,
+        },
+        ooo: o.ooo,
+        mib: o.mib,
+        swop_protect: o.swop_protect,
+        kill_protect: o.kill_protect,
     }
 }
 
@@ -270,7 +293,7 @@ impl Console {
         fade: Option<f32>,
         name: Option<String>,
     ) -> Result<Outcome, CommandError> {
-        if self.programmer.is_empty() && self.effects.is_empty() {
+        if self.programmer.is_empty() && self.released.is_empty() && self.effects.is_empty() {
             return invalid("programmer vide : rien à enregistrer");
         }
         let mut values: BTreeMap<FixtureId, BTreeMap<String, CueValue>> = BTreeMap::new();
@@ -286,6 +309,11 @@ impl Console {
                 _ => CueValue::Value(*value),
             };
             values.entry(key.fixture).or_default().insert(parameter.name.clone(), value);
+        }
+        for key in &self.released {
+            if let Some(parameter) = self.show.patch.get(key.fixture).and_then(|f| f.mode().parameters.get(key.parameter)) {
+                values.entry(key.fixture).or_default().insert(parameter.name.clone(), CueValue::Release);
+            }
         }
 
         let executor = self.selected_executor;
@@ -414,6 +442,13 @@ impl Console {
         Ok(Outcome::info(format!("Executor {executor} éteint", executor = executor_label(executor))))
     }
 
+    /// Assert : l'executor reprend la main sur ce qu'il tient.
+    pub fn assert(&self, executor: Option<u32>) -> Result<Outcome, CommandError> {
+        let executor = self.executor_with_sequence(executor)?;
+        self.engine.send(EngineCommand::Assert(executor));
+        Ok(Outcome::info(format!("Assert executor {executor}", executor = executor_label(executor))))
+    }
+
     pub fn goto(&self, number: CueNumber) -> Result<Outcome, CommandError> {
         let executor = self.executor_with_sequence(None)?;
         let Some((_, sequence)) = self.selected_sequence() else { return invalid("aucune séquence") };
@@ -435,17 +470,24 @@ impl Console {
             return invalid(format!("l'executor {executor} est vide : Store, puis cliquez-le pour y enregistrer", executor = executor_label(executor)));
         };
         match x.mode {
-            ExecutorMode::Go | ExecutorMode::Flash => self.go(Some(executor)),
+            ExecutorMode::Go | ExecutorMode::Flash | ExecutorMode::Swop => self.go(Some(executor)),
             ExecutorMode::Toggle => {
                 self.engine.send(EngineCommand::Toggle(executor));
                 Ok(Outcome::info(format!("Executor {executor} basculé", executor = executor_label(executor))))
             }
+            ExecutorMode::Kill => {
+                self.engine.send(EngineCommand::Kill(executor));
+                Ok(Outcome::info(format!("Kill executor {executor} : les autres s'éteignent", executor = executor_label(executor))))
+            }
         }
     }
 
+    /// Touche Flash ou Swop enfoncée ou relâchée, selon le mode de l'executor.
     pub fn flash(&self, executor: u32, pressed: bool) {
-        if self.show.executors.contains_key(&executor) {
-            self.engine.send(EngineCommand::Flash { executor, pressed });
+        match self.show.executors.get(&executor).map(|x| x.mode) {
+            Some(ExecutorMode::Swop) => self.engine.send(EngineCommand::Swop { executor, pressed }),
+            Some(_) => self.engine.send(EngineCommand::Flash { executor, pressed }),
+            None => {}
         }
     }
 

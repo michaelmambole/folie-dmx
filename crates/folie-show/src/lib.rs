@@ -21,8 +21,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use cues::{
-    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, ParamTiming, Priority,
-    SLOTS_PER_PAGE, Sequence, executor_id, executor_label, executor_place,
+    ChaserDirection, ChaserSettings, Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction,
+    MAX_PAGE, ParamTiming, Priority, RestartMode, SLOTS_PER_PAGE, Sequence, executor_id, executor_label, executor_place,
 };
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
 
@@ -197,6 +197,17 @@ struct OptionsEntry {
     priority: String,
     protected: bool,
     fixed: bool,
+    chaser: bool,
+    chaser_bpm: f32,
+    chaser_follow_tempo: bool,
+    /// Fondu entre pas, en fraction du pas.
+    chaser_step_fade: f32,
+    chaser_direction: String,
+    restart: String,
+    ooo: bool,
+    mib: bool,
+    swop_protect: bool,
+    kill_protect: bool,
 }
 
 impl Default for OptionsEntry {
@@ -217,6 +228,16 @@ impl OptionsEntry {
             priority: o.priority.key().into(),
             protected: o.protected,
             fixed: o.fixed,
+            chaser: o.chaser,
+            chaser_bpm: o.chaser_settings.bpm,
+            chaser_follow_tempo: o.chaser_settings.follow_tempo,
+            chaser_step_fade: o.chaser_settings.step_fade,
+            chaser_direction: o.chaser_settings.direction.key().into(),
+            restart: o.restart.key().into(),
+            ooo: o.ooo,
+            mib: o.mib,
+            swop_protect: o.swop_protect,
+            kill_protect: o.kill_protect,
         }
     }
 
@@ -231,6 +252,18 @@ impl OptionsEntry {
             priority: Priority::from_key(&self.priority).unwrap_or_default(),
             protected: self.protected,
             fixed: self.fixed,
+            chaser: self.chaser,
+            chaser_settings: ChaserSettings {
+                bpm: if self.chaser_bpm.is_finite() { self.chaser_bpm.clamp(1.0, 999.0) } else { 120.0 },
+                follow_tempo: self.chaser_follow_tempo,
+                step_fade: if self.chaser_step_fade.is_finite() { self.chaser_step_fade.clamp(0.0, 1.0) } else { 0.0 },
+                direction: ChaserDirection::from_key(&self.chaser_direction).unwrap_or_default(),
+            },
+            restart: RestartMode::from_key(&self.restart).unwrap_or_default(),
+            ooo: self.ooo,
+            mib: self.mib,
+            swop_protect: self.swop_protect,
+            kill_protect: self.kill_protect,
         }
     }
 }
@@ -682,6 +715,29 @@ mod tests {
             (1, Executor::new(1)),
             (11, Executor { sequence: 1, mode: ExecutorMode::Flash, options: ExecutorOptions::default() }),
             (
+                3,
+                Executor {
+                    sequence: 1,
+                    mode: ExecutorMode::Swop,
+                    options: ExecutorOptions {
+                        chaser: true,
+                        chaser_settings: ChaserSettings {
+                            bpm: 90.0,
+                            follow_tempo: true,
+                            step_fade: 0.5,
+                            direction: ChaserDirection::Bounce,
+                        },
+                        fader: FaderFunction::Crossfade,
+                        restart: RestartMode::Current,
+                        ooo: true,
+                        mib: true,
+                        swop_protect: true,
+                        kill_protect: true,
+                        ..Default::default()
+                    },
+                },
+            ),
+            (
                 2,
                 Executor {
                     sequence: 1,
@@ -783,6 +839,7 @@ mod tests {
         let loaded = from_json(&file.to_string(), &library).unwrap();
         assert_eq!(loaded.show.executors[&1], Executor::new(1));
         assert_eq!(loaded.show.executors[&2].mode, ExecutorMode::Toggle);
+        assert_eq!(loaded.show.executors[&2].options, ExecutorOptions::default(), "options absentes : valeurs par défaut");
         assert!(!loaded.show.executors.contains_key(&3), "séquence 99 inexistante");
     }
 

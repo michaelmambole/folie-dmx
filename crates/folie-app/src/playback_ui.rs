@@ -7,8 +7,8 @@ use folie_control::{CommandError, Console, Outcome};
 use folie_engine::{ExecutorStatus, Snapshot};
 use folie_fixture::FeatureGroup;
 use folie_show::{
-    Cue, CueNumber, CueValue, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Priority, SLOTS_PER_PAGE,
-    executor_label, executor_place,
+    ChaserDirection, Cue, CueNumber, CueValue, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Priority, RestartMode,
+    SLOTS_PER_PAGE, executor_label, executor_place,
 };
 
 use crate::theme;
@@ -31,8 +31,16 @@ fn transition_bar(ui: &mut egui::Ui, status: Option<&ExecutorStatus>, width: f32
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, BAR_HEIGHT), egui::Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-    let Some(s) = status.filter(|s| s.in_transition()) else { return };
-    let (fraction, color, text) = if s.elapsed >= s.delay + s.fade {
+    // Chenillard : avancement du pas ; crossfade : position du fader dans la transition.
+    let steady = status.and_then(|s| match (s.step, s.manual, s.cue) {
+        (Some(step), _, Some(cue)) => Some((step, format!("pas {}/{}", cue + 1, s.cue_count))),
+        (_, Some(manual), _) => Some((manual, format!("crossfade {:.0} %", manual * 100.0))),
+        _ => None,
+    });
+    let Some(s) = status.filter(|s| steady.is_some() || s.in_transition()) else { return };
+    let (fraction, color, text) = if let Some((fraction, text)) = steady {
+        (fraction, FADE, text)
+    } else if s.elapsed >= s.delay + s.fade {
         // Temps de la cue écoulé : des paramètres finissent sur leurs temps propres.
         (s.elapsed / s.duration.max(f32::EPSILON), FADE, format!("temps propres {:.1} s", s.duration - s.elapsed))
     } else if s.elapsed < s.delay {
@@ -109,7 +117,8 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
     let key = |text: &'static str| if assigned { theme::primary_button(text) } else { quiet(text) };
     let mut action = None;
     match mode {
-        ExecutorMode::Go => {
+        ExecutorMode::Go | ExecutorMode::Kill => {
+            let main = if mode == ExecutorMode::Kill { "Kill" } else { "Go" };
             ui.spacing_mut().button_padding.x = 4.0;
             ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);
             // Assez large : les trois touches côte à côte ; sinon GO en pleine largeur au-dessus.
@@ -126,7 +135,12 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
                 }
             };
             ui.horizontal(|ui| {
-                if ui.add_sized([go_width, 26.0], key("Go")).on_hover_text(format!("Go executor {executor}", executor = executor_label(executor))).clicked() {
+                let help = if mode == ExecutorMode::Kill {
+                    format!("Go executor {executor}, et Off sur tous les autres", executor = executor_label(executor))
+                } else {
+                    format!("Go executor {executor}", executor = executor_label(executor))
+                };
+                if ui.add_sized([go_width, 26.0], key(main)).on_hover_text(help).clicked() {
                     go = Some(console.press(executor));
                 }
                 if wide {
@@ -140,9 +154,13 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
                 action = go;
             }
         }
-        ExecutorMode::Flash => {
-            let response =
-                ui.add_sized([width, 26.0], key("Flash")).on_hover_text(format!("Flash executor {executor} (maintenir)", executor = executor_label(executor)));
+        ExecutorMode::Flash | ExecutorMode::Swop => {
+            let help = if mode == ExecutorMode::Swop {
+                format!("Swop executor {executor} (maintenir) : seul lui éclaire", executor = executor_label(executor))
+            } else {
+                format!("Flash executor {executor} (maintenir)", executor = executor_label(executor))
+            };
+            let response = ui.add_sized([width, 26.0], key(mode.label())).on_hover_text(help);
             let down = response.is_pointer_button_down_on();
             if down && held.insert(executor) {
                 console.flash(executor, true);
@@ -161,7 +179,11 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
     action
 }
 
-/// Menu du clic droit : mode, nom, séquence, vider.
+/// Largeur d'une colonne du menu d'un executor.
+const MENU_COLUMN: f32 = 280.0;
+
+/// Menu du clic droit : lecture et comportement côte à côte, appliqués dès qu'on
+/// les change ; puis nom, séquence, vider.
 fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Action {
     let mut action = None;
     let Some((x, sequence)) = console.executor(executor).map(|(x, s)| (*x, s.name.clone())) else {
@@ -169,16 +191,24 @@ fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Act
         ui.weak("Store, puis cliquez l'executor");
         return None;
     };
-    ui.label(RichText::new("Mode").weak());
-    for mode in ExecutorMode::ALL {
-        if ui.add(egui::Button::selectable(x.mode == mode, mode.label())).clicked() {
-            action = Some(console.set_executor_mode(executor, mode));
-            ui.close();
-        }
+    let (mut mode, mut o) = (x.mode, x.options);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(MENU_COLUMN);
+            playing_options(ui, &mut mode, &mut o);
+        });
+        // Un séparateur vertical prendrait toute la hauteur et ferait grandir le menu à chaque image.
+        ui.add_space(16.0);
+        ui.vertical(|ui| {
+            ui.set_width(MENU_COLUMN);
+            behaviour_options(ui, &mut o);
+        });
+    });
+    if mode != x.mode {
+        action = Some(console.set_executor_mode(executor, mode));
     }
-    ui.separator();
-    if let Some(a) = options_menu(ui, console, executor, x.options) {
-        action = Some(a);
+    if o != x.options {
+        action = Some(console.set_executor_options(executor, o));
     }
     ui.separator();
     let id = egui::Id::unique(("rename-executor", executor));
@@ -209,50 +239,141 @@ fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Act
     action
 }
 
-/// Options de fonctionnement, appliquées dès qu'on les change.
-fn options_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32, current: ExecutorOptions) -> Action {
-    let mut o = current;
-    ui.label(RichText::new("Options").weak());
-    ui.checkbox(&mut o.wrap, "Boucler en fin de séquence");
-    ui.checkbox(&mut o.auto_start, "Auto start (lever le fader lance la cue 1)");
-    ui.checkbox(&mut o.auto_stop, "Auto stop (fader à 0 : éteint)");
-    ui.horizontal(|ui| {
-        ui.label("Fader");
+/// Durée lisible à la française : « 0,50 ».
+fn decimal(value: f32) -> String {
+    format!("{value:.2}").replace('.', ",")
+}
+
+/// Colonne « lecture » : mode de la touche, chenillard, fonction du fader.
+fn playing_options(ui: &mut egui::Ui, mode: &mut ExecutorMode, o: &mut ExecutorOptions) {
+    theme::section(ui, "Mode");
+    ui.horizontal_wrapped(|ui| {
+        for m in ExecutorMode::ALL {
+            let help = match m {
+                ExecutorMode::Go => "Go, Back, Off : on avance dans la séquence",
+                ExecutorMode::Flash => "Allumé à fond tant que la touche est maintenue",
+                ExecutorMode::Toggle => "Un appui allume, le suivant éteint",
+                ExecutorMode::Swop => "Comme Flash, et les autres executors s'éteignent pendant l'appui",
+                ExecutorMode::Kill => "Go, et tous les autres executors s'éteignent",
+            };
+            ui.selectable_value(mode, m, m.label()).on_hover_text(help);
+        }
+    });
+
+    ui.add_space(4.0);
+    theme::section(ui, "Chenillard");
+    ui.checkbox(&mut o.chaser, "Chenillard (les cues défilent seules)");
+    ui.add_enabled_ui(o.chaser, |ui| {
+        let c = &mut o.chaser_settings;
+        ui.horizontal(|ui| {
+            let label = ui.label("Vitesse");
+            ui.add_enabled(!c.follow_tempo, egui::DragValue::new(&mut c.bpm).range(1.0..=999.0).speed(1.0).suffix(" BPM"))
+                .labelled_by(label.id)
+                .on_hover_text("Pas par minute");
+            if !c.follow_tempo {
+                ui.weak(format!("= {} s par pas", decimal(60.0 / c.bpm.max(1.0))));
+            }
+        });
+        ui.checkbox(&mut c.follow_tempo, "Suivre le tempo du show");
+        ui.horizontal(|ui| {
+            let label = ui.label("Fondu entre pas");
+            let mut percent = c.step_fade * 100.0;
+            let response = ui
+                .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %"))
+                .labelled_by(label.id)
+                .on_hover_text("En part de la durée d'un pas");
+            if response.changed() {
+                c.step_fade = (percent / 100.0).clamp(0.0, 1.0);
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Sens");
+            for d in ChaserDirection::ALL {
+                ui.selectable_value(&mut c.direction, d, d.label());
+            }
+        });
+    });
+
+    ui.add_space(4.0);
+    theme::section(ui, "Fader");
+    ui.horizontal_wrapped(|ui| {
         for f in FaderFunction::ALL {
             ui.selectable_value(&mut o.fader, f, f.label());
         }
     });
-    ui.horizontal(|ui| {
-        let label = ui.label("Temps d'Off");
-        ui.add(egui::DragValue::new(&mut o.off_time).range(0.0..=3600.0).speed(0.1).suffix(" s")).labelled_by(label.id);
+    let hint = match o.fader {
+        FaderFunction::Master => "Dose l'intensité.",
+        FaderFunction::Temp => "Dose l'intensité ; l'executor ne joue que fader levé.",
+        FaderFunction::Speed => "Vitesse des effets et du chenillard, de x0 à x2.",
+        FaderFunction::Crossfade => "Fait la transition vers la cue suivante à la main : en montant, puis en descendant.",
+    };
+    ui.add(egui::Label::new(RichText::new(hint).size(12.0).color(theme::MUTED)).wrap());
+}
+
+/// Colonne « comportement » : démarrage, temps, priorité, protections.
+fn behaviour_options(ui: &mut egui::Ui, o: &mut ExecutorOptions) {
+    theme::section(ui, "Démarrage");
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Reprise").on_hover_text("Cue jouée quand on rallume l'executor");
+        for r in RestartMode::ALL {
+            ui.selectable_value(&mut o.restart, r, r.label());
+        }
     });
+    ui.checkbox(&mut o.wrap, "Boucler en fin de séquence");
     ui.horizontal(|ui| {
+        ui.checkbox(&mut o.auto_start, "Auto start").on_hover_text("Lever le fader allume l'executor");
+        ui.checkbox(&mut o.auto_stop, "Auto stop").on_hover_text("Fader à 0 : l'executor s'éteint");
+    });
+
+    ui.add_space(4.0);
+    theme::section(ui, "Temps");
+    ui.horizontal(|ui| {
+        let label = ui.label("Off");
+        ui.add(egui::DragValue::new(&mut o.off_time).range(0.0..=3600.0).speed(0.1).suffix(" s"))
+            .labelled_by(label.id)
+            .on_hover_text("Durée de l'extinction");
+        ui.add_space(8.0);
         let mut own = o.back_time.is_some();
-        ui.checkbox(&mut own, "Temps de Back");
+        ui.checkbox(&mut own, "Back");
         if own {
             let mut t = o.back_time.unwrap_or(1.0);
-            ui.add(egui::DragValue::new(&mut t).range(0.0..=3600.0).speed(0.1).suffix(" s"))
-                .on_hover_text("Durée du Back");
+            ui.add(egui::DragValue::new(&mut t).range(0.0..=3600.0).speed(0.1).suffix(" s")).on_hover_text("Durée du Back");
             o.back_time = Some(t);
         } else {
             o.back_time = None;
             ui.weak("fondu de la cue");
         }
     });
+
+    ui.add_space(4.0);
+    theme::section(ui, "Priorité");
     ui.horizontal(|ui| {
-        ui.label("Priorité");
         for p in Priority::ALL {
             ui.selectable_value(&mut o.priority, p, p.label());
         }
     });
-    ui.checkbox(&mut o.protected, "Protégé (ignore « Tout éteindre »)");
-    ui.checkbox(&mut o.fixed, "Fixé (reste à sa place sur toutes les pages)");
-    (o != current).then(|| console.set_executor_options(executor, o))
+    ui.checkbox(&mut o.ooo, "Ooo : s'éteint quand tout est repris")
+        .on_hover_text("Off on Overwritten : l'executor s'éteint quand d'autres ont repris tout ce qu'il tient");
+    ui.checkbox(&mut o.mib, "MIB : prépositionne dans le noir")
+        .on_hover_text("Move in Black : les fixtures éteintes prennent d'avance leur position de la cue suivante");
+
+    ui.add_space(4.0);
+    theme::section(ui, "Protections");
+    ui.checkbox(&mut o.protected, "Tout éteindre").on_hover_text("Ignore « Tout éteindre » (Off All)");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut o.swop_protect, "Swop").on_hover_text("Reste allumé quand un autre executor fait un Swop");
+        ui.checkbox(&mut o.kill_protect, "Kill").on_hover_text("Reste allumé quand un autre executor fait un Kill");
+    });
+    ui.checkbox(&mut o.fixed, "Fixé (toutes les pages)").on_hover_text("Reste à sa place sur toutes les pages");
 }
 
 /// Repères des options actives, pour la carte de l'executor.
 fn option_tags(options: &ExecutorOptions) -> String {
     let mut tags = Vec::new();
+    if options.chaser {
+        let c = options.chaser_settings;
+        tags.push(if c.follow_tempo { "chenillard tempo".to_string() } else { format!("chenillard {:.0}", c.bpm) });
+    }
     if options.wrap {
         tags.push("boucle".to_string());
     }
@@ -261,6 +382,12 @@ fn option_tags(options: &ExecutorOptions) -> String {
     }
     if options.priority != Priority::Normal {
         tags.push(format!("prio {}", options.priority.label().to_lowercase()));
+    }
+    if options.ooo {
+        tags.push("Ooo".into());
+    }
+    if options.mib {
+        tags.push("MIB".into());
     }
     if options.protected {
         tags.push("protégé".into());

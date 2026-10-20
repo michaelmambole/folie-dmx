@@ -343,6 +343,11 @@ impl FixturesView {
                 if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut").clicked() {
                     console.release_selection();
                 }
+                let help = "Marque la sélection « relâchée » : Store l'enregistre, et la séquence cesse de la tenir à cette cue";
+                if ui.button("Release").on_hover_text(help).clicked() {
+                    // Seule erreur possible : aucune sélection, et ce panneau n'apparaît qu'avec une sélection.
+                    let _ = console.release_in_programmer();
+                }
             });
             selection_chips(ui, console.selection());
         });
@@ -473,7 +478,7 @@ impl Row<'_> {
         let key = ParamKey { fixture: self.reference.fixture, parameter: self.index };
         let source = if animated.contains(&key) {
             Source::Effect
-        } else if console.programmer().contains_key(&key) {
+        } else if console.programmer().contains_key(&key) || console.released().contains(&key) {
             Source::Programmer
         } else if self.snapshot.stage.contains_key(&key) {
             Source::Executor
@@ -493,7 +498,7 @@ impl Row<'_> {
         });
 
         let mut level = value as f32 / u16::MAX as f32;
-        let text = self.value_text(value);
+        let text = if console.released().contains(&key) { "relâché".to_string() } else { self.value_text(value) };
         let help = "Glisser : régler (Maj : fin) · clic : placer · Option-clic : relâcher";
         let bar = theme::value_bar(ui, &mut level, source.color(), &text, self.bar_width)
             .labelled_by(name_label.id)
