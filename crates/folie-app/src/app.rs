@@ -848,6 +848,10 @@ mod tests {
         harness.get(described("Fondu de Dimmer, cue 2")).set_value_accesskit(3.0);
         harness.run_steps(2);
         assert_eq!(cue(&harness, 2).family_times[&folie_fixture::FeatureGroup::Dimmer].fade, Some(3.0));
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("cues-family-times.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
         harness.key_press(egui::Key::Escape);
         harness.run_steps(2);
         harness.get_by_label("Dimmer 3 s +0.5"); // le délai reste celui de la cue

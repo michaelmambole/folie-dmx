@@ -242,6 +242,7 @@ enum CellAction {
 
 /// Menu du clic droit d'une case occupée : renommer, supprimer.
 fn cell_menu(ui: &mut egui::Ui, id: egui::Id, number: u32, name: &str) -> Option<CellAction> {
+    theme::menu_fields(ui);
     let mut action = None;
     // Le texte en cours de saisie est gardé tant que le menu est ouvert.
     let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.to_string());

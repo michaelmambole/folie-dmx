@@ -185,6 +185,7 @@ const MENU_COLUMN: f32 = 280.0;
 /// Menu du clic droit : lecture et comportement côte à côte, appliqués dès qu'on
 /// les change ; puis nom, séquence, vider.
 fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Action {
+    theme::menu_fields(ui);
     let mut action = None;
     let Some((x, sequence)) = console.executor(executor).map(|(x, s)| (*x, s.name.clone())) else {
         ui.label("Executor vide");
@@ -515,6 +516,7 @@ fn tag(ui: &mut egui::Ui, text: &str, fill: Color32, stroke: Color32, color: Col
 pub fn optional_time(ui: &mut egui::Ui, value: &mut Option<f32>, base: f32, help: String) -> bool {
     let mut changed = false;
     ui.scope(|ui| {
+        theme::menu_fields(ui);
         if value.is_none() {
             ui.visuals_mut().widgets.inactive.fg_stroke.color = theme::DEFAULT;
         }
@@ -571,6 +573,7 @@ fn forget_cue_menu(ctx: &egui::Context, number: CueNumber) {
 
 /// Menu du clic droit d'une cue : renommer, temps par famille.
 fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &Cue) -> Action {
+    theme::menu_fields(ui);
     let id = egui::Id::unique(("rename-cue", number));
     let focus_id = egui::Id::unique(("rename-cue-focused", number));
     // Le texte en cours de saisie est gardé tant que le menu est ouvert.
@@ -596,13 +599,14 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
         ui.separator();
         theme::section(ui, "Temps par famille");
         egui::Grid::new(("family-times", number)).num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
-            ui.label(RichText::new("Famille").size(11.5).color(theme::MUTED));
-            ui.label(RichText::new("Fondu").size(11.5).color(theme::MUTED));
-            ui.label(RichText::new("Délai").size(11.5).color(theme::MUTED));
+            let head = |text: &str| egui::Label::new(RichText::new(text).size(11.5).color(theme::MUTED)).selectable(false);
+            ui.add(head("Famille"));
+            ui.add(head("Fondu"));
+            ui.add(head("Délai"));
             ui.end_row();
             for family in families {
                 let mut timing = cue.family_times.get(&family).copied().unwrap_or_default();
-                ui.label(family.label());
+                ui.add(egui::Label::new(family.label()).selectable(false));
                 let mut changed = false;
                 ui.horizontal(|ui| {
                     let help = format!("Fondu de {}, cue {number}", family.label());
@@ -618,7 +622,8 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
                 ui.end_row();
             }
         });
-        ui.label(RichText::new("En gris : temps de la cue.").size(11.0).color(theme::MUTED));
+        let help = "Glissez un champ, ou cliquez-le pour taper un temps. En gris : temps de la cue.";
+        ui.add(egui::Label::new(RichText::new(help).size(11.0).color(theme::MUTED)).selectable(false));
     }
     if renamed {
         forget_cue_menu(ui.ctx(), number);
@@ -821,7 +826,7 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
             ui.add_sized([62.0, 14.0], head("délai"));
             ui.add_sized([62.0, 14.0], head("fondu"));
             ui.add_space(12.0);
-            ui.label(RichText::new("Clic droit : renommer").size(11.0).color(theme::MUTED));
+            ui.label(RichText::new("Clic droit : nom et temps").size(11.0).color(theme::MUTED));
         });
     });
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {

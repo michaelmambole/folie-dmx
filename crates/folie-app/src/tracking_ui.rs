@@ -126,6 +126,7 @@ fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool, edi
 
 /// Menu du clic droit d'une valeur : fondu et délai propres au paramètre dans cette cue.
 fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, row: &TrackingRow) -> Action {
+    theme::menu_fields(ui);
     let (_, sequence) = console.selected_sequence()?;
     let cue = sequence.cues.get(&number).cloned()?;
     let family = console
@@ -141,13 +142,13 @@ fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber,
     ui.label(RichText::new(format!("{} · fixture {} · cue {number}", row.parameter, row.fixture)).family(theme::medium()));
     let mut changed = false;
     egui::Grid::new(("param-times", number, row.fixture, &row.parameter)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-        ui.label(RichText::new("Fondu").color(theme::MUTED));
+        ui.add(egui::Label::new(RichText::new("Fondu").color(theme::MUTED)).selectable(false));
         ui.horizontal(|ui| {
             let help = format!("Fondu de {}, fixture {}, cue {number}", row.parameter, row.fixture);
             changed |= crate::playback_ui::optional_time(ui, &mut timing.fade, base.0, help);
         });
         ui.end_row();
-        ui.label(RichText::new("Délai").color(theme::MUTED));
+        ui.add(egui::Label::new(RichText::new("Délai").color(theme::MUTED)).selectable(false));
         ui.horizontal(|ui| {
             let help = format!("Délai de {}, fixture {}, cue {number}", row.parameter, row.fixture);
             changed |= crate::playback_ui::optional_time(ui, &mut timing.delay, base.1, help);
@@ -158,7 +159,8 @@ fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber,
         action = Some(console.set_param_times(number, row.fixture, &row.parameter, timing));
     }
     let origin = if cue.family_times.contains_key(&family) { format!("temps de {}", family.label()) } else { "temps de la cue".into() };
-    ui.label(RichText::new(format!("En gris : {origin}.")).size(11.0).color(theme::MUTED));
+    let help = format!("Glissez un champ, ou cliquez-le pour taper un temps. En gris : {origin}.");
+    ui.add(egui::Label::new(RichText::new(help).size(11.0).color(theme::MUTED)).selectable(false));
     action
 }
 

@@ -155,6 +155,17 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         .inner
 }
 
+/// Dans un menu, egui dessine les boutons sans fond ni cadre : les champs, cases à cocher
+/// et touches y ressembleraient à du texte. À appeler en tête de menu pour les rendre visibles.
+pub fn menu_fields(ui: &mut egui::Ui) {
+    let visuals = ui.visuals_mut();
+    visuals.button_frame = true;
+    let inactive = &mut visuals.widgets.inactive;
+    inactive.weak_bg_fill = BG;
+    inactive.bg_fill = BG;
+    inactive.bg_stroke = Stroke::new(1.0, LINE);
+}
+
 /// Titre de section discret, en capitales : « POSITION ».
 pub fn section(ui: &mut egui::Ui, title: &str) {
     ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).color(MUTED).extra_letter_spacing(0.8));
