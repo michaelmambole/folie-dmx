@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use folie_fixture::{FixtureId, FixtureType, Library, Patch, PatchedFixture, ofl};
+use folie_fixture::{FeatureGroup, FixtureId, FixtureType, Library, Patch, PatchedFixture, Target, ofl};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -35,10 +35,29 @@ pub enum ShowError {
     TooNew(u32),
 }
 
-/// Contenu d'un show. S'enrichira des groupes, presets et cues.
-#[derive(Debug, Clone, Default)]
+/// Contenu d'un show. S'enrichira des cues.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Show {
     pub patch: Patch,
+    /// Groupes par numéro dans le pool.
+    pub groups: BTreeMap<u32, Group>,
+    /// Presets par (famille, numéro) : `Preset 4.1` = (Couleur, 1).
+    pub presets: BTreeMap<(FeatureGroup, u32), Preset>,
+}
+
+/// Sélection enregistrée, dans l'ordre où elle a été faite (utile aux effets).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    pub name: String,
+    pub targets: Vec<Target>,
+}
+
+/// Valeurs enregistrées pour une famille d'attributs, fixture par fixture.
+/// Les paramètres sont désignés par leur nom, plus stable que leur position.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Preset {
+    pub name: String,
+    pub values: BTreeMap<FixtureId, BTreeMap<String, u16>>,
 }
 
 /// Show lu, avec ce qui n'a pas pu être restauré.
@@ -58,6 +77,27 @@ struct ShowFile {
     fixture_types: BTreeMap<String, EmbeddedType>,
     #[serde(default)]
     patch: Vec<PatchEntry>,
+    #[serde(default)]
+    groups: Vec<GroupEntry>,
+    #[serde(default)]
+    presets: Vec<PresetEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GroupEntry {
+    number: u32,
+    name: String,
+    /// "5" ou "5.3", dans l'ordre de sélection.
+    targets: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresetEntry {
+    family: String,
+    number: u32,
+    name: String,
+    /// Numéro de fixture (en texte, clé JSON) -> paramètre -> valeur 16 bits.
+    values: BTreeMap<String, BTreeMap<String, u16>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -102,12 +142,33 @@ pub fn to_json(show: &Show) -> String {
             address: f.address,
         })
         .collect();
+    let groups = show
+        .groups
+        .iter()
+        .map(|(number, g)| GroupEntry {
+            number: *number,
+            name: g.name.clone(),
+            targets: g.targets.iter().map(Target::to_string).collect(),
+        })
+        .collect();
+    let presets = show
+        .presets
+        .iter()
+        .map(|((family, number), p)| PresetEntry {
+            family: family.key().into(),
+            number: *number,
+            name: p.name.clone(),
+            values: p.values.iter().map(|(id, v)| (id.to_string(), v.clone())).collect(),
+        })
+        .collect();
     let file = ShowFile {
         format: FORMAT.into(),
         version: VERSION,
         saved_with: concat!("Folie-DMX ", env!("CARGO_PKG_VERSION")).into(),
         fixture_types,
         patch,
+        groups,
+        presets,
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -150,7 +211,41 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
             warnings.push(format!("{what} : {err}"));
         }
     }
-    Ok(Loaded { show: Show { patch }, warnings })
+    let mut groups = BTreeMap::new();
+    for entry in file.groups {
+        let mut targets = Vec::new();
+        for text in &entry.targets {
+            match text.parse::<Target>() {
+                Ok(t) if patch.contains(t) => targets.push(t),
+                _ => warnings.push(format!("Groupe {} : « {text} » n'est pas patché, retiré", entry.number)),
+            }
+        }
+        groups.insert(entry.number, Group { name: entry.name, targets });
+    }
+
+    let mut presets = BTreeMap::new();
+    for entry in file.presets {
+        let Some(family) = FeatureGroup::from_key(&entry.family) else {
+            warnings.push(format!("Preset « {} » : famille inconnue « {} »", entry.name, entry.family));
+            continue;
+        };
+        let mut values = BTreeMap::new();
+        for (id, parameters) in entry.values {
+            match id.parse::<u32>().map(FixtureId) {
+                Ok(id) if patch.get(id).is_some() => {
+                    values.insert(id, parameters);
+                }
+                _ => warnings.push(format!(
+                    "Preset {}.{} : fixture {id} absente du patch, valeurs retirées",
+                    family.preset_number(),
+                    entry.number
+                )),
+            }
+        }
+        presets.insert((family, entry.number), Preset { name: entry.name, values });
+    }
+
+    Ok(Loaded { show: Show { patch, groups, presets }, warnings })
 }
 
 /// Fiche à utiliser pour chaque type du show : la copie embarquée en priorité,
@@ -242,7 +337,13 @@ mod tests {
         add(1, "martin/rush-mh-6-wash", 0, 1);
         add(2, "martin/rush-mh-6-wash", 0, 15);
         add(10, "showtec/sunstrip-active-mkii", 3, 101);
-        Show { patch }
+        let groups = BTreeMap::from([(
+            3,
+            Group { name: "Cour".into(), targets: vec!["2".parse().unwrap(), "10.4".parse().unwrap()] },
+        )]);
+        let values = BTreeMap::from([(FixtureId(1), BTreeMap::from([("Red".to_string(), 65_535)]))]);
+        let presets = BTreeMap::from([((FeatureGroup::Color, 1), Preset { name: "Rouge".into(), values })]);
+        Show { patch, groups, presets }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -265,6 +366,8 @@ mod tests {
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
         assert_eq!(summary(&loaded.show), summary(&show));
         assert_eq!(loaded.show.patch.fixtures()[2].mode().name, "Individual");
+        assert_eq!(loaded.show.groups, show.groups);
+        assert_eq!(loaded.show.presets, show.presets);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
@@ -286,7 +389,20 @@ mod tests {
         file["patch"][1]["address"] = 600.into();
         let loaded = from_json(&file.to_string(), &library).unwrap();
         assert_eq!(loaded.show.patch.fixtures().len(), 1);
-        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+        // 2 fixtures écartées, puis le groupe et le preset qui les utilisaient sont nettoyés.
+        assert_eq!(loaded.warnings.len(), 4, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn drops_group_and_preset_entries_for_missing_fixtures() {
+        let library = library();
+        let mut file: Value = serde_json::from_str(&to_json(&sample(&library))).unwrap();
+        file["groups"][0]["targets"] = serde_json::json!(["2", "99", "10.40"]);
+        file["presets"][0]["values"]["99"] = serde_json::json!({ "Red": 1 });
+        let loaded = from_json(&file.to_string(), &library).unwrap();
+        assert_eq!(loaded.show.groups[&3].targets, ["2".parse().unwrap()]);
+        assert_eq!(loaded.show.presets[&(FeatureGroup::Color, 1)].values.len(), 1);
+        assert_eq!(loaded.warnings.len(), 3, "{:?}", loaded.warnings);
     }
 
     #[test]

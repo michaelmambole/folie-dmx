@@ -1326,6 +1326,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "env_logger",
+ "folie-control",
  "folie-dmx",
  "folie-engine",
  "folie-fixture",
@@ -1347,6 +1348,18 @@ dependencies = [
  "folie-dmx",
  "folie-engine",
  "log",
+]
+
+[[package]]
+name = "folie-control"
+version = "0.1.0"
+dependencies = [
+ "folie-dmx",
+ "folie-engine",
+ "folie-fixture",
+ "folie-show",
+ "log",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

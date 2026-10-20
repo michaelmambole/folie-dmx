@@ -12,4 +12,4 @@ pub mod patch;
 
 pub use library::Library;
 pub use model::{Attribute, Capability, CapabilityKind, FeatureGroup, FixtureType, Mode, Parameter};
-pub use patch::{FixtureId, ParamKey, Patch, PatchError, PatchedFixture};
+pub use patch::{FixtureId, ParamKey, Patch, PatchError, PatchedFixture, Target};

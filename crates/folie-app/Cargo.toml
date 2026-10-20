@@ -10,6 +10,7 @@ name = "folie-dmx"
 path = "src/main.rs"
 
 [dependencies]
+folie-control.workspace = true
 folie-dmx.workspace = true
 folie-engine.workspace = true
 folie-fixture.workspace = true

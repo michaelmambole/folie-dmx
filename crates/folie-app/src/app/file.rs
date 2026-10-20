@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, RichText, ViewportCommand};
-use folie_engine::Command;
 use folie_show::Show;
 
 use super::FolieApp;
@@ -70,15 +69,13 @@ fn dialog() -> rfd::FileDialog {
 
 impl FolieApp {
     fn current_show(&self) -> Show {
-        Show { patch: self.patch.clone() }
+        self.console.show.clone()
     }
 
     fn apply_show(&mut self, show: Show) {
-        self.patch = show.patch;
-        self.fixtures_view.selection.clear();
-        self.fixtures_view.form.first_id = self.patch.next_free_id().0;
-        self.engine.send(Command::ClearProgrammer);
-        self.patch_changed();
+        self.console.load_show(show);
+        self.fixtures_view.form.first_id = self.console.show.patch.next_free_id().0;
+        self.channel_labels = super::channel_labels(&self.console.show.patch);
     }
 
     pub(super) fn mark_dirty(&mut self) {

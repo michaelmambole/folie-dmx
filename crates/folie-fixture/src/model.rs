@@ -24,6 +24,50 @@ impl FeatureGroup {
             Self::Control => "Contrôle",
         }
     }
+
+    pub const ALL: [FeatureGroup; 7] = [
+        Self::Dimmer,
+        Self::Position,
+        Self::Gobo,
+        Self::Color,
+        Self::Beam,
+        Self::Focus,
+        Self::Control,
+    ];
+
+    /// Numéro du type de preset sur grandMA2 : `Preset 4.1` = couleur n° 1.
+    pub fn preset_number(self) -> u32 {
+        match self {
+            Self::Dimmer => 1,
+            Self::Position => 2,
+            Self::Gobo => 3,
+            Self::Color => 4,
+            Self::Beam => 5,
+            Self::Focus => 6,
+            Self::Control => 7,
+        }
+    }
+
+    pub fn from_preset_number(number: u32) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.preset_number() == number)
+    }
+
+    /// Identifiant stable utilisé dans les fichiers de show.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Dimmer => "dimmer",
+            Self::Position => "position",
+            Self::Gobo => "gobo",
+            Self::Color => "color",
+            Self::Beam => "beam",
+            Self::Focus => "focus",
+            Self::Control => "control",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.key() == key)
+    }
 }
 
 /// Fonction normalisée d'un paramètre, indépendante du modèle d'appareil.

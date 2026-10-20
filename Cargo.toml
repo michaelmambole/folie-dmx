@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.95"
 
 [workspace.dependencies]
+folie-control = { path = "crates/folie-control" }
 folie-dmx = { path = "crates/folie-dmx" }
 folie-engine = { path = "crates/folie-engine" }
 folie-fixture = { path = "crates/folie-fixture" }

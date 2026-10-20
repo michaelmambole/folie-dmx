@@ -10,6 +10,7 @@ avec sortie sur Enttec DMX USB Pro.
 | `crates/folie-dmx` | Types DMX (`Universe`), trait `DmxOutput`, pilote Enttec USB Pro |
 | `crates/folie-fixture` | Modèle de fixtures, import OFL, patch, rendu attributs → DMX |
 | `crates/folie-show` | Fichier de show `.folie` : lecture, écriture atomique |
+| `crates/folie-control` | Console : sélection, groupes, presets, ligne de commande |
 | `crates/folie-engine` | Moteur temps réel : thread dédié à ~44 Hz, commandes par canal, état publié |
 | `crates/folie-cli` | Binaire `folie` : diagnostic et tests matériels |
 | `crates/folie-app` | Binaire `folie-dmx` : interface graphique (egui) |

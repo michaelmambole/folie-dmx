@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
@@ -10,7 +9,11 @@ use folie_engine::{Command, EngineConfig, EngineHandle, OutputBinding, Snapshot}
 use folie_fixture::library::LoadError;
 use folie_fixture::{Library, Patch};
 
+use folie_control::Console;
+
+use crate::cmdline::CommandLine;
 use crate::fixtures::FixturesView;
+use crate::pools::PoolsView;
 use crate::storage::Storage;
 
 mod file;
@@ -92,11 +95,12 @@ fn channel_labels(patch: &Patch) -> Vec<Option<String>> {
 }
 
 pub struct FolieApp {
-    engine: EngineHandle,
+    /// Show, sélection et programmer : tout passe par la console.
     library: Library,
     library_errors: Vec<LoadError>,
-    /// Le patch de référence. Le moteur en reçoit une copie à chaque modification.
-    patch: Patch,
+    console: Console,
+    pools: PoolsView,
+    command_line: CommandLine,
     channel_labels: Vec<Option<String>>,
     file: file::FileState,
     view: View,
@@ -123,12 +127,14 @@ impl FolieApp {
         for err in &library_errors {
             log::error!("{} : {}", err.path.display(), err.message);
         }
+        let console = Console::new(engine);
         let mut app = Self {
-            snapshot: engine.snapshot(),
-            engine,
+            snapshot: console.engine().snapshot(),
+            console,
+            pools: PoolsView::new(),
+            command_line: CommandLine::new(),
             library,
             library_errors,
-            patch: Patch::default(),
             channel_labels: vec![None; CHANNELS_PER_UNIVERSE],
             file: file::FileState::new(storage),
             view: View::Fixtures,
@@ -153,9 +159,13 @@ impl FolieApp {
         }
     }
 
+    fn engine(&self) -> &EngineHandle {
+        self.console.engine()
+    }
+
     fn patch_changed(&mut self) {
-        self.channel_labels = channel_labels(&self.patch);
-        self.engine.send(Command::SetPatch(Arc::new(self.patch.clone())));
+        self.console.patch_changed();
+        self.channel_labels = channel_labels(&self.console.show.patch);
     }
 
     fn select_output(&mut self, choice: OutputChoice) {
@@ -169,7 +179,7 @@ impl FolieApp {
                 }
             },
         };
-        self.engine.send(Command::SetOutputs(vec![OutputBinding { universe: 0, output }]));
+        self.engine().send(Command::SetOutputs(vec![OutputBinding { universe: 0, output }]));
         self.output = choice;
         self.error = None;
     }
@@ -226,11 +236,12 @@ impl FolieApp {
             };
             let button = egui::Button::new(RichText::new("BLACKOUT").strong().color(text)).fill(fill);
             if ui.add(button).on_hover_text("Coupe toute la sortie (B)").clicked() {
-                self.engine.send(Command::Blackout(!blackout));
+                self.engine().send(Command::Blackout(!blackout));
             }
             let clear_help = "Vide le programmer : fixtures à leurs valeurs par défaut, canaux forcés relâchés";
             if ui.button("Clear").on_hover_text(clear_help).clicked() {
-                self.engine.send(Command::ClearProgrammer);
+                let result = self.console.execute("ClearAll");
+                self.command_line.report(result);
             }
 
             ui.separator();
@@ -256,7 +267,7 @@ impl FolieApp {
             ui.label(if snap.output_errors > 0 { errors.color(Color32::LIGHT_RED) } else { errors });
             ui.label(format!("retards {}", snap.late_frames));
             ui.separator();
-            ui.label(format!("{} fixtures patchées", self.patch.fixtures().len()));
+            ui.label(format!("{} fixtures patchées", self.console.show.patch.fixtures().len()));
             if !self.library_errors.is_empty() {
                 let details: Vec<String> = self
                     .library_errors
@@ -282,14 +293,24 @@ impl FolieApp {
         let mut patch_changed = false;
         egui::Panel::left("patch").resizable(true).default_size(430.0).show(ui, |ui| {
             ui.add_space(6.0);
-            patch_changed = self.fixtures_view.patch_panel(ui, &self.library, &mut self.patch);
+            patch_changed = self.fixtures_view.patch_panel(ui, &self.library, &mut self.console);
         });
         if patch_changed {
             self.patch_changed();
             self.mark_dirty();
         }
+        let mut result = None;
+        egui::Panel::right("pools").resizable(true).default_size(300.0).show(ui, |ui| {
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().show(ui, |ui| result = self.pools.show(ui, &mut self.console));
+        });
+        if let Some(result) = result
+            && self.command_line.report(result)
+        {
+            self.mark_dirty();
+        }
         egui::CentralPanel::default().show(ui, |ui| {
-            self.fixtures_view.attribute_panel(ui, &self.snapshot, self.display, &self.engine);
+            self.fixtures_view.attribute_panel(ui, &mut self.console, &self.snapshot, self.display);
         });
     }
 
@@ -303,7 +324,7 @@ impl FolieApp {
                 &self.snapshot.output[0],
                 self.display,
                 self.selected,
-                &self.engine,
+                self.console.engine(),
             );
             ui.add_space(6.0);
         });
@@ -321,14 +342,14 @@ impl FolieApp {
 
 impl eframe::App for FolieApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.snapshot = self.engine.snapshot();
+        self.snapshot = self.engine().snapshot();
         self.rate.update(self.snapshot.frame);
 
         let ctx = ui.ctx().clone();
         self.file_shortcuts(&ctx);
         self.file_tick(&ctx);
         if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::B)) {
-            self.engine.send(Command::Blackout(!self.snapshot.blackout));
+            self.engine().send(Command::Blackout(!self.snapshot.blackout));
         }
 
         egui::Panel::top("top").show(ui, |ui| {
@@ -337,6 +358,15 @@ impl eframe::App for FolieApp {
             ui.add_space(4.0);
         });
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let mut command_changed = false;
+        egui::Panel::bottom("command").show(ui, |ui| {
+            ui.add_space(4.0);
+            command_changed = self.command_line.show(ui, &mut self.console);
+            ui.add_space(4.0);
+        });
+        if command_changed {
+            self.mark_dirty();
+        }
         match self.view {
             View::Fixtures => self.fixtures_ui(ui),
             View::Dmx => self.dmx_ui(ui),
@@ -352,6 +382,7 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui::accesskit::Role;
+    use folie_fixture::FeatureGroup;
     use egui_kittest::kittest::Queryable;
 
     /// Traite les clics en attente, laisse au moteur le temps d'exécuter les
@@ -379,9 +410,9 @@ mod tests {
         settle(&mut harness);
 
         let app = harness.state();
-        let addresses: Vec<u16> = app.patch.fixtures().iter().map(|f| f.address).collect();
+        let addresses: Vec<u16> = app.console.show.patch.fixtures().iter().map(|f| f.address).collect();
         assert_eq!(addresses, [1, 15, 29, 43]);
-        assert_eq!(app.fixtures_view.selection.len(), 4);
+        assert_eq!(app.console.selection().len(), 4);
         assert_eq!(app.snapshot.patch.fixtures().len(), 4, "le moteur a reçu le patch");
 
         // Valeurs par défaut : shutter ouvert (12), pan/tilt au centre, zoom 128.
@@ -436,7 +467,7 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_label("Patcher").click();
         settle(&mut harness);
-        let addresses: Vec<u16> = harness.state().patch.fixtures().iter().map(|f| f.address).collect();
+        let addresses: Vec<u16> = harness.state().console.show.patch.fixtures().iter().map(|f| f.address).collect();
         assert_eq!(addresses, [1, 11]);
 
         // Ouvre la fixture 10 et ne sélectionne que sa cellule 3.
@@ -500,7 +531,7 @@ mod tests {
         let second = harness(Storage::at(&data));
         let app = second.state();
         assert_eq!(app.file.path.as_deref(), Some(show_path.as_path()));
-        assert_eq!(app.patch.fixtures().len(), 2);
+        assert_eq!(app.console.show.patch.fixtures().len(), 2);
         assert!(!app.file.dirty);
         assert_eq!(app.fixtures_view.form.first_id, 3, "le formulaire propose un numéro libre");
     }
@@ -517,7 +548,7 @@ mod tests {
 
         let mut second = harness(Storage::at(&data));
         assert!(second.state().file.recovery.is_some());
-        assert!(second.state().patch.fixtures().is_empty(), "rien n'est chargé sans accord");
+        assert!(second.state().console.show.patch.fixtures().is_empty(), "rien n'est chargé sans accord");
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("recovery.png");
             second.render().expect("rendu").save(&path).expect("écriture de l'image");
@@ -525,8 +556,70 @@ mod tests {
         second.get_by_label("Récupérer").click();
         settle(&mut second);
         let app = second.state();
-        assert_eq!(app.patch.fixtures().len(), 3);
+        assert_eq!(app.console.show.patch.fixtures().len(), 3);
         assert!(app.file.dirty, "les modifications récupérées restent à enregistrer");
         assert_eq!(app.snapshot.patch.fixtures().len(), 3, "le moteur a reçu le patch");
+    }
+
+    /// Tape une commande dans la ligne de commande et la valide.
+    fn command(harness: &mut Harness<'_, FolieApp>, line: &str) {
+        let input = harness.get_by_role_and_label(Role::TextInput, "Commande");
+        input.focus();
+        input.type_text(line);
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        settle(harness);
+    }
+
+    fn output(harness: &Harness<'_, FolieApp>, channel: u16) -> u8 {
+        harness.state().snapshot.output[0].get(channel).unwrap()
+    }
+
+    #[test]
+    fn command_line_groups_and_presets_pools() {
+        let mut harness = harness(Storage::disabled());
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+
+        command(&mut harness, "fi 1 th 2 at 50");
+        assert_eq!((output(&harness, 2), output(&harness, 16), output(&harness, 30)), (128, 128, 0));
+        assert_eq!(harness.state().command_line.input, "", "la ligne est vidée après exécution");
+        harness.get_by_label("Dimmer à 50 % sur 2 cibles");
+
+        // Erreur expliquée, sans rien casser.
+        command(&mut harness, "Fixture 99");
+        harness.get_by_label("Fixture 99 n'est pas patchée");
+
+        command(&mut harness, r#"Store Group 1 "Face""#);
+        assert!(harness.state().file.dirty);
+        command(&mut harness, "ClearAll");
+        assert!(harness.state().console.selection().is_empty());
+
+        // Rappel du groupe depuis son pool.
+        harness.get_by_label("1\nFace").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.selection().len(), 2);
+
+        // Preset de dimmer enregistré avec Store armé, puis rappelé d'un clic.
+        harness.get_by_label("Full").click();
+        settle(&mut harness);
+        harness.get_by_label("1 Dimmer").click();
+        harness.get_by_label("Store").click();
+        harness.run_steps(2);
+        harness.get_all_by_label("1").last().unwrap().click(); // case 1 du pool de presets
+        settle(&mut harness);
+        let preset = &harness.state().console.show.presets[&(FeatureGroup::Dimmer, 1)];
+        assert_eq!(preset.values.len(), 2);
+
+        command(&mut harness, "ClearAll");
+        assert_eq!(output(&harness, 2), 0);
+        harness.get_by_label("1\nDimmer 1").click();
+        settle(&mut harness);
+        assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 255));
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("pools.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 }

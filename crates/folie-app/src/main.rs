@@ -1,7 +1,9 @@
 mod app;
+mod cmdline;
 mod faders;
 mod fixtures;
 mod monitor;
+mod pools;
 mod storage;
 
 fn main() -> eframe::Result {

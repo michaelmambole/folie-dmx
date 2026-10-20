@@ -16,6 +16,51 @@ impl std::fmt::Display for FixtureId {
     }
 }
 
+/// Ce qu'on sélectionne : une fixture entière (« 5 ») ou une sous-fixture (« 5.3 »).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Target {
+    pub fixture: FixtureId,
+    /// Index dans `Mode::heads`, `None` pour la fixture entière.
+    pub head: Option<usize>,
+}
+
+impl Target {
+    pub fn whole(fixture: FixtureId) -> Self {
+        Self { fixture, head: None }
+    }
+
+    /// La fixture entière pilote tous ses paramètres, une sous-fixture seulement les siens.
+    pub fn covers(&self, parameter: &crate::Parameter) -> bool {
+        self.head.is_none() || parameter.head == self.head
+    }
+}
+
+/// « 5 » ou « 5.3 » : les sous-fixtures sont numérotées à partir de 1, comme sur MA.
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.head {
+            None => write!(f, "{}", self.fixture),
+            Some(head) => write!(f, "{}.{}", self.fixture, head + 1),
+        }
+    }
+}
+
+impl std::str::FromStr for Target {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = || format!("cible invalide : « {s} »");
+        let number = |part: &str| part.trim().parse::<u32>().map_err(|_| invalid());
+        match s.split_once('.') {
+            None => Ok(Self::whole(FixtureId(number(s)?))),
+            Some((fixture, head)) => {
+                let head = number(head)?.checked_sub(1).ok_or_else(invalid)?;
+                Ok(Self { fixture: FixtureId(number(fixture)?), head: Some(head as usize) })
+            }
+        }
+    }
+}
+
 /// Désigne un paramètre d'une fixture patchée (index dans `Mode::parameters`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParamKey {
@@ -23,7 +68,7 @@ pub struct ParamKey {
     pub parameter: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PatchedFixture {
     pub id: FixtureId,
     pub name: String,
@@ -64,7 +109,7 @@ pub enum PatchError {
 }
 
 /// Liste des fixtures patchées, triée par numéro.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Patch {
     fixtures: Vec<PatchedFixture>,
 }
@@ -95,6 +140,25 @@ impl Patch {
         }
         self.fixtures.insert(index, fixture);
         Ok(())
+    }
+
+    /// Paramètres pilotés par une cible, avec leur index dans le mode.
+    /// Vide si la fixture n'est pas patchée ou si la sous-fixture n'existe pas.
+    pub fn parameters_of(&self, target: Target) -> Vec<(usize, &crate::Parameter)> {
+        let Some(fixture) = self.get(target.fixture) else { return Vec::new() };
+        if target.head.is_some_and(|h| h >= fixture.mode().heads.len()) {
+            return Vec::new();
+        }
+        fixture.mode().parameters.iter().enumerate().filter(|(_, p)| target.covers(p)).collect()
+    }
+
+    /// La cible désigne-t-elle quelque chose de patché ?
+    pub fn contains(&self, target: Target) -> bool {
+        match (self.get(target.fixture), target.head) {
+            (None, _) => false,
+            (Some(_), None) => true,
+            (Some(f), Some(head)) => head < f.mode().heads.len(),
+        }
     }
 
     pub fn remove(&mut self, id: FixtureId) -> Option<PatchedFixture> {
@@ -208,6 +272,16 @@ mod tests {
         assert_eq!(patch.next_free_address(0, 25), Some(41));
         assert_eq!(patch.next_free_address(0, 600), None);
         assert_eq!(patch.next_free_id(), FixtureId(3));
+    }
+
+    #[test]
+    fn target_text_round_trip() {
+        let sub: Target = "5.3".parse().unwrap();
+        assert_eq!(sub, Target { fixture: FixtureId(5), head: Some(2) });
+        assert_eq!(sub.to_string(), "5.3");
+        assert_eq!("12".parse::<Target>().unwrap(), Target::whole(FixtureId(12)));
+        assert!("5.0".parse::<Target>().is_err());
+        assert!("x".parse::<Target>().is_err());
     }
 
     #[test]

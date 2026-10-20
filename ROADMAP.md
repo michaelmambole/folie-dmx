@@ -31,9 +31,14 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [ ] Import GDTF
 
 ## Phase 3 — Programmer (≈ 1,5 mois)
-- Sélection de fixtures, groupes, valeurs par attribut
-- Presets (position, couleur, faisceau…) référencés, pas copiés
-- Ligne de commande style MA : `Fixture 1 Thru 10 At 50`, `Group 2 At Full`, `Clear`
+- [x] Couche de contrôle `folie-control` : sélection ordonnée, groupes, presets, commandes
+- [x] Groupes (ordre de sélection conservé), pool cliquable, enregistrés dans le show
+- [x] Presets par famille numérotée comme grandMA2 (1 Dimmer … 7 Contrôle), pool cliquable
+- [x] Ligne de commande style MA avec abréviations et historique :
+      `Fixture 1 Thru 4 - 2 At 50`, `Group 2 At Full`, `Fixture 5.1 Thru 5.4`, `Preset 4.1`,
+      `Store Group 3 "Cour"`, `Store Preset 4.1`, `Label`, `Delete`, `Clear`, `ClearAll`
+- [ ] Presets référencés (et non recopiés) : avec les cues, phase 4
+- [ ] Commandes de valeur par attribut (`Attribute "Pan" At 50`), `At` relatif (`At + 10`)
 - **Couche de contrôle** entre les interfaces et le moteur : elle tient le show et le
   programmer, et le langage de commande en est l'**unique point d'entrée**
   (egui, OSC et web passent tous par elle)
