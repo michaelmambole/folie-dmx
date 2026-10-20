@@ -467,7 +467,7 @@ mod tests {
         }
 
         // La fixture 11 entière : ses 10 lampes d'un coup.
-        harness.get_by_label("11").click();
+        harness.get_all_by_label("11").next().unwrap().click(); // la ligne du patch, avant les cases de pool
         settle(&mut harness);
         harness.get_by_label("Full").click();
         settle(&mut harness);

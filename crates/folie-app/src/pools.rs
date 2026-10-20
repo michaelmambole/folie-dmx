@@ -5,8 +5,12 @@ use eframe::egui::{self, Color32, RichText, vec2};
 use folie_control::{CommandError, Console, Outcome, SelectMode};
 use folie_fixture::FeatureGroup;
 
-const COLUMNS: usize = 4;
 const CELL: egui::Vec2 = vec2(70.0, 44.0);
+const SPACING: f32 = 4.0;
+/// Cases affichées au minimum, comme un pool de console.
+const MIN_CELLS: usize = 48;
+/// Rangées libres toujours visibles après la dernière case occupée.
+const FREE_ROWS: usize = 2;
 const ARMED: Color32 = Color32::from_rgb(200, 30, 30);
 
 pub struct PoolsView;
@@ -86,10 +90,13 @@ impl PoolsView {
 /// Grille de cases : les cases occupées, puis quelques cases libres.
 /// Renvoie le numéro cliqué. Une case libre n'est cliquable que pour enregistrer.
 fn grid(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, items: &[(u32, String, usize)], armed: bool) -> Option<u32> {
+    // Autant de colonnes que la largeur de la fenêtre le permet.
+    let columns = (((ui.available_width() + SPACING) / (CELL.x + SPACING)) as usize).max(2);
     let last = items.iter().map(|(n, _, _)| *n).max().unwrap_or(0) as usize;
-    let cells = (last + COLUMNS).div_ceil(COLUMNS).max(2) * COLUMNS;
+    let rows = (last.div_ceil(columns) + FREE_ROWS).max(MIN_CELLS.div_ceil(columns));
+    let cells = rows * columns;
     let mut clicked = None;
-    egui::Grid::new(id).spacing([4.0, 4.0]).show(ui, |ui| {
+    egui::Grid::new(id).spacing([SPACING, SPACING]).show(ui, |ui| {
         for number in 1..=cells as u32 {
             let item = items.iter().find(|(n, _, _)| *n == number);
             let (text, help) = match item {
@@ -103,7 +110,7 @@ fn grid(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, items: &[
             if ui.add_enabled(enabled, button).on_hover_text(help).clicked() {
                 clicked = Some(number);
             }
-            if (number as usize).is_multiple_of(COLUMNS) {
+            if (number as usize).is_multiple_of(columns) {
                 ui.end_row();
             }
         }
