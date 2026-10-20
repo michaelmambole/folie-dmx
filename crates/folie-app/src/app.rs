@@ -810,9 +810,25 @@ mod tests {
         settle(&mut harness);
         assert_eq!(cue(&harness, 2).name, "Contre bis");
 
+        // Touche S : arme Store, la rappuyer le désarme.
+        harness.key_press(egui::Key::S);
+        harness.run_steps(2);
+        assert!(harness.state().store_armed, "S arme Store");
+        harness.key_press(egui::Key::S);
+        harness.run_steps(2);
+        assert!(!harness.state().store_armed, "S le désarme");
+
         // Store armé : les numéros de cue complètent la cue avec le programmer.
+        // Pendant la saisie d'une commande, S est une lettre comme une autre.
+        harness.get_by_role_and_label(Role::TextInput, "Commande").focus();
+        harness.run_steps(1);
+        harness.key_press(egui::Key::S);
+        harness.run_steps(2);
+        assert!(!harness.state().store_armed, "S tapé dans la ligne de commande n'arme pas Store");
         command(&mut harness, "Fixture 2 At 50");
-        harness.get_all_by_label("Store").next().unwrap().click();
+        harness.key_press(egui::Key::Escape); // quitte la ligne de commande
+        harness.run_steps(2);
+        harness.key_press(egui::Key::S);
         harness.run_steps(2);
         harness.get_by_label("Store armé : cliquez un numéro pour compléter cette cue");
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {

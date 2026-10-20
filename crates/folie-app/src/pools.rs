@@ -31,7 +31,7 @@ pub struct PoolsView;
 pub fn store_button(ui: &mut egui::Ui, armed: &mut bool) {
     let text = RichText::new("Store").family(theme::medium());
     let button = if *armed { egui::Button::new(text.color(Color32::WHITE)).fill(ARMED) } else { egui::Button::new(text) };
-    let help = "Armer, puis cliquer une case de pool, un executor ou une cue pour y enregistrer (Échap pour annuler)";
+    let help = "Armer (touche S), puis cliquer une case de pool, un executor ou une cue pour y enregistrer (Échap pour annuler)";
     if ui.add(button).on_hover_text(help).clicked() {
         *armed = !*armed;
     }

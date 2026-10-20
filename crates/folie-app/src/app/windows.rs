@@ -204,6 +204,10 @@ impl FolieApp {
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::B)) {
             self.toggle_blackout();
         }
+        // S : la touche Store, comme sur grandMA2 onPC.
+        if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
+            self.store_armed = !self.store_armed;
+        }
     }
 
     fn recall_layout(&mut self, slot: u8) {
