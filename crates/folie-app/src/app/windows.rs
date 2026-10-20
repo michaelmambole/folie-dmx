@@ -166,6 +166,21 @@ fn builder(kind: WindowKind, placement: &Placement) -> ViewportBuilder {
     builder
 }
 
+/// Raccourci sur une touche de chiffre, reconnue aussi par sa place sur le clavier :
+/// en AZERTY, la touche 4 donne « ' » et la 8 « ! », qu'egui lit comme une apostrophe
+/// et un point d'exclamation, jamais comme un 4 ou un 8.
+fn consume_digit(ctx: &egui::Context, modifiers: Modifiers, digit: Key) -> bool {
+    ctx.input_mut(|i| {
+        let before = i.events.len();
+        i.events.retain(|event| {
+            !matches!(event,
+                egui::Event::Key { key, physical_key, modifiers: m, pressed: true, .. }
+                if (*key == digit || *physical_key == Some(digit)) && m.matches_logically(modifiers))
+        });
+        i.events.len() != before
+    })
+}
+
 impl FolieApp {
     /// Raccourcis valables dans toutes les fenêtres : chaque fenêtre système
     /// reçoit ses propres touches, il faut donc les traiter partout.
@@ -173,15 +188,13 @@ impl FolieApp {
         self.file_shortcuts(ctx);
         // ⌥⌘1 avant ⌘1 : egui accepte une touche Option en trop, ⌘1 avalerait ⌥⌘1.
         for slot in LAYOUT_SLOTS {
-            let shortcut = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, layout_key(slot));
-            if ctx.input_mut(|i| i.consume_shortcut(&shortcut)) {
+            if consume_digit(ctx, Modifiers::COMMAND | Modifiers::ALT, layout_key(slot)) {
                 self.recall_layout(slot);
             }
         }
         for kind in WindowKind::ALL {
-            let shortcut = KeyboardShortcut::new(Modifiers::COMMAND, kind.key());
             // Bascule, comme dans le menu Fenêtres : ouvre si fermée, ferme si ouverte.
-            if ctx.input_mut(|i| i.consume_shortcut(&shortcut)) {
+            if consume_digit(ctx, Modifiers::COMMAND, kind.key()) {
                 self.windows.toggle(kind);
             }
         }

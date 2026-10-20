@@ -657,6 +657,22 @@ mod tests {
         harness.run_steps(2);
         assert!(!harness.state().windows.workspace.is_open(WindowKind::Groups));
 
+        // En AZERTY, la touche 4 donne « ' » : ⌘4 arrive comme une apostrophe, sur la touche physique 4.
+        let azerty_4 = egui::Event::Key {
+            key: egui::Key::Quote,
+            physical_key: Some(egui::Key::Num4),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let was_open = harness.state().windows.workspace.is_open(WindowKind::Output);
+        harness.event(azerty_4.clone());
+        harness.run_steps(2);
+        assert_ne!(harness.state().windows.workspace.is_open(WindowKind::Output), was_open, "⌘4 en AZERTY");
+        harness.event(azerty_4);
+        harness.run_steps(2);
+        assert_eq!(harness.state().windows.workspace.is_open(WindowKind::Output), was_open);
+
         // … et ⌥⌘1 les rouvre avec le reste de la disposition.
         harness.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::Num1);
         harness.run_steps(2);

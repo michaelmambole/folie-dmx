@@ -44,10 +44,10 @@ fn page_selector(ui: &mut egui::Ui, page: &mut usize) {
         let first = *page * FADERS_PER_PAGE + 1;
         ui.label(format!("canaux {first}–{}", first + FADERS_PER_PAGE - 1));
         ui.horizontal(|ui| {
-            if ui.add_enabled(*page > 0, egui::Button::new("◀")).clicked() {
+            if ui.add_enabled(*page > 0, egui::Button::new("‹")).on_hover_text("Page précédente").clicked() {
                 *page -= 1;
             }
-            if ui.add_enabled(*page + 1 < PAGES, egui::Button::new("▶")).clicked() {
+            if ui.add_enabled(*page + 1 < PAGES, egui::Button::new("›")).on_hover_text("Page suivante").clicked() {
                 *page += 1;
             }
         });
