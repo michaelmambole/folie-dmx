@@ -160,6 +160,34 @@ pub fn section(ui: &mut egui::Ui, title: &str) {
     ui.label(egui::RichText::new(title.to_uppercase()).size(11.0).color(MUTED).extra_letter_spacing(0.8));
 }
 
+/// Titre de section repliable : chevron et titre en capitales, toute la ligne est cliquable.
+/// Renvoie `true` quand on a cliqué (l'appelant bascule l'état).
+pub fn collapsible_section(ui: &mut egui::Ui, title: &str, open: bool) -> bool {
+    let text = title.to_uppercase();
+    let galley = egui::WidgetText::from(egui::RichText::new(&text).size(11.0).extra_letter_spacing(0.8)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let height = galley.size().y.max(16.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+    let color = if response.hovered() { TEXT } else { MUTED };
+    // Chevron dessiné : les triangles ne sont pas dans les polices embarquées.
+    let center = egui::pos2(rect.left() + 5.0, rect.center().y);
+    let points = if open {
+        vec![center + egui::vec2(-4.0, -2.0), center + egui::vec2(4.0, -2.0), center + egui::vec2(0.0, 3.0)]
+    } else {
+        vec![center + egui::vec2(-2.0, -4.0), center + egui::vec2(3.0, 0.0), center + egui::vec2(-2.0, 4.0)]
+    };
+    let painter = ui.painter();
+    painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+    painter.galley(egui::pos2(rect.left() + 16.0, rect.center().y - galley.size().y / 2.0), galley, color);
+    let response = response.on_hover_text(if open { "Replier" } else { "Déplier" });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::DisclosureTriangle, true, open, &text));
+    response.clicked()
+}
+
 /// Pastille de couleur avec un libellé, pour les légendes.
 pub fn chip(ui: &mut egui::Ui, color: Color32, label: &str) {
     ui.horizontal(|ui| {

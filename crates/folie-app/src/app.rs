@@ -432,6 +432,19 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
 
+        // Les cadres se replient d'un clic sur leur titre, et se déplient de même.
+        harness.get_by_role_and_label(Role::DisclosureTriangle, "POSITION").click();
+        harness.run_steps(2);
+        assert!(harness.query_by_role_and_label(Role::Slider, "Pan").is_none(), "Position repliée");
+        harness.get_by_role_and_label(Role::Slider, "Zoom"); // les autres cadres restent ouverts
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("fixtures-collapsed.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_role_and_label(Role::DisclosureTriangle, "POSITION").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::Slider, "Pan");
+
         harness.get_by_label("Clear").click();
         settle(&mut harness);
         let out = &harness.state().snapshot.output[0];

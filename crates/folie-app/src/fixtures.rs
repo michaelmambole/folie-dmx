@@ -33,6 +33,8 @@ pub struct FixturesView {
     message: Option<(bool, String)>,
     /// Couleur visée dans le sélecteur (teinte, saturation, luminosité).
     picker: [f32; 3],
+    /// Cadres du Programmer repliés (Position, Couleur…), pour la session.
+    collapsed: BTreeSet<FeatureGroup>,
 }
 
 impl FixturesView {
@@ -50,6 +52,7 @@ impl FixturesView {
             },
             message: None,
             picker: [0.0, 0.0, 1.0],
+            collapsed: BTreeSet::new(),
         }
     }
 
@@ -371,7 +374,13 @@ impl FixturesView {
             for group in groups {
                 theme::card(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    theme::section(ui, group.label());
+                    let open = !self.collapsed.contains(&group);
+                    if theme::collapsible_section(ui, group.label(), open) && !self.collapsed.remove(&group) {
+                        self.collapsed.insert(group);
+                    }
+                    if !open {
+                        return;
+                    }
                     if group == FeatureGroup::Color && has_color(&rows) {
                         let current = current_color(console, snapshot, &fixture, reference);
                         if let Some(rgb) = crate::color_picker::color_picker(ui, &mut self.picker, current) {
