@@ -6,9 +6,11 @@ use std::sync::Arc;
 use folie_engine::{Command as EngineCommand, CueState, FaderMode, PlaybackOptions, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
 use folie_show::{
-    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, Preset, Sequence, Show,
+    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Preset, Sequence,
+    Show, executor_id, executor_label, executor_place,
 };
 
+use crate::command::ExecutorRef;
 use crate::{CommandError, Console, Outcome, invalid};
 
 /// Valeur d'une cue telle qu'elle sortira : la référence à un preset est
@@ -138,12 +140,19 @@ impl Console {
     }
 
     pub fn set_executor_options(&mut self, executor: u32, options: ExecutorOptions) -> Result<Outcome, CommandError> {
+        // Une seule place fixée par numéro : sinon deux executors se disputeraient la même place.
+        if options.fixed
+            && let Some(other) = self.fixed_at(executor_place(executor).1).filter(|o| *o != executor)
+        {
+            let place = executor_place(executor).1;
+            return invalid(format!("l'executor {} est déjà fixé à la place {place}", executor_label(other)));
+        }
         let Some(x) = self.show.executors.get_mut(&executor) else {
-            return invalid(format!("l'executor {executor} est vide"));
+            return invalid(format!("l'executor {executor} est vide", executor = executor_label(executor)));
         };
         x.options = options;
         self.sync_playback();
-        Ok(Outcome::changed(format!("Options de l'executor {executor} enregistrées")))
+        Ok(Outcome::changed(format!("Options de l'executor {executor} enregistrées", executor = executor_label(executor))))
     }
 
     /// Éteint tous les executors, sauf ceux qui sont protégés.
@@ -156,6 +165,65 @@ impl Console {
         }
     }
 
+    /// Page d'executors affichée.
+    pub fn page(&self) -> u32 {
+        self.page
+    }
+
+    pub fn set_page(&mut self, page: u32) -> Outcome {
+        self.page = page.clamp(1, MAX_PAGE);
+        let name = self.show.pages.get(&self.page).map(|n| format!(" « {n} »")).unwrap_or_default();
+        Outcome::info(format!("Page {}{name}", self.page))
+    }
+
+    pub fn page_name(&self, page: u32) -> &str {
+        self.show.pages.get(&page).map_or("", String::as_str)
+    }
+
+    pub fn rename_page(&mut self, page: u32, name: String) -> Outcome {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            self.show.pages.remove(&page);
+            Outcome::changed(format!("Page {page} sans nom"))
+        } else {
+            self.show.pages.insert(page, name.clone());
+            Outcome::changed(format!("Page {page} renommée « {name} »"))
+        }
+    }
+
+    /// Executor fixé à cette place, présent sur toutes les pages.
+    fn fixed_at(&self, slot: u32) -> Option<u32> {
+        self.show.executors.iter().find(|(id, x)| x.options.fixed && executor_place(**id).1 == slot).map(|(id, _)| *id)
+    }
+
+    /// Executor affiché à une place de la page courante : celui qui y est fixé, sinon celui de la page.
+    pub fn executor_at(&self, slot: u32) -> u32 {
+        self.fixed_at(slot).unwrap_or_else(|| executor_id(self.page, slot))
+    }
+
+    /// Numéro d'executor désigné en ligne de commande.
+    pub fn resolve_executor(&self, executor: ExecutorRef) -> u32 {
+        match executor.page {
+            Some(page) => executor_id(page, executor.slot),
+            None => self.executor_at(executor.slot),
+        }
+    }
+
+    /// `Fix` : fixe l'executor sur toutes les pages, ou le rend à sa page.
+    pub fn toggle_fixed(&mut self, executor: u32) -> Result<Outcome, CommandError> {
+        let Some(x) = self.show.executors.get(&executor) else {
+            return invalid(format!("l'executor {} est vide", executor_label(executor)));
+        };
+        let options = ExecutorOptions { fixed: !x.options.fixed, ..x.options };
+        self.set_executor_options(executor, options)?;
+        let label = executor_label(executor);
+        Ok(Outcome::changed(if options.fixed {
+            format!("Executor {label} fixé sur toutes les pages")
+        } else {
+            format!("Executor {label} rendu à sa page")
+        }))
+    }
+
     pub fn selected_executor(&self) -> u32 {
         self.selected_executor
     }
@@ -166,7 +234,7 @@ impl Console {
             Some(sequence) => format!(" (séquence « {} »)", sequence.name),
             None => " (vide)".into(),
         };
-        Outcome::info(format!("Executor {executor} sélectionné{what}"))
+        Outcome::info(format!("Executor {executor} sélectionné{what}", executor = executor_label(executor)))
     }
 
     /// Séquence de l'executor sélectionné, créée au premier `Store Cue`.
@@ -178,7 +246,7 @@ impl Console {
     fn selected_sequence_mut(&mut self) -> Result<&mut Sequence, CommandError> {
         let executor = self.selected_executor;
         let Some(number) = self.show.executors.get(&executor).map(|x| x.sequence) else {
-            return invalid(format!("l'executor {executor} n'a pas de séquence"));
+            return invalid(format!("l'executor {executor} n'a pas de séquence", executor = executor_label(executor)));
         };
         self.show.sequences.get_mut(&number).ok_or_else(|| CommandError::Invalid(format!("séquence {number} introuvable")))
     }
@@ -239,7 +307,7 @@ impl Console {
             cue.effects = Some(self.effects.clone());
         }
         let verb = if merged { "complétée" } else { "enregistrée" };
-        let message = format!("Cue {number} {verb} sur l'executor {executor} (fondu {} s)", cue.fade);
+        let message = format!("Cue {number} {verb} sur l'executor {executor} (fondu {} s)", cue.fade, executor = executor_label(executor));
         self.sync_playback();
         Ok(Outcome::changed(message))
     }
@@ -277,26 +345,26 @@ impl Console {
         if self.show.executors.contains_key(&executor) {
             Ok(executor)
         } else {
-            invalid(format!("l'executor {executor} n'a pas de séquence"))
+            invalid(format!("l'executor {executor} n'a pas de séquence", executor = executor_label(executor)))
         }
     }
 
     pub fn go(&self, executor: Option<u32>) -> Result<Outcome, CommandError> {
         let executor = self.executor_with_sequence(executor)?;
         self.engine.send(EngineCommand::Go(executor));
-        Ok(Outcome::info(format!("Go executor {executor}")))
+        Ok(Outcome::info(format!("Go executor {executor}", executor = executor_label(executor))))
     }
 
     pub fn back(&self, executor: Option<u32>) -> Result<Outcome, CommandError> {
         let executor = self.executor_with_sequence(executor)?;
         self.engine.send(EngineCommand::Back(executor));
-        Ok(Outcome::info(format!("Back executor {executor}")))
+        Ok(Outcome::info(format!("Back executor {executor}", executor = executor_label(executor))))
     }
 
     pub fn off(&self, executor: Option<u32>) -> Result<Outcome, CommandError> {
         let executor = self.executor_with_sequence(executor)?;
         self.engine.send(EngineCommand::Off(executor));
-        Ok(Outcome::info(format!("Executor {executor} éteint")))
+        Ok(Outcome::info(format!("Executor {executor} éteint", executor = executor_label(executor))))
     }
 
     pub fn goto(&self, number: CueNumber) -> Result<Outcome, CommandError> {
@@ -317,13 +385,13 @@ impl Console {
     /// Touche principale de l'executor, selon son mode (Flash : voir [`Console::flash`]).
     pub fn press(&self, executor: u32) -> Result<Outcome, CommandError> {
         let Some((x, _)) = self.executor(executor) else {
-            return invalid(format!("l'executor {executor} est vide : Store, puis cliquez-le pour y enregistrer"));
+            return invalid(format!("l'executor {executor} est vide : Store, puis cliquez-le pour y enregistrer", executor = executor_label(executor)));
         };
         match x.mode {
             ExecutorMode::Go | ExecutorMode::Flash => self.go(Some(executor)),
             ExecutorMode::Toggle => {
                 self.engine.send(EngineCommand::Toggle(executor));
-                Ok(Outcome::info(format!("Executor {executor} basculé")))
+                Ok(Outcome::info(format!("Executor {executor} basculé", executor = executor_label(executor))))
             }
         }
     }
@@ -347,17 +415,17 @@ impl Console {
 
     pub fn set_executor_mode(&mut self, executor: u32, mode: ExecutorMode) -> Result<Outcome, CommandError> {
         let Some(x) = self.show.executors.get_mut(&executor) else {
-            return invalid(format!("l'executor {executor} est vide"));
+            return invalid(format!("l'executor {executor} est vide", executor = executor_label(executor)));
         };
         x.mode = mode;
         self.engine.send(EngineCommand::Off(executor));
-        Ok(Outcome::changed(format!("Executor {executor} en mode {}", mode.label())))
+        Ok(Outcome::changed(format!("Executor {executor} en mode {}", mode.label(), executor = executor_label(executor))))
     }
 
     /// Renomme la séquence de l'executor.
     pub fn rename_executor(&mut self, executor: u32, name: String) -> Result<Outcome, CommandError> {
         let Some(sequence) = self.show.executors.get(&executor).map(|x| x.sequence) else {
-            return invalid(format!("l'executor {executor} est vide"));
+            return invalid(format!("l'executor {executor} est vide", executor = executor_label(executor)));
         };
         if let Some(s) = self.show.sequences.get_mut(&sequence) {
             s.name = name.clone();
@@ -375,13 +443,13 @@ impl Console {
             self.show.executors.get(&executor).map_or((ExecutorMode::Go, ExecutorOptions::default()), |x| (x.mode, x.options));
         self.show.executors.insert(executor, Executor { sequence, mode, options });
         self.sync_playback();
-        Ok(Outcome::changed(format!("Executor {executor} : séquence {sequence}")))
+        Ok(Outcome::changed(format!("Executor {executor} : séquence {sequence}", executor = executor_label(executor))))
     }
 
     /// Libère l'executor. Sa séquence est supprimée si plus aucun executor ne la joue.
     pub fn clear_executor(&mut self, executor: u32) -> Result<Outcome, CommandError> {
         let Some(x) = self.show.executors.remove(&executor) else {
-            return invalid(format!("l'executor {executor} est déjà vide"));
+            return invalid(format!("l'executor {executor} est déjà vide", executor = executor_label(executor)));
         };
         self.engine.send(EngineCommand::Off(executor));
         let still_used = self.show.executors.values().any(|o| o.sequence == x.sequence);
@@ -390,12 +458,12 @@ impl Console {
         }
         self.sync_playback();
         let detail = if still_used { "" } else { ", séquence supprimée" };
-        Ok(Outcome::changed(format!("Executor {executor} vidé{detail}")))
+        Ok(Outcome::changed(format!("Executor {executor} vidé{detail}", executor = executor_label(executor))))
     }
 
     pub fn set_fader(&self, executor: u32, percent: f32) -> Result<Outcome, CommandError> {
         let executor = self.executor_with_sequence(Some(executor))?;
         self.engine.send(EngineCommand::SetFader { executor, level: percent / 100.0 });
-        Ok(Outcome::info(format!("Executor {executor} à {percent} %")))
+        Ok(Outcome::info(format!("Executor {executor} à {percent} %", executor = executor_label(executor))))
     }
 }

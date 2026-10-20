@@ -8,13 +8,14 @@
 //! Go   Back   Off               Go Executor 2           Goto Cue 5
 //! Store Cue 3 Fade 4 "Entrée"   Delete Cue 3            Executor 2 At 50
 //! Effect 2                      Tempo 128
+//! Page 2   Page +   Page -       Go Executor 2.5         Fix Executor 3
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
 //! pas d'ambiguïté : `fi 1 th 4 at 50`.
 
 use folie_fixture::{FeatureGroup, FixtureId, Target};
-use folie_show::CueNumber;
+use folie_show::{CueNumber, MAX_PAGE, SLOTS_PER_PAGE};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -44,13 +45,22 @@ pub enum Keyword {
     Effect,
     Tempo,
     All,
+    Page,
+    Fix,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
-const ALIASES: [(&str, Keyword); 4] =
-    [("g", Keyword::Group), ("exec", Keyword::Executor), ("t", Keyword::Thru), ("eff", Keyword::Effect)];
+/// « fi » et « p » restent Fixture et Preset malgré Fix et Page.
+const ALIASES: [(&str, Keyword); 6] = [
+    ("g", Keyword::Group),
+    ("exec", Keyword::Executor),
+    ("t", Keyword::Thru),
+    ("eff", Keyword::Effect),
+    ("fi", Keyword::Fixture),
+    ("p", Keyword::Preset),
+];
 
-const KEYWORDS: [(&str, Keyword); 21] = [
+const KEYWORDS: [(&str, Keyword); 23] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -72,6 +82,8 @@ const KEYWORDS: [(&str, Keyword); 21] = [
     ("effect", Keyword::Effect),
     ("tempo", Keyword::Tempo),
     ("all", Keyword::All),
+    ("page", Keyword::Page),
+    ("fix", Keyword::Fix),
 ];
 
 impl Keyword {
@@ -98,6 +110,8 @@ impl Keyword {
             Self::Effect => "Effect",
             Self::Tempo => "Tempo",
             Self::All => "All",
+            Self::Page => "Page",
+            Self::Fix => "Fix",
         }
     }
 
@@ -201,6 +215,21 @@ pub enum Object {
     Cue(Option<CueNumber>),
 }
 
+/// Executor désigné en ligne de commande : `3` (page courante) ou `2.3` (page 2, place 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutorRef {
+    /// `None` : la page courante, où un executor fixé l'emporte.
+    pub page: Option<u32>,
+    pub slot: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageMove {
+    To(u32),
+    Next,
+    Previous,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Sélection éventuellement suivie d'une valeur de dimmer : `Fixture 1 Thru 4 At 50`.
@@ -212,20 +241,24 @@ pub enum Command {
     Clear,
     ClearAll,
     /// `None` : l'executor sélectionné.
-    Go(Option<u32>),
-    Back(Option<u32>),
-    Off(Option<u32>),
+    Go(Option<ExecutorRef>),
+    Back(Option<ExecutorRef>),
+    Off(Option<ExecutorRef>),
     Goto(CueNumber),
-    SelectExecutor(u32),
+    SelectExecutor(ExecutorRef),
     /// Fader d'un executor, en pourcentage.
-    SetFader(u32, f32),
+    SetFader(ExecutorRef, f32),
     /// Lance un effet modèle sur la sélection.
     ApplyEffect(u32),
     SetTempo(f32),
     /// `Store Executor 3` : le programmer devient la cue suivante de l'executor 3.
-    StoreExecutor(u32),
+    StoreExecutor(ExecutorRef),
     /// `Off All` : tout éteindre, sauf les executors protégés.
     OffAll,
+    /// `Page 2`, `Page +`, `Page -` : page d'executors affichée.
+    Page(PageMove),
+    /// `Fix Executor 3` : fixe l'executor sur toutes les pages, ou le défixe.
+    Fix(ExecutorRef),
 }
 
 struct Parser {
@@ -292,9 +325,27 @@ impl Parser {
         }
     }
 
+    /// `3` ou `2.3` (page 2, place 3).
+    fn executor_ref(&mut self) -> Result<ExecutorRef, SyntaxError> {
+        let text = self.number("numéro d'executor")?;
+        let invalid = || SyntaxError(format!("executor invalide : {text} (place 1 à {SLOTS_PER_PAGE}, ou page.place)"));
+        let (page, slot) = match text.split_once('.') {
+            Some((page, slot)) => (Some(page.parse::<u32>().map_err(|_| invalid())?), slot),
+            None => (None, text.as_str()),
+        };
+        let slot: u32 = slot.parse().map_err(|_| invalid())?;
+        if !(1..=SLOTS_PER_PAGE).contains(&slot) {
+            return Err(invalid());
+        }
+        if let Some(page) = page.filter(|p| !(1..=MAX_PAGE).contains(p)) {
+            return Err(SyntaxError(format!("page invalide : {page} (1 à {MAX_PAGE})")));
+        }
+        Ok(ExecutorRef { page, slot })
+    }
+
     /// `Executor 2` facultatif après Go, Back, Off.
-    fn optional_executor(&mut self) -> Result<Option<u32>, SyntaxError> {
-        if self.eat(Keyword::Executor) { Ok(Some(self.integer("numéro d'executor")?)) } else { Ok(None) }
+    fn optional_executor(&mut self) -> Result<Option<ExecutorRef>, SyntaxError> {
+        if self.eat(Keyword::Executor) { Ok(Some(self.executor_ref()?)) } else { Ok(None) }
     }
 
     fn seconds(&mut self) -> Result<f32, SyntaxError> {
@@ -390,7 +441,7 @@ impl Parser {
             }
             Some(Token::Keyword(Keyword::Store)) if self.tokens.get(self.position + 1) == Some(&Token::Keyword(Keyword::Executor)) => {
                 self.position += 2;
-                Command::StoreExecutor(self.integer("numéro d'executor")?)
+                Command::StoreExecutor(self.executor_ref()?)
             }
             Some(Token::Keyword(Keyword::Store)) => {
                 self.position += 1;
@@ -446,9 +497,26 @@ impl Parser {
                 }
                 Command::Goto(self.cue_number()?)
             }
+            Some(Token::Keyword(Keyword::Page)) => {
+                self.position += 1;
+                match self.next() {
+                    Some(Token::Plus) => Command::Page(PageMove::Next),
+                    Some(Token::Minus) => Command::Page(PageMove::Previous),
+                    Some(Token::Number(n)) => match n.parse::<u32>() {
+                        Ok(page) if (1..=MAX_PAGE).contains(&page) => Command::Page(PageMove::To(page)),
+                        _ => return Err(SyntaxError(format!("page invalide : {n} (1 à {MAX_PAGE})"))),
+                    },
+                    _ => return Err(SyntaxError("Page <numéro>, Page + ou Page - attendu".into())),
+                }
+            }
+            Some(Token::Keyword(Keyword::Fix)) => {
+                self.position += 1;
+                self.eat(Keyword::Executor);
+                Command::Fix(self.executor_ref()?)
+            }
             Some(Token::Keyword(Keyword::Executor)) => {
                 self.position += 1;
-                let executor = self.integer("numéro d'executor")?;
+                let executor = self.executor_ref()?;
                 if self.eat(Keyword::At) {
                     let Value::Percent(p) = self.value()?;
                     Command::SetFader(executor, p)
@@ -566,13 +634,14 @@ mod tests {
     #[test]
     fn playback_commands() {
         let cue = |s: &str| s.parse::<CueNumber>().unwrap();
+        let here = |slot| ExecutorRef { page: None, slot };
         assert_eq!(parse("go"), Ok(Command::Go(None)));
-        assert_eq!(parse("Go Executor 3"), Ok(Command::Go(Some(3))));
-        assert_eq!(parse("b exec 2"), Ok(Command::Back(Some(2))));
+        assert_eq!(parse("Go Executor 3"), Ok(Command::Go(Some(here(3)))));
+        assert_eq!(parse("b exec 2"), Ok(Command::Back(Some(here(2)))));
         assert_eq!(parse("Off"), Ok(Command::Off(None)));
         assert_eq!(parse("Goto Cue 2.5"), Ok(Command::Goto(cue("2.5"))));
-        assert_eq!(parse("Executor 4"), Ok(Command::SelectExecutor(4)));
-        assert_eq!(parse("Exec 4 At 75"), Ok(Command::SetFader(4, 75.0)));
+        assert_eq!(parse("Executor 4"), Ok(Command::SelectExecutor(here(4))));
+        assert_eq!(parse("Exec 4 At 75"), Ok(Command::SetFader(here(4), 75.0)));
         assert_eq!(
             parse(r#"Store Cue 3 Fade 4 "Entrée""#),
             Ok(Command::Store { object: Object::Cue(Some(cue("3"))), name: Some("Entrée".into()), fade: Some(4.0) })
@@ -583,11 +652,30 @@ mod tests {
         assert!(parse("Store Group 1 Fade 3").is_err());
         assert!(parse("Goto 5").unwrap_err().0.contains("Goto Cue"));
         assert_eq!(parse("eff 3"), Ok(Command::ApplyEffect(3)));
-        assert_eq!(parse("Store Exec 4"), Ok(Command::StoreExecutor(4)));
+        assert_eq!(parse("Store Exec 4"), Ok(Command::StoreExecutor(here(4))));
         assert_eq!(parse("off all"), Ok(Command::OffAll));
         assert_eq!(parse("Tempo 128"), Ok(Command::SetTempo(128.0)));
         assert!(parse("Tempo 0").is_err());
         assert!(parse("e 1").unwrap_err().0.contains("ambigu"), "Effect ou Executor");
+    }
+
+    #[test]
+    fn executor_pages() {
+        let on = |page, slot| ExecutorRef { page: Some(page), slot };
+        assert_eq!(parse("Page 2"), Ok(Command::Page(PageMove::To(2))));
+        assert_eq!(parse("page +"), Ok(Command::Page(PageMove::Next)));
+        assert_eq!(parse("pa -"), Ok(Command::Page(PageMove::Previous)));
+        assert!(parse("Page 0").is_err());
+        assert!(parse("Page").is_err());
+        assert_eq!(parse("Go Executor 2.5"), Ok(Command::Go(Some(on(2, 5)))));
+        assert_eq!(parse("Exec 3.12 At 80"), Ok(Command::SetFader(on(3, 12), 80.0)));
+        assert_eq!(parse("Fix Executor 3"), Ok(Command::Fix(ExecutorRef { page: None, slot: 3 })));
+        assert_eq!(parse("fix 2.1"), Ok(Command::Fix(on(2, 1))));
+        assert!(parse("Executor 21").is_err(), "20 places par page");
+        assert!(parse("Executor 2.0").is_err());
+        // Les abréviations courantes ne changent pas.
+        assert!(matches!(parse("fi 1 at 50"), Ok(Command::Select { .. })));
+        assert_eq!(parse("p 4.1"), Ok(Command::ApplyPreset(FeatureGroup::Color, 1)));
     }
 
     #[test]

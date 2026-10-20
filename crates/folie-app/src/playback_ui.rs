@@ -5,16 +5,17 @@ use std::collections::BTreeSet;
 use eframe::egui::{self, Color32, RichText};
 use folie_control::{CommandError, Console, Outcome};
 use folie_engine::{ExecutorStatus, Snapshot};
-use folie_show::{Cue, CueNumber, CueValue, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
+use folie_show::{
+    Cue, CueNumber, CueValue, MAX_PAGE, SLOTS_PER_PAGE, executor_label, executor_place, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
 
 use crate::theme;
 
 type Action = Option<Result<Outcome, CommandError>>;
 
-/// Executors à fader : une aile de 10.
-pub const FADER_EXECUTORS: std::ops::RangeInclusive<u32> = 1..=10;
-/// Executors à boutons, sans fader.
-pub const BUTTON_EXECUTORS: std::ops::RangeInclusive<u32> = 11..=20;
+/// Places des executors à fader sur une page : une aile de 10.
+pub const FADER_SLOTS: std::ops::RangeInclusive<u32> = 1..=10;
+/// Places des executors à boutons, sans fader.
+pub const BUTTON_SLOTS: std::ops::RangeInclusive<u32> = 11..=SLOTS_PER_PAGE;
 const ARMED: Color32 = crate::theme::DANGER;
 const MODE: Color32 = Color32::from_rgb(120, 170, 255);
 const DELAY: Color32 = crate::theme::EXECUTOR;
@@ -39,10 +40,12 @@ fn transition_bar(ui: &mut egui::Ui, status: Option<&ExecutorStatus>, width: f32
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(11.0), Color32::WHITE);
 }
 
-/// Cadre d'un executor, de largeur fixe, contenu centré.
-fn card<R>(ui: &mut egui::Ui, width: f32, dim: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// Cadre d'un executor, de largeur fixe, contenu centré. Un executor fixé
+/// (présent sur toutes les pages) a un cadre en pointillés.
+fn card<R>(ui: &mut egui::Ui, width: f32, dim: bool, fixed: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let (fill, stroke) = if dim { (theme::BG, theme::SURFACE_2) } else { (theme::SURFACE_1, theme::LINE) };
-    egui::Frame::new()
+    let stroke = if fixed { Color32::TRANSPARENT } else { stroke };
+    let frame = egui::Frame::new()
         .fill(fill)
         .stroke(egui::Stroke::new(1.0, stroke))
         .corner_radius(8)
@@ -50,8 +53,13 @@ fn card<R>(ui: &mut egui::Ui, width: f32, dim: bool, add: impl FnOnce(&mut egui:
         .show(ui, |ui| {
             ui.set_width(width);
             ui.vertical_centered(add).inner
-        })
-        .inner
+        });
+    if fixed {
+        let r = frame.response.rect.shrink(0.5);
+        let outline = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+        ui.painter().extend(egui::Shape::dashed_line(&outline, egui::Stroke::new(1.0, theme::MUTED), 5.0, 3.0));
+    }
+    frame.inner
 }
 
 fn cue_label(number: &CueNumber, name: &str) -> String {
@@ -76,7 +84,7 @@ fn cue_lines(console: &Console, executor: u32, status: Option<&ExecutorStatus>) 
 
 fn store_here(ui: &mut egui::Ui, console: &mut Console, executor: u32, store_armed: &mut bool, width: f32) -> Action {
     let button = egui::Button::new(RichText::new("Enregistrer ici").family(theme::medium()).color(Color32::WHITE)).fill(ARMED);
-    if ui.add_sized([width, 26.0], button).on_hover_text(format!("Store executor {executor}")).clicked() {
+    if ui.add_sized([width, 26.0], button).on_hover_text(format!("Store executor {executor}", executor = executor_label(executor))).clicked() {
         *store_armed = false;
         return Some(console.store_in_executor(executor));
     }
@@ -104,15 +112,15 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
             let small = if wide { go_width } else { (width - 3.0) / 2.0 };
             let mut go = None;
             let mut back_off = |ui: &mut egui::Ui| {
-                if ui.add_sized([small, 24.0], quiet("Back")).on_hover_text(format!("Back executor {executor}")).clicked() {
+                if ui.add_sized([small, 24.0], quiet("Back")).on_hover_text(format!("Back executor {executor}", executor = executor_label(executor))).clicked() {
                     action = Some(console.back(Some(executor)));
                 }
-                if ui.add_sized([small, 24.0], quiet("Off")).on_hover_text(format!("Éteindre l'executor {executor}")).clicked() {
+                if ui.add_sized([small, 24.0], quiet("Off")).on_hover_text(format!("Éteindre l'executor {executor}", executor = executor_label(executor))).clicked() {
                     action = Some(console.off(Some(executor)));
                 }
             };
             ui.horizontal(|ui| {
-                if ui.add_sized([go_width, 26.0], key("Go")).on_hover_text(format!("Go executor {executor}")).clicked() {
+                if ui.add_sized([go_width, 26.0], key("Go")).on_hover_text(format!("Go executor {executor}", executor = executor_label(executor))).clicked() {
                     go = Some(console.press(executor));
                 }
                 if wide {
@@ -128,7 +136,7 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
         }
         ExecutorMode::Flash => {
             let response =
-                ui.add_sized([width, 26.0], key("Flash")).on_hover_text(format!("Flash executor {executor} (maintenir)"));
+                ui.add_sized([width, 26.0], key("Flash")).on_hover_text(format!("Flash executor {executor} (maintenir)", executor = executor_label(executor)));
             let down = response.is_pointer_button_down_on();
             if down && held.insert(executor) {
                 console.flash(executor, true);
@@ -139,7 +147,7 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
         ExecutorMode::Toggle => {
             let on = console.engine().snapshot().executors.get(&executor).is_some_and(|s| s.cue.is_some());
             let button = if on { theme::primary_button("Bascule") } else { quiet("Bascule") };
-            if ui.add_sized([width, 26.0], button).on_hover_text(format!("Basculer l'executor {executor}")).clicked() {
+            if ui.add_sized([width, 26.0], button).on_hover_text(format!("Basculer l'executor {executor}", executor = executor_label(executor))).clicked() {
                 action = Some(console.press(executor));
             }
         }
@@ -232,6 +240,7 @@ fn options_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32, current
         }
     });
     ui.checkbox(&mut o.protected, "Protégé (ignore « Tout éteindre »)");
+    ui.checkbox(&mut o.fixed, "Fixé (reste à sa place sur toutes les pages)");
     (o != current).then(|| console.set_executor_options(executor, o))
 }
 
@@ -249,6 +258,9 @@ fn option_tags(options: &ExecutorOptions) -> String {
     }
     if options.protected {
         tags.push("protégé".into());
+    }
+    if options.fixed {
+        tags.push("fixe".into());
     }
     tags.join(" · ")
 }
@@ -268,7 +280,7 @@ fn executor_header(
     let info = console.executor(executor).map(|(x, s)| (x.mode.label(), s.name.clone(), option_tags(&x.options)));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
-        let title = RichText::new(executor.to_string()).family(theme::medium());
+        let title = RichText::new(executor_label(executor)).family(theme::medium());
         let title = if selected { title.color(theme::SELECTION) } else { title };
         let response = ui.selectable_label(selected, title).on_hover_text("Sélectionner (clic) · réglages (clic droit)");
         if response.clicked() {
@@ -500,10 +512,19 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let label = ui.label(RichText::new("EXECUTOR").size(11.0).color(theme::MUTED).extra_letter_spacing(0.8));
-            let mut selected = executor;
-            ui.add(egui::DragValue::new(&mut selected).range(1..=*BUTTON_EXECUTORS.end())).labelled_by(label.id);
-            if selected != executor {
-                action = Some(Ok(console.select_executor(selected)));
+            // On choisit une place de la page courante ; le champ affiche le nom de l'executor (« 2.3 »).
+            let slot = executor_place(executor).1;
+            let labels: Vec<String> = (1..=SLOTS_PER_PAGE)
+                .map(|n| executor_label(if n == slot { executor } else { console.executor_at(n) }))
+                .collect();
+            let mut selected = slot;
+            let field = egui::DragValue::new(&mut selected)
+                .range(1..=SLOTS_PER_PAGE)
+                .custom_formatter(move |n, _| labels[(n as usize).clamp(1, labels.len()) - 1].clone())
+                .custom_parser(|text| text.rsplit('.').next()?.trim().parse().ok());
+            ui.add(field).labelled_by(label.id);
+            if selected != slot {
+                action = Some(Ok(console.select_executor(console.executor_at(selected))));
             }
             match console.selected_sequence() {
                 Some((_, sequence)) => {
@@ -573,6 +594,38 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
     action
 }
 
+/// Page affichée : ‹ PAGE [n] nom ›. Changer de page n'éteint rien.
+fn page_selector(ui: &mut egui::Ui, console: &mut Console) -> Action {
+    let mut action = None;
+    let page = console.page();
+    if ui.add_enabled(page > 1, egui::Button::new("‹")).on_hover_text("Page précédente (Page -)").clicked() {
+        action = Some(Ok(console.set_page(page - 1)));
+    }
+    let label = ui.label(RichText::new("PAGE").size(11.0).color(theme::MUTED).extra_letter_spacing(0.8));
+    let mut number = page;
+    ui.add(egui::DragValue::new(&mut number).range(1..=MAX_PAGE)).labelled_by(label.id);
+    if number != page {
+        action = Some(Ok(console.set_page(number)));
+    }
+    // Nom de la page : enregistré quand on quitte le champ.
+    let id = egui::Id::unique(("page-name", page));
+    let mut name = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| console.page_name(page).to_string());
+    let edit = egui::TextEdit::singleline(&mut name).hint_text("Nom de la page").desired_width(120.0);
+    let response = ui.add(edit).on_hover_text("Nom de la page");
+    if response.lost_focus() {
+        if name.trim() != console.page_name(page) {
+            action = Some(Ok(console.rename_page(page, name)));
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    } else if response.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, name));
+    }
+    if ui.add_enabled(page < MAX_PAGE, egui::Button::new("›")).on_hover_text("Page suivante (Page +)").clicked() {
+        action = Some(Ok(console.set_page(page + 1)));
+    }
+    action
+}
+
 /// Aile de 10 executors à fader, puis une rangée de 10 executors à boutons.
 /// Les cartes se partagent la largeur et le fader suit la hauteur de la fenêtre.
 pub fn executors_window(
@@ -594,7 +647,9 @@ pub fn executors_window(
         if ui.button("Tout éteindre").on_hover_text("Off sur tous les executors, sauf les protégés (Off All)").clicked() {
             keep(Some(Ok(console.off_all())));
         }
-        let hint = if *store_armed { "Choisissez l'executor où enregistrer" } else { "Clic droit sur un numéro : mode, options, nom" };
+        ui.separator();
+        keep(page_selector(ui, console));
+        let hint = if *store_armed { "Choisissez l'executor où enregistrer" } else { "Clic droit sur un numéro : mode, options, fixer, nom" };
         ui.label(RichText::new(hint).size(12.0).color(theme::MUTED));
     });
     ui.add_space(4.0);
@@ -603,7 +658,7 @@ pub fn executors_window(
     // ajoute 6 points de marge et 1 de bordure de chaque côté.
     const CARD_CHROME: f32 = 14.0;
     const SCROLLBAR: f32 = 14.0;
-    let count = FADER_EXECUTORS.clone().count() as f32;
+    let count = FADER_SLOTS.clone().count() as f32;
     let inner = ((ui.available_width() - SCROLLBAR - GAP * (count - 1.0)) / count - CARD_CHROME).clamp(78.0, 150.0);
     // Hauteur réservée hors fader : en-tête (~110), valeur et touches (~50), marges de carte,
     // puis la rangée d'executors à boutons (~190 avec son titre).
@@ -616,10 +671,12 @@ pub fn executors_window(
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            for executor in FADER_EXECUTORS {
+            for slot in FADER_SLOTS {
+                let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
                 let assigned = console.executor(executor).is_some();
-                card(ui, inner, !assigned, |ui| {
+                let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
+                card(ui, inner, !assigned, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
@@ -627,7 +684,7 @@ pub fn executors_window(
                     let speed = console.executor(executor).is_some_and(|(x, _)| x.options.fader == FaderFunction::Speed);
                     let mut level = status.map_or(1.0, |s| s.level);
                     let response = theme::fader(ui, &mut level, theme::EXECUTOR, assigned, egui::vec2(fader_width, fader_height))
-                        .on_hover_text(format!("Fader de l'executor {executor}"));
+                        .on_hover_text(format!("Fader de l'executor {executor}", executor = executor_label(executor)));
                     if response.changed() {
                         keep(Some(console.set_fader(executor, level * 100.0)));
                     }
@@ -641,10 +698,12 @@ pub fn executors_window(
         theme::section(ui, "Executors à boutons");
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            for executor in BUTTON_EXECUTORS {
+            for slot in BUTTON_SLOTS {
+                let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
                 let assigned = console.executor(executor).is_some();
-                card(ui, inner, !assigned, |ui| {
+                let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
+                card(ui, inner, !assigned, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));

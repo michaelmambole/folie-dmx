@@ -77,7 +77,9 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Options d'executor : bouclage, Auto start/stop, fader Master/Temp/Vitesse, temps d'Off
       et de Back, priorité basse/normale/haute, protection ; « Tout éteindre » (`Off All`)
 - [x] Pools : renommer et supprimer une case au clic droit
-- [ ] Pages d'executors, mode chenillard, temps par attribut
+- [x] Pages d'executors (`Page 2`, `Page +`, `Page -`, `Go Executor 2.5`), pages nommées,
+      executors fixés sur toutes les pages (`Fix Executor 3`)
+- [ ] Mode chenillard, temps par attribut
 - **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
   `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)
 

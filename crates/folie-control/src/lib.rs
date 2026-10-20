@@ -18,7 +18,7 @@ use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, ParamKe
 use folie_show::{Effect, Group, Preset, Show};
 use thiserror::Error;
 
-use command::{Command, Item, Object, Selection, SyntaxError, Value};
+use command::{Command, Item, Object, PageMove, Selection, SyntaxError, Value};
 
 #[derive(Debug, Error)]
 pub enum CommandError {
@@ -148,6 +148,8 @@ pub struct Console {
     engine: EngineHandle,
     /// Executor visé par Go, Back, Store Cue… quand aucun n'est précisé.
     selected_executor: u32,
+    /// Page d'executors affichée : les numéros sans page la visent.
+    page: u32,
     /// Programmer : la console en tient la référence et le moteur en reçoit une
     /// copie. Ainsi `At 100` suivi aussitôt de `Store Cue` enregistre bien 100,
     /// même si le moteur n'a pas encore traité la première commande.
@@ -168,6 +170,7 @@ impl Console {
             selection_used: false,
             engine,
             selected_executor: 1,
+            page: 1,
             programmer: HashMap::new(),
             origins: HashMap::new(),
             effects: Vec::new(),
@@ -361,14 +364,18 @@ impl Console {
             Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),
             Command::Delete(object) => self.delete(object),
-            Command::Go(executor) => self.go(executor),
-            Command::Back(executor) => self.back(executor),
-            Command::Off(executor) => self.off(executor),
+            Command::Go(executor) => self.go(executor.map(|x| self.resolve_executor(x))),
+            Command::Back(executor) => self.back(executor.map(|x| self.resolve_executor(x))),
+            Command::Off(executor) => self.off(executor.map(|x| self.resolve_executor(x))),
             Command::Goto(number) => self.goto(number),
-            Command::SelectExecutor(executor) => Ok(self.select_executor(executor)),
-            Command::SetFader(executor, percent) => self.set_fader(executor, percent),
+            Command::SelectExecutor(executor) => Ok(self.select_executor(self.resolve_executor(executor))),
+            Command::SetFader(executor, percent) => self.set_fader(self.resolve_executor(executor), percent),
             Command::ApplyEffect(number) => self.apply_effect(number),
-            Command::StoreExecutor(executor) => self.store_in_executor(executor),
+            Command::StoreExecutor(executor) => self.store_in_executor(self.resolve_executor(executor)),
+            Command::Page(PageMove::To(page)) => Ok(self.set_page(page)),
+            Command::Page(PageMove::Next) => Ok(self.set_page(self.page + 1)),
+            Command::Page(PageMove::Previous) => Ok(self.set_page(self.page.saturating_sub(1))),
+            Command::Fix(executor) => self.toggle_fixed(self.resolve_executor(executor)),
             Command::OffAll => Ok(self.off_all()),
             Command::SetTempo(bpm) => Ok(self.set_tempo(bpm)),
             Command::Clear => {
@@ -1006,5 +1013,51 @@ mod tests {
         assert_eq!(c.clear_executor(3).unwrap().message, "Executor 3 vidé", "la séquence sert encore à l'executor 4");
         assert_eq!(c.clear_executor(4).unwrap().message, "Executor 4 vidé, séquence supprimée");
         assert!(c.show.sequences.is_empty());
+    }
+
+    #[test]
+    fn executor_pages_and_fixed_executors() {
+        let mut c = console();
+        let err = |c: &mut Console, line| c.execute(line).unwrap_err().to_string();
+        run(&mut c, "Fixture 4 At 100");
+        run(&mut c, "Executor 1");
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+
+        // Page 2 : l'executor 1 y est un autre executor, encore vide.
+        assert_eq!(run(&mut c, "Page 2").message, "Page 2");
+        assert_eq!(c.executor_at(1), 101);
+        assert_eq!(err(&mut c, "Go Executor 1"), "l'executor 2.1 n'a pas de séquence");
+        run(&mut c, "Fixture 1 At 100");
+        assert_eq!(run(&mut c, "Store Executor 1").message, "Cue 1 enregistrée sur l'executor 2.1 (fondu 2 s)");
+        run(&mut c, "ClearAll");
+        assert!(c.show.executors.contains_key(&101));
+
+        // Un numéro page.place vise une autre page sans quitter la page courante.
+        run(&mut c, "Go Executor 1.1");
+        assert_eq!(dmx(&c, 44), 255, "l'executor 1 de la page 1 joue");
+        run(&mut c, "Page -");
+        assert_eq!(c.page(), 1);
+        assert_eq!(dmx(&c, 44), 255, "changer de page n'éteint rien");
+        run(&mut c, "Page -");
+        assert_eq!(c.page(), 1, "pas de page 0");
+
+        // Fix : l'executor 1 de la page 1 reste à sa place sur la page 2.
+        assert_eq!(run(&mut c, "Fix Executor 1").message, "Executor 1 fixé sur toutes les pages");
+        run(&mut c, "Page +");
+        assert_eq!(c.executor_at(1), 1, "l'executor fixé l'emporte sur celui de la page");
+        run(&mut c, "Off Executor 1");
+        assert_eq!(dmx(&c, 44), 0);
+        assert_eq!(
+            err(&mut c, "Fix Executor 2.1"),
+            "l'executor 1 est déjà fixé à la place 1",
+            "une seule place fixée par numéro"
+        );
+        assert_eq!(run(&mut c, "Fix 1").message, "Executor 1 rendu à sa page");
+        assert_eq!(c.executor_at(1), 101);
+
+        assert!(c.rename_page(2, " Acte 2 ".into()).show_changed);
+        assert_eq!(c.page_name(2), "Acte 2");
+        assert_eq!(run(&mut c, "Page 2").message, "Page 2 « Acte 2 »");
     }
 }

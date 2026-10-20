@@ -21,7 +21,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use cues::{
-    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, Priority, Sequence,
+    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Priority,
+    SLOTS_PER_PAGE, Sequence, executor_id, executor_label, executor_place,
 };
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
 
@@ -58,8 +59,11 @@ pub struct Show {
     pub presets: BTreeMap<(FeatureGroup, u32), Preset>,
     /// Séquences (listes de cues) par numéro.
     pub sequences: BTreeMap<u32, Sequence>,
-    /// Executors par numéro : 1 à 10 avec fader, 11 à 20 en boutons.
+    /// Executors par numéro (voir [`executor_id`]) : sur chaque page, 1 à 10 avec fader,
+    /// 11 à 20 en boutons.
     pub executors: BTreeMap<u32, Executor>,
+    /// Noms des pages d'executors, par numéro de page.
+    pub pages: BTreeMap<u32, String>,
     /// Battements par minute, pour les effets calés sur le tempo.
     pub tempo: f32,
 }
@@ -72,6 +76,7 @@ impl Default for Show {
             presets: BTreeMap::new(),
             sequences: BTreeMap::new(),
             executors: BTreeMap::new(),
+            pages: BTreeMap::new(),
             tempo: DEFAULT_TEMPO,
         }
     }
@@ -119,6 +124,9 @@ struct ShowFile {
     /// Un simple numéro de séquence (anciens shows) est accepté aussi.
     #[serde(default)]
     executors: BTreeMap<String, Value>,
+    /// Page -> nom.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pages: BTreeMap<String, String>,
     #[serde(default = "default_tempo")]
     tempo: f32,
 }
@@ -161,6 +169,7 @@ struct OptionsEntry {
     back_time: Option<f32>,
     priority: String,
     protected: bool,
+    fixed: bool,
 }
 
 impl Default for OptionsEntry {
@@ -180,6 +189,7 @@ impl OptionsEntry {
             back_time: o.back_time,
             priority: o.priority.key().into(),
             protected: o.protected,
+            fixed: o.fixed,
         }
     }
 
@@ -193,6 +203,7 @@ impl OptionsEntry {
             back_time: self.back_time.map(|t| t.clamp(0.0, 3600.0)),
             priority: Priority::from_key(&self.priority).unwrap_or_default(),
             protected: self.protected,
+            fixed: self.fixed,
         }
     }
 }
@@ -340,6 +351,7 @@ pub fn to_json(show: &Show) -> String {
         presets,
         sequences,
         executors,
+        pages: show.pages.iter().map(|(n, name)| (n.to_string(), name.clone())).collect(),
         tempo: show.tempo,
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
@@ -478,8 +490,18 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         }
     }
 
+    let mut pages = BTreeMap::new();
+    for (page, name) in file.pages {
+        match page.parse::<u32>() {
+            Ok(n) if (1..=MAX_PAGE).contains(&n) => {
+                pages.insert(n, name);
+            }
+            _ => warnings.push(format!("Page « {page} » : numéro invalide, nom ignoré")),
+        }
+    }
+
     let tempo = file.tempo.clamp(1.0, 999.0);
-    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors, tempo }, warnings })
+    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors, pages, tempo }, warnings })
 }
 
 /// Fiche à utiliser pour chaque type du show : la copie embarquée en priorité,
@@ -612,8 +634,17 @@ mod tests {
                     },
                 },
             ),
+            (
+                executor_id(2, 1),
+                Executor {
+                    sequence: 1,
+                    mode: ExecutorMode::Go,
+                    options: ExecutorOptions { fixed: true, ..Default::default() },
+                },
+            ),
         ]);
-        Show { patch, groups, presets, sequences, executors, tempo: 98.0 }
+        let pages = BTreeMap::from([(2, "Acte 2".to_string())]);
+        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0 }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -640,6 +671,7 @@ mod tests {
         assert_eq!(loaded.show.presets, show.presets);
         assert_eq!(loaded.show.sequences, show.sequences);
         assert_eq!(loaded.show.executors, show.executors);
+        assert_eq!(loaded.show.pages, show.pages);
         assert_eq!(loaded.show.tempo, 98.0);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);

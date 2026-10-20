@@ -902,6 +902,70 @@ mod tests {
     }
 
     #[test]
+    fn executor_pages_and_fixed_executors() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Executors,
+            placement: Placement::at_size(egui::pos2(900.0, 820.0), egui::vec2(1350.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Face""#);
+        command(&mut harness, "ClearAll");
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        let executor_number = |h: &Harness<'_, FolieApp>, label: &str| {
+            h.query_all(By::new().role(Role::Button).label(label)).any(|n| n.rect().min.y > 800.0)
+        };
+
+        // Page suivante : les places de la page 2 sont vides.
+        harness.get(described("Page suivante (Page +)")).click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.page(), 2);
+        assert!(executor_number(&harness, "2.1") && executor_number(&harness, "2.20"));
+        assert!(!executor_number(&harness, "1"), "l'executor 1 n'est pas sur la page 2");
+
+        // Store sur la place 3 de la page 2.
+        command(&mut harness, "Fixture 2 At 100");
+        harness.key_press(egui::Key::Escape);
+        harness.key_press(egui::Key::S);
+        harness.run_steps(2);
+        harness.get_all_by_label("Enregistrer ici").nth(2).unwrap().click();
+        settle(&mut harness);
+        harness.get_by_label("Cue 1 enregistrée sur l'executor 2.3 (fondu 2 s)");
+        command(&mut harness, "ClearAll");
+        assert!(harness.state().console.show.executors.contains_key(&103));
+
+        // L'executor 1, fixé, reste à sa place sur la page 2.
+        command(&mut harness, "Fix Executor 1.1");
+        assert!(executor_number(&harness, "1"), "fixé : présent sur la page 2");
+        harness.get_by_label("Go · fixe");
+
+        // Nom de la page, enregistré dans le show.
+        let name = harness.get_by_role_and_label(Role::TextInput, "Nom de la page");
+        name.focus();
+        name.type_text("Acte 2");
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        settle(&mut harness);
+        assert_eq!(harness.state().console.page_name(2), "Acte 2");
+        assert!(harness.state().file.dirty);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-pages.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Retour à la page 1 : l'executor 2.3 n'y est plus, l'executor 1 si.
+        harness.get(described("Page précédente (Page -)")).click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.page(), 1);
+        assert!(executor_number(&harness, "1") && !executor_number(&harness, "2.3"));
+    }
+
+    #[test]
     fn transition_bar_shows_delay_without_moving_the_layout() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

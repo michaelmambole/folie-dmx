@@ -214,6 +214,8 @@ pub struct ExecutorOptions {
     pub priority: Priority,
     /// Ignoré par « Tout éteindre ».
     pub protected: bool,
+    /// Fixé : reste à sa place sur toutes les pages (touche Fix de grandMA2).
+    pub fixed: bool,
 }
 
 impl Default for ExecutorOptions {
@@ -227,7 +229,35 @@ impl Default for ExecutorOptions {
             back_time: None,
             priority: Priority::Normal,
             protected: false,
+            fixed: false,
         }
+    }
+}
+
+/// Places d'executors sur une page : 1 à 10 avec fader, 11 à 20 en boutons.
+pub const SLOTS_PER_PAGE: u32 = 20;
+/// Écart de numérotation entre deux pages : l'executor 5 de la page 2 porte le numéro 105.
+/// La page 1 garde les numéros 1 à 20, ceux des shows enregistrés avant les pages.
+const PAGE_STRIDE: u32 = 100;
+/// Dernière page possible.
+pub const MAX_PAGE: u32 = 99;
+
+/// Numéro d'executor d'une place sur une page.
+pub fn executor_id(page: u32, slot: u32) -> u32 {
+    (page.max(1) - 1) * PAGE_STRIDE + slot
+}
+
+/// Page et place d'un numéro d'executor.
+pub fn executor_place(id: u32) -> (u32, u32) {
+    let id = id.max(1);
+    ((id - 1) / PAGE_STRIDE + 1, (id - 1) % PAGE_STRIDE + 1)
+}
+
+/// Nom affiché d'un executor : « 5 » sur la page 1, « 2.5 » ailleurs.
+pub fn executor_label(id: u32) -> String {
+    match executor_place(id) {
+        (1, slot) => slot.to_string(),
+        (page, slot) => format!("{page}.{slot}"),
     }
 }
 
@@ -266,5 +296,15 @@ mod tests {
         assert!("1.2345".parse::<CueNumber>().is_err());
         assert!("x".parse::<CueNumber>().is_err());
         assert!(CueNumber::whole(1) < "1.1".parse().unwrap());
+    }
+
+    #[test]
+    fn executor_pages() {
+        assert_eq!(executor_id(1, 5), 5, "la page 1 garde les anciens numéros");
+        assert_eq!(executor_id(2, 5), 105);
+        assert_eq!(executor_place(105), (2, 5));
+        assert_eq!(executor_place(20), (1, 20));
+        assert_eq!(executor_label(5), "5");
+        assert_eq!(executor_label(120), "2.20");
     }
 }
