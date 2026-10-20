@@ -8,6 +8,7 @@ use folie_show::Show;
 
 use super::FolieApp;
 use crate::storage::{Recovery, Storage};
+use crate::theme;
 
 /// Les modifications non enregistrées sont recopiées à cet intervalle.
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(30);
@@ -38,6 +39,8 @@ pub(super) struct FileState {
     /// Fermeture déjà confirmée : ne plus l'intercepter.
     closing: bool,
     title: String,
+    /// Dernier enregistrement sur disque, pour le confirmer quelques secondes.
+    saved_at: Option<Instant>,
 }
 
 impl FileState {
@@ -52,6 +55,7 @@ impl FileState {
             report: None,
             closing: false,
             title: String::new(),
+            saved_at: None,
         }
     }
 
@@ -129,6 +133,7 @@ impl FolieApp {
                 self.file.storage.clear_autosave();
                 self.file.path = Some(path);
                 self.file.dirty = false;
+                self.file.saved_at = Some(Instant::now());
                 true
             }
             Err(err) => {
@@ -222,6 +227,30 @@ impl FolieApp {
             self.request(ctx, Pending::Open);
         } else if ctx.input_mut(|i| i.consume_shortcut(&NEW)) {
             self.request(ctx, Pending::New);
+        }
+    }
+
+    /// État du show dans la barre du haut : « Non enregistré » (un clic enregistre),
+    /// ou « Enregistré », plus visible quelques secondes après l'enregistrement.
+    pub(super) fn file_status(&mut self, ui: &mut egui::Ui) {
+        let shortcut = ui.ctx().format_shortcut(&SAVE);
+        if self.file.dirty {
+            let text = RichText::new("Non enregistré").family(theme::medium()).color(theme::TEXT);
+            let button = egui::Button::new(text).fill(theme::SURFACE_3).stroke(egui::Stroke::new(1.0, theme::MUTED));
+            let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
+            ui.painter().circle_filled(dot.center(), 3.0, theme::TEXT);
+            if ui.add(button).on_hover_text(format!("Enregistrer le show ({shortcut})")).clicked() {
+                self.save();
+            }
+        } else if self.file.path.is_some() {
+            const CONFIRM: Duration = Duration::from_secs(3);
+            let recent = self.file.saved_at.is_some_and(|t| t.elapsed() < CONFIRM);
+            let color = if recent { theme::TEXT } else { theme::MUTED };
+            ui.label(RichText::new("Enregistré").size(12.0).color(color))
+                .on_hover_text(self.file.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default());
+            if recent {
+                ui.ctx().request_repaint_after(CONFIRM);
+            }
         }
     }
 

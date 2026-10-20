@@ -195,6 +195,7 @@ impl FolieApp {
             ui.heading(RichText::new("Folie-DMX").strong());
             self.file_menu(ui);
             self.windows_menu(ui);
+            self.file_status(ui);
             ui.separator();
             crate::pools::store_button(ui, &mut self.store_armed);
             ui.separator();
@@ -260,8 +261,7 @@ impl FolieApp {
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let snap = &self.snapshot;
-            let show = format!("{}{}", self.file.show_name(), if self.file.dirty { " •" } else { "" });
-            ui.label(RichText::new(show).strong());
+            ui.label(RichText::new(self.file.show_name()).strong());
             ui.separator();
             ui.monospace(format!("trame {:>8}", snap.frame));
             ui.separator();
@@ -520,6 +520,21 @@ mod tests {
         assert!(first.state_mut().save_to(&dir.path().join("concert")), "extension ajoutée");
         assert!(show_path.exists());
         assert!(!first.state().file.dirty);
+        first.run_steps(2);
+        first.get_by_label("Enregistré");
+
+        // Une modification : la barre du haut le signale, et un clic enregistre.
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        assert!(first.state().file.dirty);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("unsaved.png");
+            first.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        first.get_by_label("Non enregistré").click();
+        first.run_steps(2);
+        assert!(!first.state().file.dirty, "enregistré dans concert.folie, sans dialogue");
+        first.get_by_label("Enregistré");
         drop(first);
 
         let second = harness(Storage::at(&data));
@@ -527,6 +542,7 @@ mod tests {
         assert_eq!(app.file.path.as_deref(), Some(show_path.as_path()));
         assert_eq!(app.console.show.patch.fixtures().len(), 2);
         assert!(!app.file.dirty);
+        assert!(app.console.show.groups.contains_key(&1), "le groupe enregistré par le clic");
         assert_eq!(app.fixtures_view.form.first_id, 3, "le formulaire propose un numéro libre");
     }
 
