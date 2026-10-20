@@ -70,8 +70,16 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 ➡️ **Fin de phase 4 = console utilisable sur un vrai spectacle.**
 
 ## Phase 5 — Effets (≈ 1 à 1,5 mois)
-- Générateurs (sinus, rampe, carré…), phase, ailes (wings), groupes
-- Effets sur presets, vitesse liée à un tap tempo
+- [x] Générateurs dans le moteur : sinus, rampes, carré, triangle ; phase continue
+- [x] Éventail dans l'ordre de sélection, ailes en miroir, blocs
+- [x] Vitesse en Hz ou calée sur le tempo du show ; Tap tempo, `Tempo 120`
+- [x] Modèles : Sinus dimmer, Chenillard, Vague, Cercle, Arc-en-ciel, Pulse (`Effect n`)
+- [x] Effets dans le programmer, enregistrés dans les cues, suivis par tracking
+- [x] Fenêtre Effets (⌘7)
+- [ ] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
+- [ ] Effets relatifs (autour de la valeur en cours) et sur presets
+- [ ] Pool d'effets personnalisés, rapport cyclique du carré, aléatoire
+- [ ] Effets visibles dans la fenêtre Programmer
 
 ## Phase 6 — Réseau et télécommande (≈ 1,5 à 2 mois)
 - Art-Net et sACN (univers multiples ; l'USB Pro n'en gère qu'un)

@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 use folie_fixture::{FeatureGroup, FixtureId};
 
+use crate::effects::Effect;
+
 /// Temps de fondu d'une nouvelle cue, en secondes.
 pub const DEFAULT_FADE: f32 = 2.0;
 
@@ -72,11 +74,14 @@ pub struct Cue {
     pub delay: f32,
     /// Fixture -> nom du paramètre -> valeur. Seulement ce qui change.
     pub values: BTreeMap<FixtureId, BTreeMap<String, CueValue>>,
+    /// `None` : les effets des cues précédentes continuent (tracking).
+    /// `Some` : ils sont remplacés par ceux-ci.
+    pub effects: Option<Vec<Effect>>,
 }
 
 impl Cue {
     pub fn new(name: String) -> Self {
-        Self { name, fade: DEFAULT_FADE, delay: 0.0, values: BTreeMap::new() }
+        Self { name, fade: DEFAULT_FADE, delay: 0.0, values: BTreeMap::new(), effects: None }
     }
 }
 

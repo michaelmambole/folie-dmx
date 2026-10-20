@@ -7,13 +7,14 @@
 
 pub mod command;
 pub mod cues;
+pub mod effects;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, EngineHandle};
 use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, ParamKey, Parameter, Patch, Target};
-use folie_show::{Group, Preset, Show};
+use folie_show::{Effect, Group, Preset, Show};
 use thiserror::Error;
 
 use command::{Command, Item, Object, Selection, SyntaxError, Value};
@@ -87,6 +88,9 @@ pub struct Console {
     /// Valeurs du programmer venues d'un preset : enregistrées dans une cue,
     /// elles restent des références au preset.
     origins: HashMap<ParamKey, (FeatureGroup, u32)>,
+    /// Effets qui tournent dans le programmer.
+    effects: Vec<Effect>,
+    taps: effects::TapTempo,
 }
 
 impl Console {
@@ -99,6 +103,8 @@ impl Console {
             selected_executor: 1,
             programmer: HashMap::new(),
             origins: HashMap::new(),
+            effects: Vec::new(),
+            taps: effects::TapTempo::default(),
         }
     }
 
@@ -139,7 +145,8 @@ impl Console {
     pub fn load_show(&mut self, show: Show) {
         self.show = show;
         self.selection.clear();
-        self.engine.send(EngineCommand::ClearProgrammer);
+        self.clear_programmer();
+        self.engine.send(EngineCommand::SetTempo(self.show.tempo));
         self.patch_changed();
     }
 
@@ -157,8 +164,16 @@ impl Console {
         for sequence in self.show.sequences.values_mut() {
             for cue in sequence.cues.values_mut() {
                 cue.values.retain(|id, _| patch.get(*id).is_some());
+                for effect in cue.effects.iter_mut().flatten() {
+                    effect.targets.retain(|t| patch.contains(*t));
+                }
             }
         }
+        for effect in &mut self.effects {
+            effect.targets.retain(|t| patch.contains(*t));
+        }
+        self.effects.retain(|e| !e.targets.is_empty());
+        self.effects_changed();
         self.origins.retain(|key, _| patch.get(key.fixture).is_some());
         self.programmer
             .retain(|key, _| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
@@ -169,6 +184,8 @@ impl Console {
     fn clear_programmer(&mut self) {
         self.programmer.clear();
         self.origins.clear();
+        self.effects.clear();
+        self.effects_changed();
         self.engine.send(EngineCommand::ClearProgrammer);
     }
 
@@ -265,6 +282,8 @@ impl Console {
             Command::Goto(number) => self.goto(number),
             Command::SelectExecutor(executor) => Ok(self.select_executor(executor)),
             Command::SetFader(executor, percent) => self.set_fader(executor, percent),
+            Command::ApplyEffect(number) => self.apply_effect(number),
+            Command::SetTempo(bpm) => Ok(self.set_tempo(bpm)),
             Command::Clear => {
                 if self.selection.is_empty() {
                     self.clear_programmer();
@@ -719,5 +738,48 @@ mod tests {
         assert_eq!(err(&mut c, "Goto Cue 7"), "la cue 7 n'existe pas");
         assert!(run(&mut c, "Delete Cue 1").show_changed);
         assert_eq!(err(&mut c, "Delete Cue 1"), "la cue 1 n'existe pas");
+    }
+
+    #[test]
+    fn effects_run_in_programmer_and_track_in_cues() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 Thru 4");
+        let applied = run(&mut c, "Effect 3"); // Vague : sinus avec éventail de 360°
+        assert_eq!(applied.message, "Effet « Vague » sur 4 cible(s)");
+        assert_eq!(settled(&c).running_effects, 1);
+
+        // Chaque MH 6 reçoit son dimmer avec un quart de période de décalage.
+        let wave = crate::effects::instance(&c.programmer_effects()[0], 1, &c.show.patch);
+        let phases: Vec<f32> = wave.lines[0].params.iter().map(|(_, p)| *p).collect();
+        assert_eq!(phases, [0.0, 0.25, 0.5, 0.75]);
+
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        assert_eq!(settled(&c).running_effects, 0, "Clear arrête les effets du programmer");
+        run(&mut c, "Fixture 1 At 50");
+        run(&mut c, "Store Cue 2 Fade 0");
+        run(&mut c, "ClearAll");
+
+        let cue = |n| &c.show.sequences[&1].cues[&CueNumber::whole(n)];
+        assert!(cue(1).effects.as_ref().is_some_and(|e| e.len() == 1));
+        assert_eq!(cue(2).effects, None, "la cue 2 n'enregistre pas d'effet : celui de la cue 1 continue");
+        let states = cues::tracked_states(1, &c.show.sequences[&1], &c.show.patch, &c.show.presets);
+        assert_eq!(states[1].effects.len(), 1);
+        assert_eq!(states[0].effects[0].id, states[1].effects[0].id, "même effet, même phase");
+
+        run(&mut c, "Go");
+        assert_eq!(settled(&c).running_effects, 1, "l'executor joue l'effet de la cue");
+        run(&mut c, "Off");
+        assert_eq!(settled(&c).running_effects, 0);
+    }
+
+    #[test]
+    fn tempo_is_saved_and_reaches_the_engine() {
+        let mut c = console();
+        assert!(run(&mut c, "Tempo 98").show_changed);
+        assert_eq!(c.show.tempo, 98.0);
+        assert_eq!(settled(&c).tempo, 98.0);
+        assert!(c.execute("Effect 9").unwrap_err().to_string().contains("n'existe pas"));
+        assert_eq!(c.execute("Effect 1").unwrap_err().to_string(), "aucune sélection");
     }
 }

@@ -94,6 +94,76 @@ pub enum Attribute {
 }
 
 impl Attribute {
+    /// Identifiant stable pour les fichiers de show : "dimmer", "pan", "color:Red"…
+    pub fn key(&self) -> String {
+        match self {
+            Self::Dimmer => "dimmer".into(),
+            Self::Shutter => "shutter".into(),
+            Self::Pan => "pan".into(),
+            Self::Tilt => "tilt".into(),
+            Self::PanTiltSpeed => "pan_tilt_speed".into(),
+            Self::ColorMix(color) => format!("color:{color}"),
+            Self::ColorMacro => "color_macro".into(),
+            Self::ColorTemperature => "color_temperature".into(),
+            Self::Gobo => "gobo".into(),
+            Self::Prism => "prism".into(),
+            Self::Zoom => "zoom".into(),
+            Self::Focus => "focus".into(),
+            Self::Iris => "iris".into(),
+            Self::Effect => "effect".into(),
+            Self::Control => "control".into(),
+            Self::Other(name) => format!("other:{name}"),
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        if let Some(color) = key.strip_prefix("color:") {
+            return Some(Self::ColorMix(color.into()));
+        }
+        if let Some(name) = key.strip_prefix("other:") {
+            return Some(Self::Other(name.into()));
+        }
+        Some(match key {
+            "dimmer" => Self::Dimmer,
+            "shutter" => Self::Shutter,
+            "pan" => Self::Pan,
+            "tilt" => Self::Tilt,
+            "pan_tilt_speed" => Self::PanTiltSpeed,
+            "color_macro" => Self::ColorMacro,
+            "color_temperature" => Self::ColorTemperature,
+            "gobo" => Self::Gobo,
+            "prism" => Self::Prism,
+            "zoom" => Self::Zoom,
+            "focus" => Self::Focus,
+            "iris" => Self::Iris,
+            "effect" => Self::Effect,
+            "control" => Self::Control,
+            _ => return None,
+        })
+    }
+
+    /// Nom court pour l'interface.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Dimmer => "Dimmer".into(),
+            Self::Shutter => "Shutter".into(),
+            Self::Pan => "Pan".into(),
+            Self::Tilt => "Tilt".into(),
+            Self::PanTiltSpeed => "Vitesse P/T".into(),
+            Self::ColorMix(color) => color.clone(),
+            Self::ColorMacro => "Macro couleur".into(),
+            Self::ColorTemperature => "Température".into(),
+            Self::Gobo => "Gobo".into(),
+            Self::Prism => "Prisme".into(),
+            Self::Zoom => "Zoom".into(),
+            Self::Focus => "Focus".into(),
+            Self::Iris => "Iris".into(),
+            Self::Effect => "Effet".into(),
+            Self::Control => "Contrôle".into(),
+            Self::Other(name) => name.clone(),
+        }
+    }
+
     pub fn group(&self) -> FeatureGroup {
         match self {
             Self::Dimmer | Self::Shutter => FeatureGroup::Dimmer,
@@ -236,6 +306,14 @@ mod tests {
             default: 0,
             capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn attribute_keys_round_trip() {
+        for attribute in [Attribute::Dimmer, Attribute::Pan, Attribute::ColorMix("Red".into()), Attribute::Other("X".into())] {
+            assert_eq!(Attribute::from_key(&attribute.key()), Some(attribute));
+        }
+        assert_eq!(Attribute::from_key("inconnu"), None);
     }
 
     #[test]

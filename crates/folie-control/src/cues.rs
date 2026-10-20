@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, CueState, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
-use folie_show::{Cue, CueNumber, CueValue, Preset, Sequence, Show};
+use folie_show::{Cue, CueNumber, CueValue, Effect, Preset, Sequence, Show};
 
 use crate::{CommandError, Console, Outcome, invalid};
 
@@ -21,12 +21,28 @@ fn resolve(value: CueValue, fixture: FixtureId, parameter: &str, presets: &BTree
     }
 }
 
+/// Identifiant d'un effet de cue : il dépend de la cue où l'effet est né, si
+/// bien qu'un effet suivi dans les cues suivantes ne repart pas de zéro à chaque Go.
+fn cue_effect_id(executor: u32, origin: usize, index: usize) -> u64 {
+    ((executor as u64) << 40) | ((origin as u64) << 16) | index as u64
+}
+
 /// État complet de chaque cue : ce qu'elle change, plus tout ce qui est hérité
-/// des cues précédentes (tracking). `Release` retire un paramètre.
-pub fn tracked_states(sequence: &Sequence, patch: &Patch, presets: &BTreeMap<(FeatureGroup, u32), Preset>) -> Vec<CueState> {
+/// des cues précédentes (tracking). `Release` retire un paramètre. Les effets
+/// continuent jusqu'à ce qu'une cue en enregistre d'autres.
+pub fn tracked_states(
+    executor: u32,
+    sequence: &Sequence,
+    patch: &Patch,
+    presets: &BTreeMap<(FeatureGroup, u32), Preset>,
+) -> Vec<CueState> {
     let mut state: HashMap<ParamKey, u16> = HashMap::new();
+    let mut effects: (usize, Vec<Effect>) = (0, Vec::new());
     let mut states = Vec::new();
-    for (number, cue) in &sequence.cues {
+    for (position, (number, cue)) in sequence.cues.iter().enumerate() {
+        if let Some(list) = &cue.effects {
+            effects = (position, list.clone());
+        }
         for (fixture, parameters) in &cue.values {
             let Some(patched) = patch.get(*fixture) else { continue };
             for (name, value) in parameters {
@@ -43,7 +59,13 @@ pub fn tracked_states(sequence: &Sequence, patch: &Patch, presets: &BTreeMap<(Fe
             }
         }
         let label = if cue.name.is_empty() { number.to_string() } else { format!("{number} {}", cue.name) };
-        states.push(CueState { label, values: state.clone(), fade: cue.fade, delay: cue.delay });
+        let (origin, list) = &effects;
+        let instances = list
+            .iter()
+            .enumerate()
+            .map(|(i, e)| crate::effects::instance(e, cue_effect_id(executor, *origin, i), patch))
+            .collect();
+        states.push(CueState { label, values: state.clone(), fade: cue.fade, delay: cue.delay, effects: instances });
     }
     states
 }
@@ -54,7 +76,7 @@ pub fn playback_data(show: &Show) -> Sequences {
         .iter()
         .filter_map(|(executor, sequence)| {
             let sequence = show.sequences.get(sequence)?;
-            Some((*executor, Arc::new(tracked_states(sequence, &show.patch, &show.presets))))
+            Some((*executor, Arc::new(tracked_states(*executor, sequence, &show.patch, &show.presets))))
         })
         .collect()
 }
@@ -101,7 +123,7 @@ impl Console {
         fade: Option<f32>,
         name: Option<String>,
     ) -> Result<Outcome, CommandError> {
-        if self.programmer.is_empty() {
+        if self.programmer.is_empty() && self.effects.is_empty() {
             return invalid("programmer vide : rien à enregistrer");
         }
         let mut values: BTreeMap<FixtureId, BTreeMap<String, CueValue>> = BTreeMap::new();
@@ -143,6 +165,9 @@ impl Console {
         }
         if let Some(fade) = fade {
             cue.fade = fade;
+        }
+        if !self.effects.is_empty() {
+            cue.effects = Some(self.effects.clone());
         }
         let verb = if merged { "complétée" } else { "enregistrée" };
         let message = format!("Cue {number} {verb} sur l'executor {executor} (fondu {} s)", cue.fade);

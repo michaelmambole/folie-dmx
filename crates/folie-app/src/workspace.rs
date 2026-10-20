@@ -13,11 +13,12 @@ pub enum WindowKind {
     Output,
     Cues,
     Executors,
+    Effects,
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 6] =
-        [Self::Patch, Self::Groups, Self::Presets, Self::Output, Self::Cues, Self::Executors];
+    pub const ALL: [WindowKind; 7] =
+        [Self::Patch, Self::Groups, Self::Presets, Self::Output, Self::Cues, Self::Executors, Self::Effects];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -27,6 +28,7 @@ impl WindowKind {
             Self::Output => "Sortie DMX",
             Self::Cues => "Cues",
             Self::Executors => "Executors",
+            Self::Effects => "Effets",
         }
     }
 
@@ -39,6 +41,7 @@ impl WindowKind {
             Self::Output => Key::Num4,
             Self::Cues => Key::Num5,
             Self::Executors => Key::Num6,
+            Self::Effects => Key::Num7,
         }
     }
 
@@ -49,6 +52,7 @@ impl WindowKind {
             Self::Output => egui::vec2(1100.0, 720.0),
             Self::Cues => egui::vec2(560.0, 420.0),
             Self::Executors => egui::vec2(1000.0, 360.0),
+            Self::Effects => egui::vec2(560.0, 520.0),
         }
     }
 }

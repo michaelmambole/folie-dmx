@@ -7,6 +7,7 @@
 //! Clear                         ClearAll
 //! Go   Back   Off               Go Executor 2           Goto Cue 5
 //! Store Cue 3 Fade 4 "Entrée"   Delete Cue 3            Executor 2 At 50
+//! Effect 2                      Tempo 128
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
@@ -40,12 +41,15 @@ pub enum Keyword {
     Goto,
     Off,
     Fade,
+    Effect,
+    Tempo,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
-const ALIASES: [(&str, Keyword); 2] = [("g", Keyword::Group), ("exec", Keyword::Executor)];
+const ALIASES: [(&str, Keyword); 4] =
+    [("g", Keyword::Group), ("exec", Keyword::Executor), ("t", Keyword::Thru), ("eff", Keyword::Effect)];
 
-const KEYWORDS: [(&str, Keyword); 18] = [
+const KEYWORDS: [(&str, Keyword); 20] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -64,6 +68,8 @@ const KEYWORDS: [(&str, Keyword); 18] = [
     ("goto", Keyword::Goto),
     ("off", Keyword::Off),
     ("fade", Keyword::Fade),
+    ("effect", Keyword::Effect),
+    ("tempo", Keyword::Tempo),
 ];
 
 impl Keyword {
@@ -87,6 +93,8 @@ impl Keyword {
             Self::Goto => "Goto",
             Self::Off => "Off",
             Self::Fade => "Fade",
+            Self::Effect => "Effect",
+            Self::Tempo => "Tempo",
         }
     }
 
@@ -208,6 +216,9 @@ pub enum Command {
     SelectExecutor(u32),
     /// Fader d'un executor, en pourcentage.
     SetFader(u32, f32),
+    /// Lance un effet modèle sur la sélection.
+    ApplyEffect(u32),
+    SetTempo(f32),
 }
 
 struct Parser {
@@ -399,6 +410,20 @@ impl Parser {
                     _ => Command::Off(executor),
                 }
             }
+            Some(Token::Keyword(Keyword::Effect)) => {
+                self.position += 1;
+                Command::ApplyEffect(self.integer("numéro d'effet")?)
+            }
+            Some(Token::Keyword(Keyword::Tempo)) => {
+                self.position += 1;
+                let text = self.number("tempo en BPM")?;
+                let bpm = text
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|b| (1.0..=999.0).contains(b))
+                    .ok_or_else(|| SyntaxError(format!("tempo invalide : {text} (1 à 999 BPM)")))?;
+                Command::SetTempo(bpm)
+            }
             Some(Token::Keyword(Keyword::Goto)) => {
                 self.position += 1;
                 if !self.eat(Keyword::Cue) {
@@ -542,6 +567,10 @@ mod tests {
         assert!(parse("Delete Cue").is_err());
         assert!(parse("Store Group 1 Fade 3").is_err());
         assert!(parse("Goto 5").unwrap_err().0.contains("Goto Cue"));
+        assert_eq!(parse("eff 3"), Ok(Command::ApplyEffect(3)));
+        assert_eq!(parse("Tempo 128"), Ok(Command::SetTempo(128.0)));
+        assert!(parse("Tempo 0").is_err());
+        assert!(parse("e 1").unwrap_err().0.contains("ambigu"), "Effect ou Executor");
     }
 
     #[test]

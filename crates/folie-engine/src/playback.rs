@@ -6,6 +6,8 @@ use std::time::Instant;
 
 use folie_fixture::ParamKey;
 
+use crate::effects::EffectInstance;
+
 /// État complet d'une cue, tracking déjà appliqué par la console : tout ce que
 /// la séquence tient à ce moment-là, pas seulement ce qui change.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -17,6 +19,8 @@ pub struct CueState {
     pub fade: f32,
     /// Secondes.
     pub delay: f32,
+    /// Effets qui tournent pendant cette cue (déjà suivis depuis les cues précédentes).
+    pub effects: Vec<EffectInstance>,
 }
 
 /// Cues jouées par chaque executor, dans l'ordre de la séquence.
@@ -147,7 +151,13 @@ mod tests {
     }
 
     fn cue(values: &[(usize, u16)], fade: f32, delay: f32) -> CueState {
-        CueState { label: String::new(), values: values.iter().map(|(p, v)| (key(*p), *v)).collect(), fade, delay }
+        CueState {
+            label: String::new(),
+            values: values.iter().map(|(p, v)| (key(*p), *v)).collect(),
+            fade,
+            delay,
+            effects: Vec::new(),
+        }
     }
 
     /// Paramètre 0 = dimmer (HTP), paramètre 1 = pan (LTP).

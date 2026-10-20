@@ -5,6 +5,7 @@
 //! et publie un [`Snapshot`] en lecture seule à chaque trame. Une interface
 //! lente ou bloquée ne peut donc jamais retarder la sortie DMX.
 
+mod effects;
 mod playback;
 
 use std::collections::{BTreeMap, HashMap};
@@ -16,7 +17,9 @@ use crossbeam_channel::{Receiver, Sender};
 use folie_dmx::{CHANNELS_PER_UNIVERSE, DmxOutput, Universe};
 use folie_fixture::{Attribute, ParamKey, Patch};
 
+pub use effects::{EffectInstance, EffectLine, Rate, Waveform};
 pub use playback::{CueState, ExecutorStatus, Sequences};
+use effects::Phases;
 use playback::Playback;
 
 /// Fréquence par défaut : une trame DMX complète de 512 canaux dure environ
@@ -58,6 +61,10 @@ pub enum Command {
     Off(u32),
     /// Niveau du fader de l'executor, de 0 à 1 (intensité seulement).
     SetFader { executor: u32, level: f32 },
+    /// Effets qui tournent dans le programmer (remplace les précédents).
+    SetProgrammerEffects(Vec<EffectInstance>),
+    /// Tempo pour les effets calés sur le temps, en battements par minute.
+    SetTempo(f32),
     /// Remplace toutes les sorties, sans interrompre le moteur.
     SetOutputs(Vec<OutputBinding>),
     /// Envoie une dernière trame puis arrête le moteur.
@@ -109,6 +116,9 @@ pub struct Snapshot {
     pub output_names: Vec<String>,
     /// Executors qui ont une séquence, et ce qu'ils jouent.
     pub executors: BTreeMap<u32, ExecutorStatus>,
+    pub tempo: f32,
+    /// Effets en cours, programmer et executors confondus.
+    pub running_effects: usize,
 }
 
 /// Point d'accès au moteur depuis l'interface.
@@ -174,6 +184,9 @@ struct Engine {
     playbacks: BTreeMap<u32, Playback>,
     /// Compteur de déclenchements, pour la priorité LTP.
     activations: u64,
+    programmer_effects: Vec<EffectInstance>,
+    phases: Phases,
+    last_frame: Instant,
     shutting_down: bool,
 }
 
@@ -190,6 +203,7 @@ impl Engine {
             channel_overrides: vec![no_overrides(); universes],
             output: vec![Universe::new(); universes],
             output_names: outputs.iter().map(|b| b.output.name().to_string()).collect(),
+            tempo: 120.0,
             ..Default::default()
         };
         // L'interface peut lire l'état avant la première trame : il doit déjà être complet.
@@ -203,6 +217,9 @@ impl Engine {
             sequences: Arc::default(),
             playbacks: BTreeMap::new(),
             activations: 0,
+            programmer_effects: Vec::new(),
+            phases: Phases::default(),
+            last_frame: Instant::now(),
             shutting_down: false,
         }
     }
@@ -290,6 +307,8 @@ impl Engine {
                         playback.level = level.clamp(0.0, 1.0);
                     }
                 }
+                Command::SetProgrammerEffects(effects) => self.programmer_effects = effects,
+                Command::SetTempo(bpm) => self.state.tempo = bpm.clamp(1.0, 999.0),
                 Command::SetOutputs(outputs) => {
                     self.outputs = valid_bindings(outputs, self.state.output.len());
                     self.state.output_names =
@@ -322,14 +341,23 @@ impl Engine {
 
     /// Valeurs des executors, mélangées : HTP pour l'intensité (multipliée par
     /// le fader), LTP pour le reste (le dernier executor lancé gagne).
-    fn playback_values(&mut self, now: Instant) -> HashMap<ParamKey, u16> {
+    fn playback_values(&mut self, now: Instant, dt: f64) -> HashMap<ParamKey, u16> {
         let patch = &self.state.patch;
+        let (bpm, phases) = (self.state.tempo, &mut self.phases);
         let mut order: Vec<(&u32, &mut Playback)> = self.playbacks.iter_mut().collect();
         order.sort_by_key(|(_, p)| p.activated);
         let mut merged = HashMap::new();
         for (executor, playback) in order {
             let Some(cues) = self.sequences.get(executor) else { continue };
-            for (key, value) in playback.values(cues, now, |k| Self::is_intensity(patch, k)) {
+            let mut values = playback.values(cues, now, |k| Self::is_intensity(patch, k));
+            // Les effets de la cue en cours passent devant ses valeurs fixes.
+            if let Some(cue) = playback.current().and_then(|c| cues.get(c)) {
+                for effect in &cue.effects {
+                    let phase = phases.advance(effect, dt, bpm);
+                    values.extend(effect.values(phase));
+                }
+            }
+            for (key, value) in values {
                 if Self::is_intensity(patch, &key) {
                     let scaled = (value as f32 * playback.level).round() as u16;
                     let slot = merged.entry(key).or_insert(0);
@@ -357,7 +385,16 @@ impl Engine {
 
     fn render(&mut self) {
         let now = Instant::now();
-        let mut values = self.playback_values(now);
+        let dt = now.saturating_duration_since(self.last_frame).as_secs_f64();
+        self.last_frame = now;
+        let mut values = self.playback_values(now, dt);
+        let mut programmer_effects = HashMap::new();
+        for effect in &self.programmer_effects {
+            let phase = self.phases.advance(effect, dt, self.state.tempo);
+            programmer_effects.extend(effect.values(phase));
+        }
+        self.state.running_effects = self.phases.running();
+        self.phases.end_frame();
         self.state.executors = self
             .playbacks
             .iter()
@@ -369,8 +406,9 @@ impl Engine {
         if state.blackout {
             return;
         }
-        // Le programmer passe devant les executors.
+        // Le programmer passe devant les executors, et ses effets devant ses valeurs fixes.
         values.extend(state.attributes.iter().map(|(k, v)| (*k, *v)));
+        values.extend(programmer_effects);
         state.patch.render(&values, &mut state.output);
         for (out, overrides) in state.output.iter_mut().zip(&state.channel_overrides) {
             for (slot, forced) in out.as_mut_slice().iter_mut().zip(overrides.iter()) {
@@ -517,6 +555,7 @@ mod tests {
             values: HashMap::from([(dimmer, d), (pan, p)]),
             fade: 0.0,
             delay: 0.0,
+            effects: Vec::new(),
         };
         let sequences: Sequences = HashMap::from([
             (1, Arc::new(vec![state(0x8000, 0x1000), state(0xFF00, 0x2000)])),
@@ -551,6 +590,20 @@ mod tests {
 
         engine.send(Command::SetAttribute { key: pan, value: 0xEE00 });
         assert_eq!(out(10), 0xEE, "le programmer passe devant les executors");
+
+        // Effet du programmer : carré figé (vitesse nulle), il passe devant la valeur fixe.
+        let effect = EffectInstance {
+            id: 1,
+            rate: Rate::Hz(0.0),
+            lines: vec![EffectLine { waveform: Waveform::Square, low: 0x1000, high: 0xC000, params: vec![(pan, 0.0)] }],
+        };
+        engine.send(Command::SetProgrammerEffects(vec![effect.clone()]));
+        assert_eq!(out(10), 0xC0);
+        let shifted = EffectLine { params: vec![(pan, 0.5)], ..effect.lines[0].clone() };
+        engine.send(Command::SetProgrammerEffects(vec![EffectInstance { lines: vec![shifted], ..effect }]));
+        assert_eq!(out(10), 0x10, "demi-période de décalage : valeur basse");
+        assert_eq!(engine.snapshot().running_effects, 1);
+        engine.send(Command::SetProgrammerEffects(Vec::new()));
 
         engine.send(Command::ClearProgrammer);
         engine.send(Command::Off(1));

@@ -677,4 +677,40 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
     }
+
+    #[test]
+    fn effects_window() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Effects,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(620.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2200.0, 1000.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+
+        harness.get_by_label("3 Vague").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.programmer_effects().len(), 1);
+        harness.get_by_label("Effet « Vague » sur 4 cible(s)");
+        assert_eq!(harness.state().snapshot.running_effects, 1);
+
+        harness.get_by_label("Tap").click();
+        harness.run_steps(1);
+        harness.get_by_label("Tap").click();
+        settle(&mut harness);
+        assert!(harness.state().console.tempo() > 120.0, "deux taps rapprochés : tempo rapide");
+        assert!(harness.state().file.dirty, "le tempo est enregistré dans le show");
+
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("effects.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        harness.get_by_label("Arrêter").click();
+        settle(&mut harness);
+        assert!(harness.state().console.programmer_effects().is_empty());
+        assert_eq!(harness.state().snapshot.running_effects, 0);
+    }
 }

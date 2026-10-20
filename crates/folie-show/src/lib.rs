@@ -8,6 +8,7 @@
 //! écartée avec un avertissement, le reste du show est chargé.
 
 pub mod cues;
+pub mod effects;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -20,6 +21,12 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use cues::{Cue, CueNumber, CueValue, DEFAULT_FADE, Sequence};
+pub use effects::{Effect, EffectLine, EffectRate, Waveform};
+
+use effects::EffectEntry;
+
+/// Tempo d'un nouveau show.
+pub const DEFAULT_TEMPO: f32 = 120.0;
 
 pub const FORMAT: &str = "folie-show";
 /// Version du format écrite par ce programme. À incrémenter à chaque changement
@@ -40,7 +47,7 @@ pub enum ShowError {
 }
 
 /// Contenu d'un show.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Show {
     pub patch: Patch,
     /// Groupes par numéro dans le pool.
@@ -51,6 +58,21 @@ pub struct Show {
     pub sequences: BTreeMap<u32, Sequence>,
     /// Executor -> séquence qu'il joue.
     pub executors: BTreeMap<u32, u32>,
+    /// Battements par minute, pour les effets calés sur le tempo.
+    pub tempo: f32,
+}
+
+impl Default for Show {
+    fn default() -> Self {
+        Self {
+            patch: Patch::default(),
+            groups: BTreeMap::new(),
+            presets: BTreeMap::new(),
+            sequences: BTreeMap::new(),
+            executors: BTreeMap::new(),
+            tempo: DEFAULT_TEMPO,
+        }
+    }
 }
 
 /// Sélection enregistrée, dans l'ordre où elle a été faite (utile aux effets).
@@ -94,6 +116,12 @@ struct ShowFile {
     /// Executor (en texte, clé JSON) -> séquence.
     #[serde(default)]
     executors: BTreeMap<String, u32>,
+    #[serde(default = "default_tempo")]
+    tempo: f32,
+}
+
+fn default_tempo() -> f32 {
+    DEFAULT_TEMPO
 }
 
 #[derive(Serialize, Deserialize)]
@@ -113,6 +141,9 @@ struct CueEntry {
     delay: f32,
     /// Fixture -> paramètre -> valeur : un nombre, "preset 4.1" ou "release".
     values: BTreeMap<String, BTreeMap<String, Value>>,
+    /// Absent : les effets précédents continuent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effects: Option<Vec<EffectEntry>>,
 }
 
 fn cue_value_to_json(value: &CueValue) -> Value {
@@ -235,6 +266,7 @@ pub fn to_json(show: &Show) -> String {
                             (id.to_string(), params.iter().map(|(p, v)| (p.clone(), cue_value_to_json(v))).collect())
                         })
                         .collect(),
+                    effects: cue.effects.as_ref().map(|e| e.iter().map(EffectEntry::from_effect).collect()),
                 })
                 .collect(),
         })
@@ -250,6 +282,7 @@ pub fn to_json(show: &Show) -> String {
         presets,
         sequences,
         executors,
+        tempo: show.tempo,
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -335,11 +368,15 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
                 warnings.push(format!("{what} : numéro illisible, cue retirée"));
                 continue;
             };
+            let effects = cue_entry.effects.map(|entries| {
+                entries.into_iter().filter_map(|e| e.into_effect(|t| patch.contains(t))).collect()
+            });
             let mut cue = Cue {
                 name: cue_entry.name,
                 fade: cue_entry.fade.max(0.0),
                 delay: cue_entry.delay.max(0.0),
                 values: BTreeMap::new(),
+                effects,
             };
             for (id, params) in cue_entry.values {
                 let Some(id) = id.parse::<u32>().ok().map(FixtureId).filter(|id| patch.get(*id).is_some()) else {
@@ -371,7 +408,8 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         }
     }
 
-    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors }, warnings })
+    let tempo = file.tempo.clamp(1.0, 999.0);
+    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors, tempo }, warnings })
 }
 
 /// Fiche à utiliser pour chaque type du show : la copie embarquée en priorité,
@@ -479,11 +517,14 @@ mod tests {
                 ("Pan".to_string(), CueValue::Release),
             ]),
         );
+        let mut wave = effects::templates()[2].clone();
+        wave.targets = vec!["1".parse().unwrap(), "10.2".parse().unwrap()];
+        cue.effects = Some(vec![wave]);
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
         cues.insert("1.5".parse().unwrap(), Cue::new("Noir".into()));
         let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
         let executors = BTreeMap::from([(1, 1)]);
-        Show { patch, groups, presets, sequences, executors }
+        Show { patch, groups, presets, sequences, executors, tempo: 98.0 }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -510,6 +551,7 @@ mod tests {
         assert_eq!(loaded.show.presets, show.presets);
         assert_eq!(loaded.show.sequences, show.sequences);
         assert_eq!(loaded.show.executors, show.executors);
+        assert_eq!(loaded.show.tempo, 98.0);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
