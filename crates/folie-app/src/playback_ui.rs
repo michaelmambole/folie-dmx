@@ -594,6 +594,16 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
             renamed = true;
         }
     });
+    ui.horizontal(|ui| {
+        let help = "Écrit en dur dans la cue les valeurs qu'elle suit : changer une cue précédente ne la modifie plus";
+        if ui.button("Bloquer").on_hover_text(help).clicked() {
+            action = Some(console.block_cue(number));
+        }
+        let help = "Retire de la cue les valeurs identiques à celles qu'elle suivrait";
+        if ui.button("Débloquer").on_hover_text(help).clicked() {
+            action = Some(console.unblock_cue(number));
+        }
+    });
     let families = cue_families(console, cue);
     if !families.is_empty() {
         ui.separator();

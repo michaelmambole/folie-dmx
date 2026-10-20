@@ -408,6 +408,8 @@ impl Console {
             Command::Page(PageMove::Next) => Ok(self.set_page(self.page + 1)),
             Command::Page(PageMove::Previous) => Ok(self.set_page(self.page.saturating_sub(1))),
             Command::Fix(executor) => self.toggle_fixed(self.resolve_executor(executor)),
+            Command::Block(number) => self.block_cue(number),
+            Command::Unblock(number) => self.unblock_cue(number),
             Command::OffAll => Ok(self.off_all()),
             Command::SetTempo(bpm) => Ok(self.set_tempo(bpm)),
             Command::Clear => {

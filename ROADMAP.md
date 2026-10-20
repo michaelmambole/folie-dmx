@@ -69,7 +69,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Commandes `Go`, `Back`, `Off`, `Goto Cue`, `Executor n At`, `Store Cue n Fade s "nom"`
 - [x] Fenêtres Cues (⌘5) et Executors (⌘6)
 - [x] Sauvegarde automatique, reprise après plantage
-- [ ] `Block` (figer les valeurs suivies)
+- [x] `Block` et `Unblock` (figer les valeurs suivies), repérés par un « B » dans la fenêtre Tracking
 - [x] Fondu des attributs LTP depuis et vers ce qui est dessous (valeur par défaut ou executor inférieur)
 - [x] Executors en modes Go, Flash et Bascule ; 10 à fader et 10 à boutons
 - [x] Touche Store globale : Store puis clic sur un executor, une case de pool ou une cue

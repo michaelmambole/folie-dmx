@@ -53,7 +53,9 @@ fn look(console: &Console, sheet: &TrackingSheet, cell: &TrackingCell, cue: usiz
         }
         TrackedValue::Held { value, origin } => {
             let color = if changed { theme::TEXT } else { theme::DEFAULT };
-            let tooltip = if changed {
+            let tooltip = if changed && cell.blocked {
+                format!("Bloquée dans la cue {} : même valeur que la cue précédente, écrite en dur", title(cue))
+            } else if changed {
                 format!("Enregistrée dans la cue {}", title(cue))
             } else {
                 format!("Suivie depuis la cue {}", title(origin))
@@ -105,6 +107,10 @@ fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool) -> 
     if c.effect {
         let bar = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 3.0), egui::vec2(2.0, rect.height() - 6.0));
         painter.rect_filled(bar, 1.0, theme::EFFECT);
+    }
+    if c.blocked && look.color == theme::TEXT {
+        let font = egui::FontId::monospace(9.0);
+        painter.text(rect.left_top() + egui::vec2(5.0, 1.0), egui::Align2::LEFT_TOP, "B", font, theme::MUTED);
     }
     if let Some(times) = c.own_times.filter(|_| c.holds_value()) {
         let font = egui::FontId::proportional(10.0);
@@ -292,6 +298,7 @@ fn legend(ui: &mut egui::Ui) {
         sample(ui, "100", theme::TEXT, "changée");
         sample(ui, "100", theme::DEFAULT, "suivie");
         ui.label(RichText::new("relâché").size(11.5).color(theme::DANGER));
+        sample(ui, "B", theme::MUTED, "bloquée");
         theme::chip(ui, theme::family_color(FeatureGroup::Color), "preset");
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;

@@ -50,20 +50,23 @@ pub enum Keyword {
     Fix,
     Assert,
     Release,
+    Block,
+    Unblock,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
-/// « fi » et « p » restent Fixture et Preset malgré Fix et Page.
-const ALIASES: [(&str, Keyword); 6] = [
+/// « fi », « p » et « b » restent Fixture, Preset et Back malgré Fix, Page et Block.
+const ALIASES: [(&str, Keyword); 7] = [
     ("g", Keyword::Group),
     ("exec", Keyword::Executor),
     ("t", Keyword::Thru),
     ("eff", Keyword::Effect),
     ("fi", Keyword::Fixture),
     ("p", Keyword::Preset),
+    ("b", Keyword::Back),
 ];
 
-const KEYWORDS: [(&str, Keyword); 25] = [
+const KEYWORDS: [(&str, Keyword); 27] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -89,6 +92,8 @@ const KEYWORDS: [(&str, Keyword); 25] = [
     ("fix", Keyword::Fix),
     ("assert", Keyword::Assert),
     ("release", Keyword::Release),
+    ("block", Keyword::Block),
+    ("unblock", Keyword::Unblock),
 ];
 
 impl Keyword {
@@ -119,6 +124,8 @@ impl Keyword {
             Self::Fix => "Fix",
             Self::Assert => "Assert",
             Self::Release => "Release",
+            Self::Block => "Block",
+            Self::Unblock => "Unblock",
         }
     }
 
@@ -270,6 +277,10 @@ pub enum Command {
     Release(Option<Selection>),
     /// `Assert Executor 3` : l'executor reprend la main sur ce qu'il tient.
     Assert(Option<ExecutorRef>),
+    /// `Block Cue 3` : écrit en dur dans la cue les valeurs qu'elle suit.
+    Block(CueNumber),
+    /// `Unblock Cue 3` : retire de la cue les valeurs identiques à celles qu'elle suivrait.
+    Unblock(CueNumber),
 }
 
 struct Parser {
@@ -524,6 +535,15 @@ impl Parser {
                     _ => return Err(SyntaxError("Page <numéro>, Page + ou Page - attendu".into())),
                 }
             }
+            Some(Token::Keyword(k @ (Keyword::Block | Keyword::Unblock))) => {
+                let k = *k;
+                self.position += 1;
+                if !self.eat(Keyword::Cue) {
+                    return Err(SyntaxError(format!("{} Cue <numéro> attendu", k.name())));
+                }
+                let number = self.cue_number()?;
+                if k == Keyword::Block { Command::Block(number) } else { Command::Unblock(number) }
+            }
             Some(Token::Keyword(Keyword::Fix)) => {
                 self.position += 1;
                 self.eat(Keyword::Executor);
@@ -699,6 +719,15 @@ mod tests {
         // Les abréviations courantes ne changent pas.
         assert!(matches!(parse("fi 1 at 50"), Ok(Command::Select { .. })));
         assert_eq!(parse("p 4.1"), Ok(Command::ApplyPreset(FeatureGroup::Color, 1)));
+    }
+
+    #[test]
+    fn block_and_unblock() {
+        let cue = |s: &str| s.parse::<CueNumber>().unwrap();
+        assert_eq!(parse("Block Cue 3"), Ok(Command::Block(cue("3"))));
+        assert_eq!(parse("unbl cu 2.5"), Ok(Command::Unblock(cue("2.5"))));
+        assert!(parse("Block 3").unwrap_err().0.contains("Block Cue"));
+        assert_eq!(parse("b"), Ok(Command::Back(None)), "« b » reste Back");
     }
 
     #[test]

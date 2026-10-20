@@ -27,6 +27,8 @@ pub struct TrackingCell {
     pub effect: bool,
     /// (fondu, délai) propres au paramètre ou à sa famille dans cette cue, s'il en a.
     pub own_times: Option<(f32, f32)>,
+    /// Bloquée : enregistrée dans la cue avec la valeur qu'elle aurait suivie (`Block`).
+    pub blocked: bool,
 }
 
 impl TrackingCell {
@@ -89,19 +91,26 @@ impl Console {
         // Parcours des cues : la dernière valeur de chaque paramètre et la cue d'où elle vient.
         let mut held: BTreeMap<(FixtureId, String), TrackedValue> = BTreeMap::new();
         let mut columns: Vec<BTreeMap<(FixtureId, String), TrackedValue>> = Vec::new();
+        let mut blocked: Vec<BTreeSet<(FixtureId, String)>> = Vec::new();
         for (index, cue) in sequence.cues.values().enumerate() {
             // Un relâchement ne dure qu'une cue : ensuite, la case est vide.
             held.retain(|_, v| *v != TrackedValue::Released);
+            let mut same = BTreeSet::new();
             for (fixture, parameters) in &cue.values {
                 for (name, value) in parameters {
+                    let key = (*fixture, name.clone());
+                    if matches!(held.get(&key), Some(TrackedValue::Held { value: before, .. }) if before == value) {
+                        same.insert(key.clone());
+                    }
                     let tracked = match value {
                         CueValue::Release => TrackedValue::Released,
                         value => TrackedValue::Held { value: *value, origin: index },
                     };
-                    held.insert((*fixture, name.clone()), tracked);
+                    held.insert(key, tracked);
                 }
             }
             columns.push(held.clone());
+            blocked.push(same);
         }
 
         let touched: BTreeSet<(FixtureId, String)> =
@@ -123,6 +132,7 @@ impl Console {
                             value: columns[i].get(&key).copied().unwrap_or(TrackedValue::Empty),
                             effect: animated[i].contains(&key),
                             own_times: own.then(|| cue.times_of(fixture.id, &parameter.name, family)),
+                            blocked: blocked[i].contains(&key),
                         }
                     })
                     .collect();
@@ -222,5 +232,21 @@ mod tests {
         assert!(c.show.sequences[&1].cues[&second].param_times.is_empty(), "ses temps propres partent avec elle");
         assert!(c.remove_cue_value(second, FixtureId(1), "Dimmer").is_err());
         assert!(c.set_cue_value(second, FixtureId(99), "Dimmer", CueValue::Release).is_err());
+
+        // Block : la cue 2 écrit en dur le Dimmer de la fixture 1 qu'elle suivait ;
+        // changer la cue 1 ne la modifie plus. Unblock retire ce doublon.
+        assert_eq!(run(&mut c, "Block Cue 2").message, "Cue 2 bloquée (1 valeur écrite)");
+        let cell = |c: &Console, cue: usize| {
+            c.tracking_sheet(1).unwrap().rows.iter().find(|r| r.fixture == FixtureId(1) && r.parameter == "Dimmer").unwrap().cells[cue]
+        };
+        assert!(cell(&c, 1).blocked && cell(&c, 1).changed_here(1));
+        let first = c.show.sequences[&1].cues.keys().next().copied().unwrap();
+        c.set_cue_value(first, FixtureId(1), "Dimmer", CueValue::Value(10_000)).unwrap();
+        assert_eq!(held(&c, 1), TrackedValue::Held { value: CueValue::Value(65_535), origin: 1 }, "bloquée : ne suit plus");
+        assert!(!cell(&c, 1).blocked, "différente de la cue 1 désormais");
+        c.set_cue_value(first, FixtureId(1), "Dimmer", CueValue::Value(65_535)).unwrap();
+        assert_eq!(run(&mut c, "Unblock Cue 2").message, "Cue 2 débloquée (1 valeur retirée)");
+        assert_eq!(held(&c, 1), TrackedValue::Held { value: CueValue::Value(65_535), origin: 0 }, "de nouveau suivie");
+        assert!(c.execute("Block Cue 9").is_err());
     }
 }

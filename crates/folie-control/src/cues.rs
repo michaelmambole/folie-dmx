@@ -412,6 +412,61 @@ impl Console {
         Ok(Outcome::changed(format!("Cue {number} : {parameter} de la fixture {fixture} retiré")))
     }
 
+    /// Valeurs que la cue `number` reçoit des cues précédentes (tracking), sans les siennes.
+    fn tracked_into(&self, number: CueNumber) -> Result<BTreeMap<(FixtureId, String), CueValue>, CommandError> {
+        let Some((_, sequence)) = self.selected_sequence() else { return invalid("aucune séquence") };
+        if !sequence.cues.contains_key(&number) {
+            return invalid(format!("la cue {number} n'existe pas"));
+        }
+        let mut held = BTreeMap::new();
+        for cue in sequence.cues.range(..number).map(|(_, c)| c) {
+            for (fixture, parameters) in &cue.values {
+                for (name, value) in parameters {
+                    match value {
+                        CueValue::Release => held.remove(&(*fixture, name.clone())),
+                        value => held.insert((*fixture, name.clone()), *value),
+                    };
+                }
+            }
+        }
+        Ok(held)
+    }
+
+    /// `Block` : la cue tient désormais en dur tout ce qu'elle suivait ; changer une cue
+    /// précédente ne la modifie plus.
+    pub fn block_cue(&mut self, number: CueNumber) -> Result<Outcome, CommandError> {
+        let tracked = self.tracked_into(number)?;
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number).expect("vérifiée par tracked_into");
+        let mut written = 0;
+        for ((fixture, name), value) in tracked {
+            if let std::collections::btree_map::Entry::Vacant(entry) = cue.values.entry(fixture).or_default().entry(name) {
+                entry.insert(value);
+                written += 1;
+            }
+        }
+        self.sync_playback();
+        let s = if written > 1 { "s" } else { "" };
+        Ok(Outcome::changed(format!("Cue {number} bloquée ({written} valeur{s} écrite{s})")))
+    }
+
+    /// `Unblock` : retire de la cue les valeurs identiques à celles qu'elle suivrait.
+    pub fn unblock_cue(&mut self, number: CueNumber) -> Result<Outcome, CommandError> {
+        let tracked = self.tracked_into(number)?;
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number).expect("vérifiée par tracked_into");
+        let mut removed = 0;
+        for (fixture, parameters) in &mut cue.values {
+            parameters.retain(|name, value| {
+                let duplicate = tracked.get(&(*fixture, name.clone())) == Some(value);
+                removed += duplicate as usize;
+                !duplicate
+            });
+        }
+        cue.values.retain(|_, parameters| !parameters.is_empty());
+        self.sync_playback();
+        let s = if removed > 1 { "s" } else { "" };
+        Ok(Outcome::changed(format!("Cue {number} débloquée ({removed} valeur{s} retirée{s})")))
+    }
+
     /// Temps propres d'une famille dans une cue ; vides, la famille reprend le temps de la cue.
     pub fn set_family_times(&mut self, number: CueNumber, family: FeatureGroup, timing: ParamTiming) -> Result<Outcome, CommandError> {
         let cue = self.selected_sequence_mut()?.cues.get_mut(&number);

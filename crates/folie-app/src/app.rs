@@ -856,6 +856,18 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_label("Dimmer 3 s +0.5"); // le délai reste celui de la cue
 
+        // Bloquer, puis débloquer, depuis le même menu.
+        harness.get_by_label("Contre bis").click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("Bloquer").click();
+        harness.run_steps(2);
+        assert!(cue(&harness, 2).values.contains_key(&folie_fixture::FixtureId(1)), "la cue 2 tient la fixture 1 en dur");
+        harness.get_by_label("Débloquer").click();
+        harness.run_steps(2);
+        assert!(!cue(&harness, 2).values.contains_key(&folie_fixture::FixtureId(1)));
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+
         // Touche S : arme Store, la rappuyer le désarme.
         harness.key_press(egui::Key::S);
         harness.run_steps(2);
@@ -1168,6 +1180,20 @@ mod tests {
         assert_eq!(value_of(&harness, 3, 2), Some(folie_show::CueValue::Release));
         harness.key_press(egui::Key::Escape);
         harness.run_steps(2);
+
+        // Block : la cue 2 écrit en dur ce qu'elle suivait, repéré par un « B ».
+        command(&mut harness, "Block Cue 2");
+        let blocked = By::new().predicate(|n| n.description().is_some_and(|d| d.starts_with("Bloquée dans la cue 2 Contre")));
+        assert_eq!(harness.query_all(blocked).count(), 1, "le Dimmer de la fixture 1, suivi depuis la cue 1");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("tracking-block.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        command(&mut harness, "Unblock Cue 2");
+        let blocked = By::new().predicate(|n| n.description().is_some_and(|d| d.starts_with("Bloquée dans la cue 2")));
+        assert_eq!(harness.query_all(blocked).count(), 0);
+        // La cue 3 répète le preset 1.1 que la cue 1 tient désormais : elle est repérée aussi.
+        harness.get(By::new().predicate(|n| n.description().is_some_and(|d| d.starts_with("Bloquée dans la cue 3 Demi"))));
 
         // Seulement les changements : les valeurs suivies disparaissent.
         harness.get_by_label("Seulement les changements").click();
