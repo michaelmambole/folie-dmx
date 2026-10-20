@@ -65,6 +65,24 @@ pub enum CueValue {
     Release,
 }
 
+/// Temps propre d'un paramètre ou d'une famille dans une cue ; `None` : celui de la cue.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ParamTiming {
+    pub fade: Option<f32>,
+    pub delay: Option<f32>,
+}
+
+impl ParamTiming {
+    pub fn is_empty(&self) -> bool {
+        self.fade.is_none() && self.delay.is_none()
+    }
+
+    /// (fondu, délai), les temps absents pris dans `base`.
+    pub fn or(&self, base: (f32, f32)) -> (f32, f32) {
+        (self.fade.unwrap_or(base.0), self.delay.unwrap_or(base.1))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cue {
     pub name: String,
@@ -77,11 +95,35 @@ pub struct Cue {
     /// `None` : les effets des cues précédentes continuent (tracking).
     /// `Some` : ils sont remplacés par ceux-ci.
     pub effects: Option<Vec<Effect>>,
+    /// Temps propres par famille (Position en 4 s…), pour les paramètres de la cue.
+    pub family_times: BTreeMap<FeatureGroup, ParamTiming>,
+    /// Temps propres d'un paramètre d'une fixture : ils l'emportent sur ceux de sa famille.
+    pub param_times: BTreeMap<FixtureId, BTreeMap<String, ParamTiming>>,
 }
 
 impl Cue {
     pub fn new(name: String) -> Self {
-        Self { name, fade: DEFAULT_FADE, delay: 0.0, values: BTreeMap::new(), effects: None }
+        Self {
+            name,
+            fade: DEFAULT_FADE,
+            delay: 0.0,
+            values: BTreeMap::new(),
+            effects: None,
+            family_times: BTreeMap::new(),
+            param_times: BTreeMap::new(),
+        }
+    }
+
+    /// (fondu, délai) d'un paramètre : son temps propre, sinon celui de sa famille, sinon celui de la cue.
+    pub fn times_of(&self, fixture: FixtureId, parameter: &str, family: FeatureGroup) -> (f32, f32) {
+        let base = (self.fade, self.delay);
+        let base = self.family_times.get(&family).map_or(base, |t| t.or(base));
+        self.param_times.get(&fixture).and_then(|p| p.get(parameter)).map_or(base, |t| t.or(base))
+    }
+
+    /// Le paramètre ou la famille a un temps propre.
+    pub fn has_own_times(&self, fixture: FixtureId, parameter: &str, family: FeatureGroup) -> bool {
+        self.family_times.contains_key(&family) || self.param_times.get(&fixture).is_some_and(|p| p.contains_key(parameter))
     }
 }
 
@@ -296,6 +338,20 @@ mod tests {
         assert!("1.2345".parse::<CueNumber>().is_err());
         assert!("x".parse::<CueNumber>().is_err());
         assert!(CueNumber::whole(1) < "1.1".parse().unwrap());
+    }
+
+    #[test]
+    fn parameter_times_override_family_and_cue() {
+        let mut cue = Cue::new("Contre".into());
+        cue.fade = 2.0;
+        cue.family_times.insert(FeatureGroup::Position, ParamTiming { fade: Some(4.0), delay: None });
+        cue.param_times.entry(FixtureId(1)).or_default().insert("Tilt".into(), ParamTiming { fade: None, delay: Some(1.0) });
+        assert_eq!(cue.times_of(FixtureId(1), "Dimmer", FeatureGroup::Dimmer), (2.0, 0.0), "temps de la cue");
+        assert_eq!(cue.times_of(FixtureId(1), "Pan", FeatureGroup::Position), (4.0, 0.0), "temps de la famille");
+        assert_eq!(cue.times_of(FixtureId(1), "Tilt", FeatureGroup::Position), (4.0, 1.0), "délai propre, fondu de la famille");
+        assert_eq!(cue.times_of(FixtureId(2), "Tilt", FeatureGroup::Position), (4.0, 0.0));
+        assert!(cue.has_own_times(FixtureId(1), "Tilt", FeatureGroup::Position));
+        assert!(!cue.has_own_times(FixtureId(1), "Dimmer", FeatureGroup::Dimmer));
     }
 
     #[test]

@@ -826,6 +826,16 @@ mod tests {
         settle(&mut harness);
         assert_eq!(cue(&harness, 2).name, "Contre bis");
 
+        // Clic droit, temps par famille : le Dimmer de la cue 2 en 3 s, affiché sur la ligne.
+        harness.get_by_label("Contre bis").click_secondary();
+        harness.run_steps(2);
+        harness.get(described("Fondu de Dimmer, cue 2")).set_value_accesskit(3.0);
+        harness.run_steps(2);
+        assert_eq!(cue(&harness, 2).family_times[&folie_fixture::FeatureGroup::Dimmer].fade, Some(3.0));
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        harness.get_by_label("Dimmer 3 s +0.5"); // le délai reste celui de la cue
+
         // Touche S : arme Store, la rappuyer le désarme.
         harness.key_press(egui::Key::S);
         harness.run_steps(2);
@@ -1008,11 +1018,34 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
 
+        // Clic droit sur une valeur enregistrée : temps propres du paramètre dans la cue.
+        harness.get(described("Enregistrée dans la cue 1 Face")).click_secondary();
+        harness.run_steps(2);
+        harness.get(described("Fondu de Dimmer, fixture 1, cue 1")).set_value_accesskit(4.0);
+        harness.run_steps(2);
+        harness.get(described("Délai de Dimmer, fixture 1, cue 1")).set_value_accesskit(1.0);
+        harness.run_steps(2);
+        let cue1 = harness.state().console.show.sequences[&1].cues[&folie_show::CueNumber::whole(1)].clone();
+        let timing = cue1.param_times[&folie_fixture::FixtureId(1)]["Dimmer"];
+        assert_eq!((timing.fade, timing.delay), (Some(4.0), Some(1.0)));
+        assert!(harness.state().file.dirty);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("tracking-times.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        // « × » : le paramètre reprend le temps de la cue.
+        harness.get_all(described("Reprendre le temps de la cue")).next().unwrap().click(); // celui du fondu
+        harness.run_steps(2);
+        let cue1 = harness.state().console.show.sequences[&1].cues[&folie_show::CueNumber::whole(1)].clone();
+        assert_eq!(cue1.param_times[&folie_fixture::FixtureId(1)]["Dimmer"].fade, None);
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+
         // Seulement les changements : les valeurs suivies disparaissent.
         harness.get_by_label("Seulement les changements").click();
         harness.run_steps(2);
         assert_eq!(harness.query_all(described("Suivie depuis la cue 1 Face")).count(), 0);
-        harness.get(described("Enregistrée dans la cue 1 Face"));
+        harness.get(described("Enregistrée dans la cue 1 Face · temps propres 0s +1"));
     }
 
     #[test]

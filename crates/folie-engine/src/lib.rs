@@ -654,6 +654,7 @@ mod tests {
             values: HashMap::from([(dimmer, d), (pan, p)]),
             fade: 0.0,
             delay: 0.0,
+            times: HashMap::new(),
             effects: Vec::new(),
         };
         let sequences: Sequences = HashMap::from([
@@ -742,6 +743,7 @@ mod tests {
             values: HashMap::from([(dimmer, d), (pan, p)]),
             fade: 0.0,
             delay: 0.0,
+            times: HashMap::new(),
             effects: Vec::new(),
         };
         let sequences: Sequences = HashMap::from([

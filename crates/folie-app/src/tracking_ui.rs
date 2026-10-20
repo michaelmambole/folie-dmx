@@ -2,11 +2,11 @@
 //! et l'origine de chaque valeur.
 
 use eframe::egui::{self, Color32, RichText};
-use folie_control::tracking::{TrackedValue, TrackingCell, TrackingSheet};
+use folie_control::tracking::{TrackedValue, TrackingCell, TrackingRow, TrackingSheet};
 use folie_control::{CommandError, Console, Outcome};
 use folie_engine::Snapshot;
 use folie_fixture::FeatureGroup;
-use folie_show::CueValue;
+use folie_show::{CueNumber, CueValue};
 
 use crate::app::DisplayMode;
 use crate::theme;
@@ -26,7 +26,7 @@ struct CellLook {
     tooltip: String,
 }
 
-fn cue_title(number: &folie_show::CueNumber, name: &str) -> String {
+fn cue_title(number: &CueNumber, name: &str) -> String {
     if name.is_empty() { number.to_string() } else { format!("{number} {name}") }
 }
 
@@ -75,24 +75,41 @@ fn look(console: &Console, sheet: &TrackingSheet, cell: &TrackingCell, cue: usiz
             }
         }
     };
+    if let Some(times) = cell.own_times.filter(|_| changed && cell.holds_value()) {
+        look.tooltip = format!("{} · temps propres {}", look.tooltip, times_text(times));
+    }
     if cell.effect {
         look.tooltip = if look.tooltip.is_empty() { "Animé par un effet".into() } else { format!("{} · animé par un effet", look.tooltip) };
     }
     look
 }
 
+/// « 4s » ou « 6s +1 » : temps propres affichés dans une case.
+fn times_text((fade, delay): (f32, f32)) -> String {
+    if delay > 0.0 { format!("{fade}s +{delay}") } else { format!("{fade}s") }
+}
+
 /// Une case dessinée : fond (teinté pour la cue en cours), trait violet si un effet l'anime,
-/// pastille de preset, valeur alignée à droite.
-fn cell(ui: &mut egui::Ui, look: &CellLook, effect: bool, current: bool) {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(CELL_WIDTH, ROW_HEIGHT), egui::Sense::hover());
+/// temps propres en bleu, pastille de preset, valeur alignée à droite.
+/// Une valeur enregistrée dans la cue se règle au clic droit.
+fn cell(ui: &mut egui::Ui, look: &CellLook, c: &TrackingCell, current: bool, editable: bool) -> egui::Response {
+    let sense = if editable { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(CELL_WIDTH, ROW_HEIGHT), sense);
     let painter = ui.painter();
     if current {
         painter.rect_filled(rect, 0.0, theme::EXECUTOR.gamma_multiply(0.10));
     }
+    if editable && response.hovered() {
+        painter.rect_stroke(rect.shrink(1.0), 3.0, egui::Stroke::new(1.0, theme::SURFACE_3), egui::StrokeKind::Inside);
+    }
     painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, theme::SURFACE_2));
-    if effect {
+    if c.effect {
         let bar = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, 3.0), egui::vec2(2.0, rect.height() - 6.0));
         painter.rect_filled(bar, 1.0, theme::EFFECT);
+    }
+    if let Some(times) = c.own_times.filter(|_| c.holds_value()) {
+        let font = egui::FontId::proportional(10.0);
+        painter.text(rect.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, times_text(times), font, theme::INFO);
     }
     let font = if look.text == "relâché" { egui::FontId::proportional(11.0) } else { egui::FontId::monospace(12.0) };
     let galley = painter.layout_no_wrap(look.text.clone(), font, look.color);
@@ -104,9 +121,45 @@ fn cell(ui: &mut egui::Ui, look: &CellLook, effect: bool, current: bool) {
     painter.galley(text_pos, galley, look.color);
     let text = look.text.clone();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
-    if !look.tooltip.is_empty() {
-        response.on_hover_text(&look.tooltip);
+    if look.tooltip.is_empty() { response } else { response.on_hover_text(&look.tooltip) }
+}
+
+/// Menu du clic droit d'une valeur : fondu et délai propres au paramètre dans cette cue.
+fn param_times_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, row: &TrackingRow) -> Action {
+    let (_, sequence) = console.selected_sequence()?;
+    let cue = sequence.cues.get(&number).cloned()?;
+    let family = console
+        .show
+        .patch
+        .get(row.fixture)
+        .and_then(|f| f.mode().parameters.iter().find(|p| p.name == row.parameter))
+        .map_or(FeatureGroup::Control, |p| p.attribute.group());
+    // Sans temps propre, le paramètre suit sa famille, sinon la cue.
+    let base = cue.family_times.get(&family).map_or((cue.fade, cue.delay), |t| t.or((cue.fade, cue.delay)));
+    let mut timing = cue.param_times.get(&row.fixture).and_then(|p| p.get(&row.parameter)).copied().unwrap_or_default();
+    let mut action = None;
+    ui.label(RichText::new(format!("{} · fixture {} · cue {number}", row.parameter, row.fixture)).family(theme::medium()));
+    let mut changed = false;
+    egui::Grid::new(("param-times", number, row.fixture, &row.parameter)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+        ui.label(RichText::new("Fondu").color(theme::MUTED));
+        ui.horizontal(|ui| {
+            let help = format!("Fondu de {}, fixture {}, cue {number}", row.parameter, row.fixture);
+            changed |= crate::playback_ui::optional_time(ui, &mut timing.fade, base.0, help);
+        });
+        ui.end_row();
+        ui.label(RichText::new("Délai").color(theme::MUTED));
+        ui.horizontal(|ui| {
+            let help = format!("Délai de {}, fixture {}, cue {number}", row.parameter, row.fixture);
+            changed |= crate::playback_ui::optional_time(ui, &mut timing.delay, base.1, help);
+        });
+        ui.end_row();
+    });
+    if changed {
+        action = Some(console.set_param_times(number, row.fixture, &row.parameter, timing));
     }
+    let origin = if cue.family_times.contains_key(&family) { format!("temps de {}", family.label()) } else { "temps de la cue".into() };
+    ui.label(RichText::new(format!("En gris : {origin}.")).size(11.0).color(theme::MUTED));
+    action
 }
 
 fn legend(ui: &mut egui::Ui) {
@@ -211,7 +264,18 @@ pub fn tracking_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snap
                 );
                 for (index, c) in row.cells.iter().enumerate() {
                     let look = look(console, &sheet, c, index, display, changes_only);
-                    cell(ui, &look, c.effect, current == Some(index));
+                    let editable = matches!(c.value, TrackedValue::Held { origin, .. } if origin == index);
+                    let response = cell(ui, &look, c, current == Some(index), editable);
+                    if editable {
+                        let number = sheet.cues[index].0;
+                        let menu = egui::Popup::context_menu(&response)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                        menu.show(|ui| {
+                            if let Some(a) = param_times_menu(ui, console, number, row) {
+                                action = Some(a);
+                            }
+                        });
+                    }
                 }
             });
         }

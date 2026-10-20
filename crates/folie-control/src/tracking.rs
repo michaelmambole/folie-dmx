@@ -25,9 +25,16 @@ pub struct TrackingCell {
     pub value: TrackedValue,
     /// Animé par un effet de la séquence dans cette cue.
     pub effect: bool,
+    /// (fondu, délai) propres au paramètre ou à sa famille dans cette cue, s'il en a.
+    pub own_times: Option<(f32, f32)>,
 }
 
 impl TrackingCell {
+    /// La case tient une valeur (et non un vide ou un relâchement).
+    pub fn holds_value(&self) -> bool {
+        matches!(self.value, TrackedValue::Held { .. })
+    }
+
     /// Valeur enregistrée dans cette cue même (et non suivie).
     pub fn changed_here(&self, cue: usize) -> bool {
         match self.value {
@@ -99,6 +106,7 @@ impl Console {
 
         let touched: BTreeSet<(FixtureId, String)> =
             columns.iter().flat_map(|c| c.keys().cloned()).chain(animated.iter().flatten().cloned()).collect();
+        let sequence_cues: Vec<_> = sequence.cues.values().collect();
         let mut rows = Vec::new();
         for fixture in patch.fixtures() {
             for parameter in &fixture.mode().parameters {
@@ -106,10 +114,16 @@ impl Console {
                 if !touched.contains(&key) {
                     continue;
                 }
+                let family = parameter.attribute.group();
                 let cells = (0..cues.len())
-                    .map(|i| TrackingCell {
-                        value: columns[i].get(&key).copied().unwrap_or(TrackedValue::Empty),
-                        effect: animated[i].contains(&key),
+                    .map(|i| {
+                        let cue = sequence_cues[i];
+                        let own = cue.has_own_times(fixture.id, &parameter.name, family);
+                        TrackingCell {
+                            value: columns[i].get(&key).copied().unwrap_or(TrackedValue::Empty),
+                            effect: animated[i].contains(&key),
+                            own_times: own.then(|| cue.times_of(fixture.id, &parameter.name, family)),
+                        }
                     })
                     .collect();
                 rows.push(TrackingRow {
@@ -128,6 +142,8 @@ impl Console {
 mod tests {
     use super::*;
     use crate::tests::{console, run};
+    use folie_fixture::FeatureGroup;
+    use folie_show::ParamTiming;
 
     #[test]
     fn values_are_tracked_released_and_animated() {
@@ -173,5 +189,24 @@ mod tests {
         assert_eq!(dimmer1.cells[1].value, TrackedValue::Released);
         assert_eq!(dimmer1.cells[2].value, TrackedValue::Held { value: CueValue::Value(0), origin: 2 });
         assert!(c.tracking_sheet(9).is_none(), "executor vide");
+
+        // Temps propres : la famille Dimmer en cue 3, puis le Dimmer de la fixture 1 seul.
+        let third = c.show.sequences[&1].cues.keys().nth(2).copied().unwrap();
+        let four = ParamTiming { fade: Some(4.0), delay: None };
+        c.set_family_times(third, FeatureGroup::Dimmer, four).unwrap();
+        c.set_param_times(third, FixtureId(1), "Dimmer", ParamTiming { fade: Some(6.0), delay: Some(1.0) }).unwrap();
+        let sheet = c.tracking_sheet(1).unwrap();
+        let cell = |fixture: u32| {
+            sheet.rows.iter().find(|r| r.fixture == FixtureId(fixture) && r.parameter == "Dimmer").unwrap().cells[2]
+        };
+        assert_eq!(cell(1).own_times, Some((6.0, 1.0)), "le paramètre l'emporte sur sa famille");
+        assert_eq!(cell(2).own_times, Some((4.0, 0.0)), "temps de la famille");
+        // Le moteur reçoit les temps propres des paramètres de la cue.
+        let played = crate::cues::playback_data(&c.show);
+        let dimmer1 = folie_fixture::ParamKey { fixture: FixtureId(1), parameter: 1 };
+        assert_eq!(played[&1][2].times.get(&dimmer1), Some(&(6.0, 1.0)));
+        assert!(played[&1][1].times.is_empty(), "rien de propre dans la cue 2");
+        c.set_param_times(third, FixtureId(1), "Dimmer", ParamTiming::default()).unwrap();
+        assert!(c.show.sequences[&1].cues[&third].param_times.is_empty(), "temps vides : retirés");
     }
 }

@@ -19,6 +19,9 @@ pub struct CueState {
     pub fade: f32,
     /// Secondes.
     pub delay: f32,
+    /// Temps propres de certains paramètres, (fondu, délai) en secondes ; les autres
+    /// suivent ceux de la cue.
+    pub times: HashMap<ParamKey, (f32, f32)>,
     /// Effets qui tournent pendant cette cue (déjà suivis depuis les cues précédentes).
     pub effects: Vec<EffectInstance>,
 }
@@ -111,12 +114,14 @@ pub struct ExecutorStatus {
     pub fade: f32,
     /// Temps écoulé depuis le début de la transition, en secondes.
     pub elapsed: f32,
+    /// Durée totale de la transition, temps propres des paramètres compris.
+    pub duration: f32,
 }
 
 impl ExecutorStatus {
     /// Une transition (délai ou fondu) est en cours.
     pub fn in_transition(&self) -> bool {
-        self.elapsed < self.delay + self.fade
+        self.elapsed < self.duration
     }
 }
 
@@ -127,6 +132,8 @@ pub(crate) struct Playback {
     started: Instant,
     fade: f32,
     delay: f32,
+    /// Temps propres des paramètres pour la transition en cours.
+    times: HashMap<ParamKey, (f32, f32)>,
     pub(crate) level: f32,
     /// Ordre de déclenchement : en LTP, le dernier executor lancé gagne.
     pub(crate) activated: u64,
@@ -142,6 +149,7 @@ impl Playback {
             started: Instant::now(),
             fade: 0.0,
             delay: 0.0,
+            times: HashMap::new(),
             level: 1.0,
             activated: 0,
             flashing: false,
@@ -159,15 +167,34 @@ impl Playback {
         if self.options.fader == FaderMode::Speed { self.level as f64 * 2.0 } else { 1.0 }
     }
 
-    fn progress(&self, now: Instant) -> f32 {
-        let elapsed = now.saturating_duration_since(self.started).as_secs_f32() - self.delay;
+    /// Avancement, de 0 à 1, d'un fondu de `fade` secondes après `delay` secondes.
+    fn progress_with(&self, now: Instant, fade: f32, delay: f32) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started).as_secs_f32() - delay;
         if elapsed < 0.0 {
             0.0
-        } else if self.fade <= 0.0 {
+        } else if fade <= 0.0 {
             1.0
         } else {
-            (elapsed / self.fade).min(1.0)
+            (elapsed / fade).min(1.0)
         }
+    }
+
+    /// Avancement au temps de la cue.
+    fn progress(&self, now: Instant) -> f32 {
+        self.progress_with(now, self.fade, self.delay)
+    }
+
+    /// Avancement d'un paramètre : son temps propre, sinon celui de la cue.
+    fn progress_of(&self, key: &ParamKey, now: Instant) -> f32 {
+        match self.times.get(key) {
+            Some(&(fade, delay)) => self.progress_with(now, fade, delay),
+            None => self.progress(now),
+        }
+    }
+
+    /// Durée totale de la transition : le plus long des temps, propres ou de la cue.
+    fn duration(&self) -> f32 {
+        self.times.values().map(|(fade, delay)| fade + delay).fold(self.fade + self.delay, f32::max)
     }
 
     /// Valeurs tenues par l'executor à cet instant, avant son fader.
@@ -182,7 +209,7 @@ impl Playback {
         under: impl Fn(&ParamKey) -> u16,
     ) -> HashMap<ParamKey, u16> {
         let t = self.progress(now);
-        let lerp = |a: u16, b: u16| (a as f32 + (b as f32 - a as f32) * t).round() as u16;
+        let lerp = |a: u16, b: u16, t: f32| (a as f32 + (b as f32 - a as f32) * t).round() as u16;
         let target = self.cue.and_then(|c| cues.get(c)).map(|c| &c.values);
         let mut values = HashMap::new();
         if let Some(target) = target {
@@ -192,7 +219,7 @@ impl Playback {
                     None if is_intensity(key) => 0,
                     None => under(key),
                 };
-                values.insert(*key, lerp(a, b));
+                values.insert(*key, lerp(a, b, self.progress_of(key, now)));
             }
         }
         // Ce que la nouvelle cue ne tient plus revient en fondu : l'intensité vers 0,
@@ -202,9 +229,9 @@ impl Playback {
                 continue;
             }
             if is_intensity(key) {
-                values.insert(*key, lerp(a, 0));
+                values.insert(*key, lerp(a, 0, t));
             } else if t < 1.0 {
-                values.insert(*key, lerp(a, under(key)));
+                values.insert(*key, lerp(a, under(key), t));
             }
         }
         values
@@ -228,6 +255,11 @@ impl Playback {
             Timing::Snap => (0.0, 0.0),
             Timing::Fixed(seconds) => (seconds.max(0.0), 0.0),
         };
+        // Les temps propres ne valent que pour une transition au temps de la cue (Go, Goto).
+        self.times = match (timing, target) {
+            (Timing::Cue, Some(target)) => target.times.clone(),
+            _ => HashMap::new(),
+        };
         self.started = now;
         self.activated = activated;
     }
@@ -238,7 +270,7 @@ impl Playback {
 
     /// Une fois la transition finie, on oublie les valeurs de départ.
     pub(crate) fn settle(&mut self, now: Instant) {
-        if self.progress(now) >= 1.0 {
+        if now.saturating_duration_since(self.started).as_secs_f32() >= self.duration() {
             self.from.clear();
         }
     }
@@ -260,6 +292,7 @@ impl Playback {
             delay: self.delay,
             fade: self.fade,
             elapsed: now.saturating_duration_since(self.started).as_secs_f32(),
+            duration: self.duration(),
         }
     }
 }
@@ -282,6 +315,7 @@ mod tests {
             values: values.iter().map(|(p, v)| (key(*p), *v)).collect(),
             fade,
             delay,
+            times: HashMap::new(),
             effects: Vec::new(),
         }
     }
@@ -294,6 +328,37 @@ mod tests {
     /// Sous l'executor : le pan est au centre (valeur par défaut).
     fn under(_: &ParamKey) -> u16 {
         32_768
+    }
+
+    #[test]
+    fn parameters_follow_their_own_times() {
+        // Cue 2 : fondu de 2 s, mais le pan a 4 s de fondu après 1 s de délai.
+        let mut second = cue(&[(0, 60_000), (1, 40_000)], 2.0, 0.0);
+        second.times.insert(key(1), (4.0, 1.0));
+        let cues = vec![cue(&[(0, 0), (1, 0)], 0.0, 0.0), second];
+        let start = Instant::now();
+        let at = |s: f32| start + Duration::from_secs_f32(s);
+        let mut pb = Playback::new();
+        pb.go_to(Some(0), &cues, Transition { now: start, activated: 1, timing: Timing::Cue }, intensity, under);
+        pb.settle(at(0.1));
+
+        pb.go_to(Some(1), &cues, Transition { now: at(1.0), activated: 2, timing: Timing::Cue }, intensity, under);
+        let v = pb.values(&cues, at(2.0), intensity, under);
+        assert_eq!(v[&key(0)], 30_000, "dimmer au temps de la cue : mi-fondu");
+        assert_eq!(v[&key(1)], 0, "pan encore dans son délai");
+        let v = pb.values(&cues, at(4.0), intensity, under);
+        assert_eq!(v[&key(0)], 60_000);
+        assert_eq!(v[&key(1)], 20_000, "pan à mi-fondu (1 s de délai + 2 s sur 4)");
+        let status = pb.status(at(4.0), cues.len());
+        assert!(status.in_transition(), "la transition dure jusqu'au dernier fondu");
+        assert_eq!(status.duration, 5.0);
+        pb.settle(at(4.0));
+        assert_eq!(pb.values(&cues, at(4.0), intensity, under)[&key(1)], 20_000, "rien n'est oublié avant la fin");
+        assert_eq!(pb.values(&cues, at(6.5), intensity, under)[&key(1)], 40_000);
+
+        // Back, Off, temps fixe : les temps propres ne s'appliquent pas.
+        pb.go_to(Some(1), &cues, Transition { now: at(7.0), activated: 3, timing: Timing::Snap }, intensity, under);
+        assert_eq!(pb.status(at(7.0), cues.len()).duration, 0.0);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use folie_engine::{Command as EngineCommand, CueState, FaderMode, PlaybackOptions, Sequences};
 use folie_fixture::{FeatureGroup, FixtureId, ParamKey, Patch};
 use folie_show::{
-    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Preset, Sequence,
+    Cue, CueNumber, CueValue, Effect, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, ParamTiming, Preset, Sequence,
     Show, executor_id, executor_label, executor_place,
 };
 
@@ -62,6 +62,16 @@ pub fn tracked_states(
                 }
             }
         }
+        // Temps propres, pour les paramètres que tient la cue.
+        let times = state
+            .keys()
+            .filter_map(|key| {
+                let parameter = patch.get(key.fixture)?.mode().parameters.get(key.parameter)?;
+                let family = parameter.attribute.group();
+                cue.has_own_times(key.fixture, &parameter.name, family)
+                    .then(|| (*key, cue.times_of(key.fixture, &parameter.name, family)))
+            })
+            .collect();
         let label = if cue.name.is_empty() { number.to_string() } else { format!("{number} {}", cue.name) };
         let (origin, list) = &effects;
         let instances = list
@@ -69,7 +79,7 @@ pub fn tracked_states(
             .enumerate()
             .map(|(i, e)| crate::effects::instance(e, cue_effect_id(executor, *origin, i), patch))
             .collect();
-        states.push(CueState { label, values: state.clone(), fade: cue.fade, delay: cue.delay, effects: instances });
+        states.push(CueState { label, values: state.clone(), fade: cue.fade, delay: cue.delay, times, effects: instances });
     }
     states
 }
@@ -327,6 +337,43 @@ impl Console {
         cue.name = name.clone();
         self.sync_playback();
         Ok(Outcome::changed(format!("Cue {number} renommée « {name} »")))
+    }
+
+    /// Temps propres d'une famille dans une cue ; vides, la famille reprend le temps de la cue.
+    pub fn set_family_times(&mut self, number: CueNumber, family: FeatureGroup, timing: ParamTiming) -> Result<Outcome, CommandError> {
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number);
+        let Some(cue) = cue else { return invalid(format!("la cue {number} n'existe pas")) };
+        if timing.is_empty() {
+            cue.family_times.remove(&family);
+        } else {
+            cue.family_times.insert(family, timing);
+        }
+        self.sync_playback();
+        Ok(Outcome::changed(format!("Cue {number} : temps de {}", family.label())))
+    }
+
+    /// Temps propres d'un paramètre d'une fixture dans une cue.
+    pub fn set_param_times(
+        &mut self,
+        number: CueNumber,
+        fixture: FixtureId,
+        parameter: &str,
+        timing: ParamTiming,
+    ) -> Result<Outcome, CommandError> {
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number);
+        let Some(cue) = cue else { return invalid(format!("la cue {number} n'existe pas")) };
+        if timing.is_empty() {
+            if let Some(params) = cue.param_times.get_mut(&fixture) {
+                params.remove(parameter);
+                if params.is_empty() {
+                    cue.param_times.remove(&fixture);
+                }
+            }
+        } else {
+            cue.param_times.entry(fixture).or_default().insert(parameter.to_string(), timing);
+        }
+        self.sync_playback();
+        Ok(Outcome::changed(format!("Cue {number} : temps de {parameter}, fixture {fixture}")))
     }
 
     /// Temps d'une cue, depuis la fenêtre Cues.

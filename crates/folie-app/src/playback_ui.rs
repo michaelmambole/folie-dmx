@@ -5,8 +5,11 @@ use std::collections::BTreeSet;
 use eframe::egui::{self, Color32, RichText};
 use folie_control::{CommandError, Console, Outcome};
 use folie_engine::{ExecutorStatus, Snapshot};
+use folie_fixture::FeatureGroup;
 use folie_show::{
-    Cue, CueNumber, CueValue, MAX_PAGE, SLOTS_PER_PAGE, executor_label, executor_place, ExecutorMode, ExecutorOptions, FaderFunction, Priority};
+    Cue, CueNumber, CueValue, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Priority, SLOTS_PER_PAGE,
+    executor_label, executor_place,
+};
 
 use crate::theme;
 
@@ -29,7 +32,10 @@ fn transition_bar(ui: &mut egui::Ui, status: Option<&ExecutorStatus>, width: f32
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
     let Some(s) = status.filter(|s| s.in_transition()) else { return };
-    let (fraction, color, text) = if s.elapsed < s.delay {
+    let (fraction, color, text) = if s.elapsed >= s.delay + s.fade {
+        // Temps de la cue écoulé : des paramètres finissent sur leurs temps propres.
+        (s.elapsed / s.duration.max(f32::EPSILON), FADE, format!("temps propres {:.1} s", s.duration - s.elapsed))
+    } else if s.elapsed < s.delay {
         (s.elapsed / s.delay, DELAY, format!("délai {:.1} s", s.delay - s.elapsed))
     } else {
         let into_fade = s.elapsed - s.delay;
@@ -377,25 +383,118 @@ fn tag(ui: &mut egui::Ui, text: &str, fill: Color32, stroke: Color32, color: Col
         });
 }
 
-/// Menu du clic droit d'une cue : renommer.
-fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, name: &str) -> Action {
+/// Temps facultatif : grisé tant qu'il reprend `base`, « × » pour y revenir.
+/// Renvoie `true` si le temps a changé.
+pub fn optional_time(ui: &mut egui::Ui, value: &mut Option<f32>, base: f32, help: String) -> bool {
+    let mut changed = false;
+    ui.scope(|ui| {
+        if value.is_none() {
+            ui.visuals_mut().widgets.inactive.fg_stroke.color = theme::DEFAULT;
+        }
+        let mut seconds = value.unwrap_or(base);
+        let field = egui::DragValue::new(&mut seconds).range(0.0..=3600.0).speed(0.1).max_decimals(2).suffix(" s");
+        if ui.add_sized([62.0, 22.0], field).on_hover_text(help).changed() {
+            *value = Some(seconds);
+            changed = true;
+        }
+    });
+    let reset = egui::Button::new(RichText::new("×").color(theme::MUTED)).frame(false);
+    if value.is_some() && ui.add(reset).on_hover_text("Reprendre le temps de la cue").clicked() {
+        *value = None;
+        changed = true;
+    }
+    changed
+}
+
+/// Familles des paramètres enregistrés dans une cue, dans l'ordre des presets.
+fn cue_families(console: &Console, cue: &Cue) -> Vec<FeatureGroup> {
+    let families: BTreeSet<FeatureGroup> = cue
+        .values
+        .iter()
+        .filter_map(|(fixture, params)| Some((console.show.patch.get(*fixture)?, params)))
+        .flat_map(|(fixture, params)| {
+            params.keys().filter_map(|name| {
+                fixture.mode().parameters.iter().find(|p| p.name == *name).map(|p| p.attribute.group())
+            })
+        })
+        .collect();
+    families.into_iter().collect()
+}
+
+/// Résumé des temps propres d'une cue : « Position 4 s · Couleur 0 s +1 ».
+fn family_times_summary(cue: &Cue) -> String {
+    cue.family_times
+        .iter()
+        .map(|(family, t)| {
+            let (fade, delay) = t.or((cue.fade, cue.delay));
+            let delay = if delay > 0.0 { format!(" +{delay}") } else { String::new() };
+            format!("{} {fade} s{delay}", family.label())
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Oublie la saisie en cours du menu d'une cue, à sa fermeture.
+fn forget_cue_menu(ctx: &egui::Context, number: CueNumber) {
+    ctx.data_mut(|d| {
+        d.remove::<String>(egui::Id::unique(("rename-cue", number)));
+        d.remove::<bool>(egui::Id::unique(("rename-cue-focused", number)));
+    });
+}
+
+/// Menu du clic droit d'une cue : renommer, temps par famille.
+fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &Cue) -> Action {
     let id = egui::Id::unique(("rename-cue", number));
+    let focus_id = egui::Id::unique(("rename-cue-focused", number));
     // Le texte en cours de saisie est gardé tant que le menu est ouvert.
-    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.to_string());
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| cue.name.clone());
     let mut action = None;
+    let mut renamed = false;
     ui.horizontal(|ui| {
         let label = ui.label("Nom");
         let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0)).labelled_by(label.id);
-        if !edit.has_focus() && !edit.lost_focus() && text == name {
+        // Le champ prend la main à l'ouverture du menu seulement : les temps restent éditables.
+        if ui.data_mut(|d| d.get_temp::<bool>(focus_id)).is_none() {
             edit.request_focus();
+            ui.data_mut(|d| d.insert_temp(focus_id, true));
         }
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui.button("Renommer").on_hover_text(format!("Renommer la cue {number}")).clicked() || enter {
             action = Some(console.label_cue(number, text.trim().to_string()));
+            renamed = true;
         }
     });
-    if action.is_some() {
-        ui.data_mut(|d| d.remove::<String>(id));
+    let families = cue_families(console, cue);
+    if !families.is_empty() {
+        ui.separator();
+        theme::section(ui, "Temps par famille");
+        egui::Grid::new(("family-times", number)).num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.label(RichText::new("Famille").size(11.5).color(theme::MUTED));
+            ui.label(RichText::new("Fondu").size(11.5).color(theme::MUTED));
+            ui.label(RichText::new("Délai").size(11.5).color(theme::MUTED));
+            ui.end_row();
+            for family in families {
+                let mut timing = cue.family_times.get(&family).copied().unwrap_or_default();
+                ui.label(family.label());
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    let help = format!("Fondu de {}, cue {number}", family.label());
+                    changed |= optional_time(ui, &mut timing.fade, cue.fade, help);
+                });
+                ui.horizontal(|ui| {
+                    let help = format!("Délai de {}, cue {number}", family.label());
+                    changed |= optional_time(ui, &mut timing.delay, cue.delay, help);
+                });
+                if changed {
+                    action = Some(console.set_family_times(number, family, timing));
+                }
+                ui.end_row();
+            }
+        });
+        ui.label(RichText::new("En gris : temps de la cue.").size(11.0).color(theme::MUTED));
+    }
+    if renamed {
+        forget_cue_menu(ui.ctx(), number);
         ui.close();
     } else {
         ui.data_mut(|d| d.insert_temp(id, text));
@@ -487,6 +586,12 @@ fn cue_row(
                                     CueState::Next => tag(ui, "SUIVANTE", Color32::TRANSPARENT, theme::MUTED, theme::MUTED),
                                     _ => {}
                                 }
+                                // Temps propres par famille, en bleu : « Position 4 s ».
+                                if !cue.family_times.is_empty() {
+                                    let summary = family_times_summary(cue);
+                                    let text = RichText::new(summary).size(11.0).color(theme::INFO);
+                                    ui.add(egui::Label::new(text).truncate().selectable(false));
+                                }
                             });
                             ui.add(egui::Label::new(RichText::new(cue_contents(cue)).size(11.5).color(theme::MUTED)).truncate().selectable(false));
                         });
@@ -494,11 +599,16 @@ fn cue_row(
                 });
             });
     });
-    egui::Popup::context_menu(&row.response).show(|ui| {
-        if let Some(a) = cue_menu(ui, console, number, &cue.name) {
+    // Le menu reste ouvert pendant qu'on règle les temps ; un clic à côté le ferme.
+    let menu = egui::Popup::context_menu(&row.response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let open = menu.show(|ui| {
+        if let Some(a) = cue_menu(ui, console, number, cue) {
             action = Some(a);
         }
     });
+    if open.is_none() {
+        forget_cue_menu(ui.ctx(), number);
+    }
     action
 }
 

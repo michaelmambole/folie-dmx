@@ -21,7 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use cues::{
-    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, Priority,
+    Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction, MAX_PAGE, ParamTiming, Priority,
     SLOTS_PER_PAGE, Sequence, executor_id, executor_label, executor_place,
 };
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
@@ -155,6 +155,33 @@ struct CueEntry {
     /// Absent : les effets précédents continuent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     effects: Option<Vec<EffectEntry>>,
+    /// Famille ("position"…) -> temps propres.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    family_times: BTreeMap<String, TimingEntry>,
+    /// Fixture -> paramètre -> temps propres.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    param_times: BTreeMap<String, BTreeMap<String, TimingEntry>>,
+}
+
+/// Temps propres dans le fichier ; un temps absent est celui de la cue.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct TimingEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fade: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delay: Option<f32>,
+}
+
+impl TimingEntry {
+    fn from_timing(t: &ParamTiming) -> Self {
+        Self { fade: t.fade, delay: t.delay }
+    }
+
+    fn into_timing(self) -> ParamTiming {
+        let clamp = |t: Option<f32>| t.map(|t| t.clamp(0.0, 3600.0));
+        ParamTiming { fade: clamp(self.fade), delay: clamp(self.delay) }
+    }
 }
 
 /// Options d'un executor dans le fichier ; tout champ absent prend sa valeur par défaut.
@@ -329,6 +356,18 @@ pub fn to_json(show: &Show) -> String {
                         })
                         .collect(),
                     effects: cue.effects.as_ref().map(|e| e.iter().map(EffectEntry::from_effect).collect()),
+                    family_times: cue
+                        .family_times
+                        .iter()
+                        .map(|(family, t)| (family.key().to_string(), TimingEntry::from_timing(t)))
+                        .collect(),
+                    param_times: cue
+                        .param_times
+                        .iter()
+                        .map(|(id, params)| {
+                            (id.to_string(), params.iter().map(|(p, t)| (p.clone(), TimingEntry::from_timing(t))).collect())
+                        })
+                        .collect(),
                 })
                 .collect(),
         })
@@ -447,7 +486,26 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
                 delay: cue_entry.delay.max(0.0),
                 values: BTreeMap::new(),
                 effects,
+                family_times: BTreeMap::new(),
+                param_times: BTreeMap::new(),
             };
+            for (family, timing) in cue_entry.family_times {
+                match FeatureGroup::from_key(&family) {
+                    Some(family) => {
+                        cue.family_times.insert(family, timing.into_timing());
+                    }
+                    None => warnings.push(format!("{what} : famille « {family} » inconnue, temps ignorés")),
+                }
+            }
+            for (id, params) in cue_entry.param_times {
+                match id.parse::<u32>().ok().map(FixtureId).filter(|id| patch.get(*id).is_some()) {
+                    Some(id) => {
+                        let times = params.into_iter().map(|(p, t)| (p, t.into_timing())).collect();
+                        cue.param_times.insert(id, times);
+                    }
+                    None => warnings.push(format!("{what} : fixture {id} absente du patch, temps retirés")),
+                }
+            }
             for (id, params) in cue_entry.values {
                 let Some(id) = id.parse::<u32>().ok().map(FixtureId).filter(|id| patch.get(*id).is_some()) else {
                     warnings.push(format!("{what} : fixture {id} absente du patch, valeurs retirées"));
@@ -612,6 +670,11 @@ mod tests {
         let mut wave = effects::templates()[2].clone();
         wave.targets = vec!["1".parse().unwrap(), "10.2".parse().unwrap()];
         cue.effects = Some(vec![wave]);
+        cue.family_times.insert(FeatureGroup::Position, ParamTiming { fade: Some(4.0), delay: None });
+        cue.param_times
+            .entry(FixtureId(1))
+            .or_default()
+            .insert("Pan".into(), ParamTiming { fade: Some(6.0), delay: Some(1.0) });
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
         cues.insert("1.5".parse().unwrap(), Cue::new("Noir".into()));
         let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
@@ -694,8 +757,10 @@ mod tests {
         file["patch"][1]["address"] = 600.into();
         let loaded = from_json(&file.to_string(), &library).unwrap();
         assert_eq!(loaded.show.patch.fixtures().len(), 1);
-        // 2 fixtures écartées, puis le groupe, le preset et la cue qui les utilisaient sont nettoyés.
-        assert_eq!(loaded.warnings.len(), 5, "{:?}", loaded.warnings);
+        // 2 fixtures écartées, puis le groupe, le preset et la cue (valeurs et temps propres)
+        // qui les utilisaient sont nettoyés.
+        assert_eq!(loaded.warnings.len(), 6, "{:?}", loaded.warnings);
+        assert!(loaded.warnings.iter().any(|w| w.ends_with("fixture 1 absente du patch, temps retirés")));
     }
 
     #[test]
