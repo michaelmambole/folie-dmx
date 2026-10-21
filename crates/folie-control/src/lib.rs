@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, EngineHandle};
-use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, ParamKey, Parameter, Patch, Target};
+use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, FixtureId, ParamKey, Parameter, Patch, Target};
 use folie_show::{Effect, Group, Preset, Show};
 use thiserror::Error;
 
@@ -577,6 +577,21 @@ impl Console {
         }
         self.selection_used = true;
         Ok(format!("Dimmer à {percent} % sur {}", plural(touched, "cible")))
+    }
+
+    /// Place un projecteur sur scène (fenêtre Scène).
+    pub fn set_stage_place(&mut self, fixture: FixtureId, place: folie_show::StagePlace) -> Result<Outcome, CommandError> {
+        if self.show.patch.get(fixture).is_none() {
+            return invalid(format!("Fixture {fixture} n'est pas patchée"));
+        }
+        self.show.stage.insert(fixture, place);
+        Ok(Outcome::changed(format!("Fixture {fixture} placée")))
+    }
+
+    /// Rend des projecteurs à leur place automatique, sur la perche.
+    pub fn reset_stage_places(&mut self, fixtures: &[FixtureId]) -> Result<Outcome, CommandError> {
+        let removed = fixtures.iter().filter(|f| self.show.stage.remove(f).is_some()).count();
+        Ok(Outcome::changed(format!("{} replacée(s) sur la perche", plural(removed, "fixture"))))
     }
 
     pub fn store_group(&mut self, number: u32, name: Option<String>) -> Result<Outcome, CommandError> {

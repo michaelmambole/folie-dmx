@@ -69,6 +69,19 @@ pub struct Show {
     /// Effets enregistrés par l'utilisateur (« Mes effets »), sans cibles : on les relance
     /// sur la sélection du moment.
     pub effect_pool: BTreeMap<u32, Effect>,
+    /// Place des projecteurs dans la fenêtre Scène ; les autres sont alignés sur une perche.
+    pub stage: BTreeMap<FixtureId, StagePlace>,
+}
+
+/// Place d'un projecteur sur scène, en mètres : `x` vers cour, `y` la hauteur, `z` vers le public.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StagePlace {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// Posé au sol, faisceau vers le haut (sinon suspendu, faisceau vers le bas).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub floor: bool,
 }
 
 impl Default for Show {
@@ -82,6 +95,7 @@ impl Default for Show {
             pages: BTreeMap::new(),
             tempo: DEFAULT_TEMPO,
             effect_pool: BTreeMap::new(),
+            stage: BTreeMap::new(),
         }
     }
 }
@@ -135,6 +149,9 @@ struct ShowFile {
     tempo: f32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     effect_pool: Vec<PoolEffectEntry>,
+    /// Fixture -> place sur scène.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    stage: BTreeMap<String, StagePlace>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -456,6 +473,7 @@ pub fn to_json(show: &Show) -> String {
             .iter()
             .map(|(number, effect)| PoolEffectEntry { number: *number, effect: EffectEntry::from_effect(effect) })
             .collect(),
+        stage: show.stage.iter().map(|(id, place)| (id.to_string(), *place)).collect(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -637,8 +655,18 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         }
     }
 
+    let mut stage = BTreeMap::new();
+    for (id, place) in file.stage {
+        match id.parse::<u32>().ok().map(FixtureId).filter(|id| patch.get(*id).is_some()) {
+            Some(id) => {
+                stage.insert(id, place);
+            }
+            None => warnings.push(format!("Scène : fixture {id} absente du patch, place retirée")),
+        }
+    }
+
     let tempo = file.tempo.clamp(1.0, 999.0);
-    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool };
+    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage };
     Ok(Loaded { show, warnings })
 }
 
@@ -827,7 +855,8 @@ mod tests {
         ballet.name = "Ballet".into();
         ballet.spread = 180.0;
         let effect_pool = BTreeMap::from([(2, ballet)]);
-        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool }
+        let stage = BTreeMap::from([(FixtureId(1), StagePlace { x: -2.5, y: 0.0, z: 3.0, floor: true })]);
+        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool, stage }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -856,6 +885,7 @@ mod tests {
         assert_eq!(loaded.show.executors, show.executors);
         assert_eq!(loaded.show.pages, show.pages);
         assert_eq!(loaded.show.effect_pool, show.effect_pool);
+        assert_eq!(loaded.show.stage, show.stage);
         assert_eq!(loaded.show.tempo, 98.0);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
@@ -878,9 +908,10 @@ mod tests {
         file["patch"][1]["address"] = 600.into();
         let loaded = from_json(&file.to_string(), &library).unwrap();
         assert_eq!(loaded.show.patch.fixtures().len(), 1);
-        // 2 fixtures écartées, puis le groupe, le preset et la cue (valeurs et temps propres)
-        // qui les utilisaient sont nettoyés.
-        assert_eq!(loaded.warnings.len(), 6, "{:?}", loaded.warnings);
+        // 2 fixtures écartées, puis le groupe, le preset, la cue (valeurs et temps propres) et
+        // la place sur scène qui les utilisaient sont nettoyés.
+        assert_eq!(loaded.warnings.len(), 7, "{:?}", loaded.warnings);
+        assert!(loaded.warnings.iter().any(|w| w == "Scène : fixture 1 absente du patch, place retirée"));
         assert!(loaded.warnings.iter().any(|w| w.ends_with("fixture 1 absente du patch, temps retirés")));
     }
 

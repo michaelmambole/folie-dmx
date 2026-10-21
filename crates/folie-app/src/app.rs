@@ -1541,6 +1541,67 @@ mod tests {
             let path = std::path::Path::new(&dir).join("stage-top.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+
+        // Placer : la carte Position règle le projecteur sélectionné (la 2).
+        harness.get_by_label("Placer").click();
+        harness.run_steps(2);
+        harness.get_by_label("2 · Rush MH 6 Wash 2");
+        harness.get_by_role_and_label(Role::SpinButton, "Hauteur").set_value_accesskit(3.0);
+        harness.run_steps(2);
+        harness.get_by_label("Au sol").click();
+        harness.run_steps(2);
+        let place = |h: &Harness<'_, FolieApp>, n: u32| h.state().console.show.stage.get(&FixtureId(n)).copied();
+        let two = place(&harness, 2).expect("placée");
+        assert_eq!((two.y, two.floor), (3.0, true));
+        assert!(harness.state().file.dirty, "le plan est enregistré dans le show");
+
+        // À la souris, en vue de dessus : la 3 glisse vers cour, puis Maj-glisser la monte.
+        let block = harness.get_by_label("Projecteur 3 · Rush MH 6 Wash 3").rect().center();
+        let drag = |h: &mut Harness<'_, FolieApp>, to: egui::Pos2, modifiers: egui::Modifiers| {
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+            h.hover_at(block);
+            h.run_steps(1);
+            h.event_modifiers(button(block, true), modifiers);
+            h.run_steps(1);
+            for i in 1..=6 {
+                h.event_modifiers(egui::Event::PointerMoved(block + (to - block) * (i as f32 / 6.0)), modifiers);
+                h.run_steps(1);
+            }
+            h.event_modifiers(button(to, false), modifiers);
+            h.run_steps(2);
+        };
+        let auto_x = crate::stage_ui::auto_x(4, 2); // place de la 3 sur la perche
+        drag(&mut harness, block + egui::vec2(120.0, 0.0), egui::Modifiers::NONE);
+        let three = place(&harness, 3).expect("placée à la souris");
+        assert!(three.x > auto_x + 1.0, "vers cour : {three:?}");
+        assert!((three.y - 5.0).abs() < 1e-3, "même hauteur");
+        assert_eq!(harness.state().console.selection(), [Target::whole(FixtureId(3))], "le projecteur glissé est sélectionné");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("stage-placing.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.remove_cursor(); // l'infobulle du bloc porte le même nom
+        harness.run_steps(2);
+        let block = harness.get_all_by_label("Projecteur 3 · Rush MH 6 Wash 3").next().unwrap().rect().center();
+        let drag_up = |h: &mut Harness<'_, FolieApp>| {
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT };
+            h.hover_at(block);
+            h.run_steps(1);
+            h.event_modifiers(button(block, true), egui::Modifiers::SHIFT);
+            h.run_steps(1);
+            for i in 1..=5 {
+                h.event_modifiers(egui::Event::PointerMoved(block - egui::vec2(0.0, 10.0 * i as f32)), egui::Modifiers::SHIFT);
+                h.run_steps(1);
+            }
+            h.event_modifiers(button(block - egui::vec2(0.0, 50.0), false), egui::Modifiers::SHIFT);
+            h.run_steps(2);
+        };
+        drag_up(&mut harness);
+        assert!(place(&harness, 3).unwrap().y > 5.2, "Maj-glisser vers le haut : plus haut");
+
+        harness.get_by_label("Replacer sur la perche").click();
+        harness.run_steps(2);
+        assert!(place(&harness, 3).is_none(), "rendue à la perche");
     }
 
     #[test]

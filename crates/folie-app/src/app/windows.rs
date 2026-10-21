@@ -441,7 +441,10 @@ impl FolieApp {
                 let result = effects_ui::effects_window(ui, &mut self.console);
                 self.report(result);
             }
-            WindowKind::Stage => crate::stage_ui::stage_window(ui, &mut self.console, &self.snapshot),
+            WindowKind::Stage => {
+                let result = crate::stage_ui::stage_window(ui, &mut self.console, &self.snapshot);
+                self.report(result);
+            }
             WindowKind::Tracking => {
                 let result = tracking_ui::tracking_window(ui, &mut self.console, &self.snapshot, self.display);
                 self.report(result);

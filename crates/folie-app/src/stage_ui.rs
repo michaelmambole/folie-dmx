@@ -5,9 +5,10 @@
 use std::collections::BTreeMap;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, pos2, vec2};
-use folie_control::{Console, SelectMode};
+use folie_control::{CommandError, Console, Outcome, SelectMode};
 use folie_engine::Snapshot;
-use folie_fixture::{Attribute, Parameter, PatchedFixture, Target};
+use folie_fixture::{Attribute, FixtureId, Parameter, PatchedFixture, Target};
+use folie_show::StagePlace;
 
 use crate::theme;
 
@@ -57,6 +58,28 @@ impl Camera {
     const FACE: Camera = Camera { yaw: 0.0, pitch: 0.08, distance: 17.0 };
     const TOP: Camera = Camera { yaw: 0.0, pitch: 1.5, distance: 17.0 };
     const THREE_QUARTER: Camera = Camera { yaw: -0.6, pitch: 0.45, distance: 17.0 };
+
+    /// Point de la scène, à la hauteur `height`, qui se trouve sous `screen` (pour placer
+    /// un projecteur à la souris). `None` si le regard ne croise pas ce plan.
+    fn floor_point(&self, screen: Pos2, rect: Rect, height: f32) -> Option<Vec3> {
+        let (cy, sy, cp, sp) = (self.yaw.cos(), self.yaw.sin(), self.pitch.cos(), self.pitch.sin());
+        let focal = rect.height().min(rect.width()) * 1.25;
+        // Point de la scène vu sous `screen` à la profondeur `depth` : l'inverse de `project`.
+        let at = |depth: f32| {
+            let x1 = (screen.x - rect.center().x) * depth / focal;
+            let ys = -(screen.y - rect.center().y) * depth / focal;
+            let along = self.distance - depth;
+            let (y0, z1) = (ys * cp + along * sp, -ys * sp + along * cp);
+            v3(x1 * cy + z1 * sy, y0 + TRUSS_HEIGHT / 2.5, -x1 * sy + z1 * cy)
+        };
+        let (a, b) = (at(0.0), at(1.0));
+        let slope = b.y - a.y;
+        if slope.abs() < 1e-6 {
+            return None;
+        }
+        let depth = (height - a.y) / slope;
+        (depth > 0.5).then(|| at(depth))
+    }
 
     /// Position à l'écran (et profondeur) d'un point de la scène.
     fn project(&self, p: Vec3, rect: Rect) -> Option<(Pos2, f32)> {
@@ -111,7 +134,7 @@ struct Look {
     direction: Vec3,
 }
 
-fn look(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixture, position: Vec3) -> Look {
+fn look(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixture, position: Vec3, floor: bool) -> Look {
     let parameters = &fixture.mode().parameters;
     let live = |p: &Parameter| crate::fixtures::live_value(snapshot, fixture, p);
     let dimmers: Vec<f32> =
@@ -125,7 +148,12 @@ fn look(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixture, positi
     let color = console
         .target_color(Target::whole(fixture.id), &values)
         .map_or(Color32::from_rgb(255, 236, 205), |[r, g, b]| Color32::from_rgb(r, g, b));
-    Look { position, intensity, color, direction: beam_direction(angle(Attribute::Pan), angle(Attribute::Tilt)) }
+    let mut direction = beam_direction(angle(Attribute::Pan), angle(Attribute::Tilt));
+    if floor {
+        // Posé au sol : le projecteur est retourné, son faisceau part vers le haut.
+        direction.y = -direction.y;
+    }
+    Look { position, intensity, color, direction }
 }
 
 /// Placement automatique : les projecteurs du patch alignés sur une perche, dans l'ordre.
@@ -135,10 +163,93 @@ fn auto_positions(count: usize) -> Vec<Vec3> {
     (0..count).map(|i| v3(first + spacing * i as f32, TRUSS_HEIGHT, TRUSS_Z)).collect()
 }
 
-pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot) {
+type Action = Option<Result<Outcome, CommandError>>;
+
+/// Place d'un projecteur : celle du show, sinon sur la perche (dans l'ordre du patch).
+fn place_of(console: &Console, fixture: FixtureId, auto: Vec3) -> StagePlace {
+    console.show.stage.get(&fixture).copied().unwrap_or(StagePlace { x: auto.x, y: auto.y, z: auto.z, floor: false })
+}
+
+/// Carte « Position » : côté, profondeur, hauteur et accroche des projecteurs sélectionnés.
+fn position_card(ui: &mut egui::Ui, console: &mut Console, places: &BTreeMap<FixtureId, StagePlace>) -> Action {
+    let selected: Vec<FixtureId> = {
+        let mut ids: Vec<FixtureId> = console.selection().iter().map(|t| t.fixture).filter(|id| places.contains_key(id)).collect();
+        ids.dedup();
+        ids
+    };
+    let mut action = None;
+    theme::card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        theme::section(ui, "Position");
+        let Some(&first) = selected.first() else {
+            ui.label(egui::RichText::new("Sélectionnez un projecteur (clic sur son bloc) pour le placer.").color(theme::MUTED));
+            return;
+        };
+        let title = match selected.len() {
+            1 => console.show.patch.get(first).map_or_else(|| first.to_string(), |f| format!("{} · {}", f.id, f.name)),
+            n => format!("{n} projecteurs"),
+        };
+        ui.label(egui::RichText::new(title).family(theme::medium()));
+        let mut place = places[&first];
+        let before = place;
+        egui::Grid::new("stage-position").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            let meters = |ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>| {
+                let label = ui.label(egui::RichText::new(label).color(theme::MUTED));
+                ui.add(egui::DragValue::new(value).range(range).speed(0.05).max_decimals(2).suffix(" m")).labelled_by(label.id);
+                ui.end_row();
+            };
+            meters(ui, "Côté", &mut place.x, -20.0..=20.0);
+            meters(ui, "Profondeur", &mut place.z, -20.0..=20.0);
+            meters(ui, "Hauteur", &mut place.y, 0.0..=20.0);
+        });
+        // Accroche sur sa propre ligne : la carte reste étroite.
+        ui.label(egui::RichText::new("Accroche").color(theme::MUTED));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut place.floor, false, "Suspendu").on_hover_text("Faisceau vers le bas");
+            ui.selectable_value(&mut place.floor, true, "Au sol").on_hover_text("Faisceau vers le haut");
+        });
+        // Un champ changé s'applique à tous les projecteurs sélectionnés.
+        if place != before {
+            for id in &selected {
+                let mut p = places[id];
+                if place.x != before.x {
+                    p.x = place.x;
+                }
+                if place.z != before.z {
+                    p.z = place.z;
+                }
+                if place.y != before.y {
+                    p.y = place.y;
+                }
+                p.floor = place.floor;
+                action = Some(console.set_stage_place(*id, p));
+            }
+        }
+        ui.add_space(4.0);
+        if ui.button("Replacer sur la perche").on_hover_text("Rend les projecteurs sélectionnés à leur place sur la perche").clicked() {
+            action = Some(console.reset_stage_places(&selected));
+        }
+        if selected.len() > 1 {
+            ui.label(egui::RichText::new("Les champs règlent tous les projecteurs sélectionnés.").size(11.5).color(theme::MUTED));
+        }
+    });
+    action
+}
+
+/// Côté (x) de la n-ième place sur la perche, pour les tests de l'interface.
+#[cfg(test)]
+pub(crate) fn auto_x(count: usize, index: usize) -> f32 {
+    auto_positions(count)[index].x
+}
+
+pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot) -> Action {
     let camera_id = egui::Id::unique("stage-camera");
-    let mut camera = ui.data_mut(|d| d.get_persisted::<(f32, f32, f32)>(camera_id))
+    let placing_id = egui::Id::unique("stage-placing");
+    let mut camera = ui
+        .data_mut(|d| d.get_persisted::<(f32, f32, f32)>(camera_id))
         .map_or(Camera::THREE_QUARTER, |(yaw, pitch, distance)| Camera { yaw, pitch, distance });
+    let mut placing = ui.data_mut(|d| d.get_persisted::<bool>(placing_id)).unwrap_or(false);
+    let mut action = None;
 
     ui.horizontal(|ui| {
         theme::section(ui, "Scène");
@@ -148,24 +259,69 @@ pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapsho
                 camera = Camera { distance: camera.distance, ..view };
             }
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Glisser : tourner · molette : zoom · clic : sélectionner").size(11.5).color(theme::MUTED));
-        });
+        ui.separator();
+        ui.toggle_value(&mut placing, "Placer").on_hover_text("Déplacer les projecteurs à la souris");
+        let hint = if placing {
+            "Glisser un projecteur : le déplacer · Maj-glisser : sa hauteur"
+        } else {
+            "Glisser : tourner · molette : zoom · clic : sélectionner"
+        };
+        ui.label(egui::RichText::new(hint).size(11.5).color(theme::MUTED));
     });
 
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, "Vue de la scène"));
-    if response.dragged() {
-        let delta = response.drag_delta();
-        camera.yaw += delta.x * 0.008;
-        camera.pitch = (camera.pitch + delta.y * 0.006).clamp(0.02, 1.55);
-    }
-    if response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        camera.distance = (camera.distance - scroll * 0.02).clamp(6.0, 40.0);
-    }
-    ui.data_mut(|d| d.insert_persisted(camera_id, (camera.yaw, camera.pitch, camera.distance)));
+    let fixtures: Vec<PatchedFixture> = console.show.patch.fixtures().iter().filter(|f| f.universe == 0).cloned().collect();
+    let places: BTreeMap<FixtureId, StagePlace> = fixtures
+        .iter()
+        .zip(auto_positions(fixtures.len()))
+        .map(|(f, auto)| (f.id, place_of(console, f.id, auto)))
+        .collect();
 
+    let card_width = if placing { 250.0 } else { 0.0 };
+    let size = vec2((ui.available_width() - card_width).max(200.0), ui.available_height());
+    ui.horizontal_top(|ui| {
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Canvas, true, "Vue de la scène"));
+        if response.dragged() {
+            let delta = response.drag_delta();
+            camera.yaw += delta.x * 0.008;
+            camera.pitch = (camera.pitch + delta.y * 0.006).clamp(0.02, 1.55);
+        }
+        if response.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            camera.distance = (camera.distance - scroll * 0.02).clamp(6.0, 40.0);
+        }
+        if let Some(a) = draw_scene(ui, console, snapshot, &camera, rect, &fixtures, &places, placing) {
+            action = Some(a);
+        }
+        if placing {
+            ui.vertical(|ui| {
+                ui.set_width(card_width - 8.0);
+                ui.set_max_width(card_width - 8.0);
+                if let Some(a) = position_card(ui, console, &places) {
+                    action = Some(a);
+                }
+            });
+        }
+    });
+    ui.data_mut(|d| {
+        d.insert_persisted(camera_id, (camera.yaw, camera.pitch, camera.distance));
+        d.insert_persisted(placing_id, placing);
+    });
+    action
+}
+
+/// Sol, plateau, perche, projecteurs et faisceaux ; clics et glissés sur les projecteurs.
+#[allow(clippy::too_many_arguments)]
+fn draw_scene(
+    ui: &mut egui::Ui,
+    console: &mut Console,
+    snapshot: &Snapshot,
+    camera: &Camera,
+    rect: Rect,
+    fixtures: &[PatchedFixture],
+    places: &BTreeMap<FixtureId, StagePlace>,
+    placing: bool,
+) -> Action {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 8.0, ui.visuals().extreme_bg_color);
     let line = |a: Vec3, b: Vec3, stroke: Stroke| {
@@ -190,11 +346,12 @@ pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapsho
     line(v3(-hw, 0.0, -hd), v3(hw, 0.0, -hd), edge);
     line(v3(-hw - 0.5, TRUSS_HEIGHT + 0.35, TRUSS_Z), v3(hw + 0.5, TRUSS_HEIGHT + 0.35, TRUSS_Z), Stroke::new(3.0, theme::MUTED));
 
-    let fixtures: Vec<PatchedFixture> = console.show.patch.fixtures().iter().filter(|f| f.universe == 0).cloned().collect();
-    let positions = auto_positions(fixtures.len());
+    let mut action = None;
     let mut clicked = None;
-    for (fixture, position) in fixtures.iter().zip(positions) {
-        let look = look(console, snapshot, fixture, position);
+    for fixture in fixtures {
+        let place = places[&fixture.id];
+        let position = v3(place.x, place.y, place.z);
+        let look = look(console, snapshot, fixture, position, place.floor);
         let selected = console.selection().iter().any(|t| t.fixture == fixture.id);
 
         // Faisceau : un trait de la couleur du projecteur, plus pâle quand le dimmer baisse.
@@ -209,6 +366,10 @@ pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapsho
                 let radius = (rect.height() * 0.6 / depth).max(3.0);
                 painter.circle_filled(spot, radius, look.color.gamma_multiply(0.35 * look.intensity));
             }
+        }
+        // En placement, un trait jusqu'au sol aide à voir où est le projecteur.
+        if placing && place.y > 0.05 {
+            line(position, v3(place.x, 0.0, place.z), Stroke::new(1.0, if selected { theme::SELECTION } else { theme::DEFAULT }));
         }
 
         // Bloc du projecteur : un cube en fil de fer, rempli de sa couleur quand il éclaire.
@@ -233,20 +394,41 @@ pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapsho
             painter.text(label, egui::Align2::CENTER_BOTTOM, fixture.id.to_string(), egui::FontId::proportional(12.0), color);
         }
 
-        // Zone cliquable du projecteur (et son nom, pour l'accessibilité).
+        // Zone du projecteur : clic pour le sélectionner, glissé pour le placer.
         let hit = Rect::from_center_size(center, vec2(size.max(14.0), size.max(14.0)));
         let id = ui.scope_id().with(("stage-fixture", fixture.id));
-        let area = ui.interact(hit.intersect(rect), id, Sense::click());
+        let sense = if placing { Sense::click_and_drag() } else { Sense::click() };
+        let area = ui.interact(hit.intersect(rect), id, sense);
         let name = format!("Projecteur {} · {}", fixture.id, fixture.name);
         area.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-        if area.on_hover_text(&name).clicked() {
+        let area = area.on_hover_text(&name);
+
+        if area.clicked() || (area.drag_started() && !selected) {
             clicked = Some(fixture.id);
+        }
+        if placing && area.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            let mut moved = place;
+            if ui.input(|i| i.modifiers.shift) {
+                // Hauteur : vers le haut de l'écran, plus haut.
+                let meters_per_point = depth / (rect.height().min(rect.width()) * 1.25);
+                moved.y = (place.y - area.drag_delta().y * meters_per_point).clamp(0.0, 20.0);
+            } else if let Some(pointer) = area.interact_pointer_pos()
+                && let Some(point) = camera.floor_point(pointer, rect, place.y)
+            {
+                moved.x = point.x.clamp(-20.0, 20.0);
+                moved.z = point.z.clamp(-20.0, 20.0);
+            }
+            if moved != place {
+                action = Some(console.set_stage_place(fixture.id, moved));
+            }
         }
     }
     if let Some(id) = clicked {
         let mode = if ui.input(|i| i.modifiers.command) { SelectMode::Toggle } else { SelectMode::Replace };
         console.select([Target::whole(id)], mode);
     }
+    action
 }
 
 #[cfg(test)]
@@ -278,6 +460,19 @@ mod tests {
         // Un faisceau au repos tombe à la verticale : vu de dessus, sur le projecteur.
         let (above, floor) = (Camera::TOP.project(v3(3.0, 5.0, 0.0), rect).unwrap().0, Camera::TOP.project(v3(3.0, 0.0, 0.0), rect).unwrap().0);
         assert!(floor.x.abs() < above.x.abs() + 1.0 && (above.x - rect.center().x).abs() > (floor.x - rect.center().x).abs(), "le sol, plus loin, est plus près du centre");
+    }
+
+    #[test]
+    fn a_point_on_screen_maps_back_to_the_stage() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 500.0));
+        for camera in [Camera::FACE, Camera::TOP, Camera::THREE_QUARTER] {
+            for point in [v3(2.0, 0.0, 1.5), v3(-3.0, 5.0, -1.0)] {
+                let (screen, _) = camera.project(point, rect).unwrap();
+                let back = camera.floor_point(screen, rect, point.y).unwrap();
+                let near = (back.x - point.x).abs() < 1e-2 && (back.y - point.y).abs() < 1e-2 && (back.z - point.z).abs() < 1e-2;
+                assert!(near, "{camera:?} {point:?} -> {back:?}");
+            }
+        }
     }
 
     #[test]
