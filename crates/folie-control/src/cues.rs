@@ -651,7 +651,10 @@ impl Console {
     }
 
     /// Touche principale de l'executor, selon son mode (Flash : voir [`Console::flash`]).
-    pub fn press(&self, executor: u32) -> Result<Outcome, CommandError> {
+    pub fn press(&mut self, executor: u32) -> Result<Outcome, CommandError> {
+        if let Some((number, _)) = self.executor_macro(executor) {
+            return self.run_macro(number);
+        }
         let Some((x, _)) = self.executor(executor) else {
             return invalid(format!("l'executor {executor} est vide : Store, puis cliquez-le pour y enregistrer", executor = executor_label(executor)));
         };

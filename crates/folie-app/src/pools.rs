@@ -24,7 +24,10 @@ const MIN_CELLS: usize = 48;
 const FREE_ROWS: usize = 2;
 const ARMED: Color32 = theme::DANGER;
 
-pub struct PoolsView;
+pub struct PoolsView {
+    /// Macro dont on modifie les lignes, et le texte en cours.
+    editing: Option<(u32, String)>,
+}
 
 /// Touche Store : armée, le prochain clic dans un pool, sur un executor ou une
 /// cue enregistre au lieu de rappeler. Une seule pour toute l'application.
@@ -95,7 +98,7 @@ struct Item {
 
 impl PoolsView {
     pub fn new() -> Self {
-        Self
+        Self { editing: None }
     }
 
     /// Pool de groupes. Renvoie le résultat de l'action faite, s'il y en a une.
@@ -126,7 +129,7 @@ impl PoolsView {
                 }
             })
             .collect();
-        let action = grid(ui, "groups", &items, *store_armed)?;
+        let action = grid(ui, "groups", &items, *store_armed, false)?;
         Some(match action {
             CellAction::Click(number) => {
                 let add = ui.input(|i| i.modifiers.command);
@@ -140,6 +143,7 @@ impl PoolsView {
             }
             CellAction::Rename(number, name) => console.label(Object::Group(number), name),
             CellAction::Delete(number) => console.delete(Object::Group(number)),
+            CellAction::Edit(_) => return None,
         })
     }
 
@@ -184,7 +188,7 @@ impl PoolsView {
                 }
             })
             .collect();
-        let action = grid(ui, ("presets", current), &items, *store_armed)?;
+        let action = grid(ui, ("presets", current), &items, *store_armed, false)?;
         Some(match action {
             CellAction::Click(number) => {
                 let result = if *store_armed {
@@ -197,7 +201,116 @@ impl PoolsView {
             }
             CellAction::Rename(number, name) => console.label(Object::Preset(current, number), name),
             CellAction::Delete(number) => console.delete(Object::Preset(current, number)),
+            CellAction::Edit(_) => return None,
         })
+    }
+
+    /// Pool de macros : clic pour lancer (ou arrêter si elle joue), clic droit pour modifier
+    /// ses lignes, la renommer ou la supprimer. Store, puis une case libre : nouvelle macro.
+    pub fn macros(&mut self, ui: &mut egui::Ui, console: &mut Console, store_armed: &mut bool) -> Option<Result<Outcome, CommandError>> {
+        ui.horizontal(|ui| {
+            store_button(ui, store_armed);
+            let hint = if *store_armed {
+                "Choisissez la case de la nouvelle macro"
+            } else {
+                "Clic : lancer (ou arrêter) · clic droit : modifier, renommer, supprimer"
+            };
+            ui.label(RichText::new(hint).size(12.0).color(theme::MUTED));
+        });
+        ui.add_space(4.0);
+        let mut result = self.macro_editor(ui, console);
+
+        let progress = console.macros_in_progress();
+        let items: Vec<Item> = console
+            .show
+            .macros
+            .iter()
+            .map(|(n, m)| {
+                let running = progress.iter().find(|p| p.number == *n);
+                let detail = match running {
+                    Some(p) if p.waiting => format!("ligne {}/{} · attente", p.line, p.lines),
+                    Some(p) => format!("ligne {}/{}", p.line, p.lines),
+                    None => format!("{} ligne(s)", m.lines.len()),
+                };
+                Item {
+                    number: *n,
+                    name: m.name.clone(),
+                    accent: if running.is_some() { theme::GO } else { theme::DEFAULT },
+                    // En cours : bandeau large et fond teinté de vert.
+                    colored: running.is_some(),
+                    coverage: Coverage::NoSelection,
+                    marker: running.map(|_| theme::GO),
+                    executors: Vec::new(),
+                    detail,
+                }
+            })
+            .collect();
+        if let Some(action) = grid(ui, "macros", &items, *store_armed, true) {
+            result = Some(match action {
+                CellAction::Click(number) if *store_armed => {
+                    *store_armed = false;
+                    let outcome = console.store_macro(number, None);
+                    self.editing = Some((number, String::new()));
+                    Ok(outcome)
+                }
+                CellAction::Click(number) if progress.iter().any(|p| p.number == number) => Ok(console.stop_macro(number)),
+                CellAction::Click(number) => console.run_macro(number),
+                CellAction::Rename(number, name) => console.label_macro(number, name),
+                CellAction::Delete(number) => console.delete_macro(number),
+                CellAction::Edit(number) => {
+                    let lines = console.show.macros.get(&number).map(|m| m.lines.join("\n")).unwrap_or_default();
+                    self.editing = Some((number, lines));
+                    return result;
+                }
+            });
+        }
+        result
+    }
+
+    /// Éditeur des lignes de la macro en cours de modification, au-dessus du pool.
+    /// Chaque ligne est vérifiée pendant la saisie ; les fautes sont signalées en rouge.
+    fn macro_editor(&mut self, ui: &mut egui::Ui, console: &mut Console) -> Option<Result<Outcome, CommandError>> {
+        let (number, text) = self.editing.as_mut()?;
+        let number = *number;
+        let name = console.show.macros.get(&number).map_or_else(|| format!("Macro {number}"), |m| m.name.clone());
+        let mut result = None;
+        let mut close = false;
+        theme::card(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Macro {number} · {name}")).family(theme::medium()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(theme::primary_button("Enregistrer")).clicked() {
+                        let lines = text.lines().map(str::to_string).collect();
+                        result = Some(console.set_macro_lines(number, lines));
+                        close = true;
+                    }
+                    if ui.button("Annuler").clicked() {
+                        close = true;
+                    }
+                });
+            });
+            let label = ui.label(RichText::new("Une commande par ligne · « Wait 2 » attend 2 secondes").size(11.5).color(theme::MUTED));
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(6)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Fixture 1 Thru 4\nAt 100\nWait 2\nGo Executor 2"),
+            )
+            .labelled_by(label.id);
+            // Lignes fautives, avec leur numéro.
+            for (index, line) in text.lines().enumerate() {
+                if let Err(err) = folie_control::macros::check_line(line) {
+                    ui.colored_label(theme::DANGER, format!("Ligne {} : {err}", index + 1));
+                }
+            }
+        });
+        ui.add_space(6.0);
+        if close {
+            self.editing = None;
+        }
+        result
     }
 }
 
@@ -238,10 +351,12 @@ enum CellAction {
     Click(u32),
     Rename(u32, String),
     Delete(u32),
+    /// Modifier le contenu (les lignes d'une macro).
+    Edit(u32),
 }
 
 /// Menu du clic droit d'une case occupée : renommer, supprimer.
-fn cell_menu(ui: &mut egui::Ui, id: egui::Id, number: u32, name: &str) -> Option<CellAction> {
+fn cell_menu(ui: &mut egui::Ui, id: egui::Id, number: u32, name: &str, editable: bool) -> Option<CellAction> {
     theme::menu_fields(ui);
     let mut action = None;
     // Le texte en cours de saisie est gardé tant que le menu est ouvert.
@@ -258,6 +373,9 @@ fn cell_menu(ui: &mut egui::Ui, id: egui::Id, number: u32, name: &str) -> Option
         }
     });
     ui.separator();
+    if editable && ui.button("Modifier les lignes").clicked() {
+        action = Some(CellAction::Edit(number));
+    }
     if ui.button("Supprimer").on_hover_text(format!("Supprimer la case {number}")).clicked() {
         action = Some(CellAction::Delete(number));
     }
@@ -361,7 +479,13 @@ fn cell(ui: &mut egui::Ui, number: u32, item: Option<&Item>, armed: bool) -> egu
 
 /// Grille de cases : au moins 48, et toujours deux rangées libres.
 /// Une case libre n'est cliquable que pour enregistrer.
-fn grid(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug + Copy, items: &[Item], armed: bool) -> Option<CellAction> {
+fn grid(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug + Copy,
+    items: &[Item],
+    armed: bool,
+    editable: bool,
+) -> Option<CellAction> {
     // Autant de colonnes que la largeur de la fenêtre le permet.
     let columns = (((ui.available_width() + SPACING) / (CELL.x + SPACING)) as usize).max(2);
     let last = items.iter().map(|i| i.number).max().unwrap_or(0) as usize;
@@ -395,7 +519,7 @@ fn grid(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug + Copy, it
             if let Some(i) = item {
                 let menu_id = egui::Id::unique(("pool-rename", id, number));
                 response.context_menu(|ui| {
-                    if let Some(a) = cell_menu(ui, menu_id, number, &i.name) {
+                    if let Some(a) = cell_menu(ui, menu_id, number, &i.name, editable) {
                         action = Some(a);
                     }
                 });

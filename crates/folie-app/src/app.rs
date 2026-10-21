@@ -344,6 +344,12 @@ impl eframe::App for FolieApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.snapshot = self.engine().snapshot();
         self.rate.update(self.snapshot.frame);
+        // Les macros en cours avancent à chaque image (leurs « Wait » comptent ici).
+        for result in self.console.tick_macros(Instant::now()) {
+            if self.command_line.report(result) {
+                self.mark_dirty();
+            }
+        }
 
         let ctx = ui.ctx().clone();
         self.global_shortcuts(&ctx);
@@ -1619,6 +1625,74 @@ mod tests {
         harness.get_by_label("Replacer sur la perche").click();
         harness.run_steps(2);
         assert!(place(&harness, 3).is_none(), "rendue à la perche");
+    }
+
+    #[test]
+    fn macros_pool_editor_and_executor() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Macros,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(560.0, 520.0)),
+            preset_family: None,
+        });
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Executors,
+            placement: Placement::at_size(egui::pos2(900.0, 820.0), egui::vec2(1350.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        harness.key_press(egui::Key::Escape); // quitte la ligne de commande
+
+        // Store, puis une case libre : la macro 1 est créée et son éditeur s'ouvre.
+        harness.key_press(egui::Key::S);
+        harness.run_steps(2);
+        let in_pool = |n: &egui_kittest::Node<'_>| n.rect().min.x > 1500.0 && n.rect().max.y < 600.0;
+        harness.get_all(By::new().role(Role::Button).label("1")).find(in_pool).unwrap().click();
+        harness.run_steps(2);
+        assert!(harness.state().console.show.macros.contains_key(&1));
+        let lines = harness.get_by_role_and_label(Role::MultilineTextInput, "Une commande par ligne · « Wait 2 » attend 2 secondes");
+        lines.focus();
+        lines.type_text("Fixture 1 Thru 2\nAt 100\nGo Executor 21");
+        harness.run_steps(2);
+        harness.get_by_label("Ligne 3 : executor invalide : 21 (place 1 à 20, ou page.place)");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("macros.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        // On corrige la dernière ligne, puis Enregistrer.
+        for _ in 0..2 {
+            harness.key_press(egui::Key::Backspace);
+        }
+        harness.get_by_role_and_label(Role::MultilineTextInput, "Une commande par ligne · « Wait 2 » attend 2 secondes").type_text("1");
+        harness.run_steps(2);
+        assert!(harness.query_by_label_contains("Ligne 3").is_none(), "plus d'erreur");
+        harness.get_by_label("Enregistrer").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.macros[&1].lines, ["Fixture 1 Thru 2", "At 100", "Go Executor 1"]);
+
+        // Un clic sur la case lance la macro.
+        harness.get_all(By::new().role(Role::Button).label("1\nMacro 1")).find(in_pool).unwrap().click();
+        settle(&mut harness);
+        assert_eq!(output(&harness, 2), 255, "At 100 sur la fixture 1");
+        assert!(harness.state().console.selection().len() == 2);
+
+        // L'executor 3 lance la macro : touche verte « Macro ».
+        command(&mut harness, "ClearAll");
+        command(&mut harness, r#"Label Macro 1 "Ouverture""#);
+        harness.key_press(egui::Key::Escape);
+        harness.state_mut().console.set_executor_macro(3, Some(1)).unwrap();
+        harness.run_steps(2);
+        harness.get_by_label("Macro 1"); // sur la carte de l'executor, sous son nom
+        harness.get(By::new().predicate(|n| n.description().as_deref() == Some("Lancer la macro 1 « Ouverture »"))).click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.selection().len(), 2, "la touche de l'executor a lancé la macro");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("macro-executor.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 
     #[test]

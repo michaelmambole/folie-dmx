@@ -71,6 +71,17 @@ pub struct Show {
     pub effect_pool: BTreeMap<u32, Effect>,
     /// Place des projecteurs dans la fenêtre Scène ; les autres sont alignés sur une perche.
     pub stage: BTreeMap<FixtureId, StagePlace>,
+    /// Macros par numéro : des lignes de commande jouées l'une après l'autre.
+    pub macros: BTreeMap<u32, Macro>,
+    /// Executors qui lancent une macro au lieu de jouer une séquence : executor -> macro.
+    pub macro_executors: BTreeMap<u32, u32>,
+}
+
+/// Une macro : des lignes de commande jouées dans l'ordre ; `Wait 2` attend 2 secondes.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Macro {
+    pub name: String,
+    pub lines: Vec<String>,
 }
 
 /// Place d'un projecteur sur scène, en mètres : `x` vers cour, `y` la hauteur, `z` vers le public.
@@ -96,6 +107,8 @@ impl Default for Show {
             tempo: DEFAULT_TEMPO,
             effect_pool: BTreeMap::new(),
             stage: BTreeMap::new(),
+            macros: BTreeMap::new(),
+            macro_executors: BTreeMap::new(),
         }
     }
 }
@@ -152,6 +165,12 @@ struct ShowFile {
     /// Fixture -> place sur scène.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     stage: BTreeMap<String, StagePlace>,
+    /// Numéro -> macro.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    macros: BTreeMap<String, Macro>,
+    /// Executor -> macro qu'il lance.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    macro_executors: BTreeMap<String, u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -474,6 +493,8 @@ pub fn to_json(show: &Show) -> String {
             .map(|(number, effect)| PoolEffectEntry { number: *number, effect: EffectEntry::from_effect(effect) })
             .collect(),
         stage: show.stage.iter().map(|(id, place)| (id.to_string(), *place)).collect(),
+        macros: show.macros.iter().map(|(n, m)| (n.to_string(), m.clone())).collect(),
+        macro_executors: show.macro_executors.iter().map(|(e, m)| (e.to_string(), *m)).collect(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -665,8 +686,27 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         }
     }
 
+    let mut macros = BTreeMap::new();
+    for (number, m) in file.macros {
+        match number.parse::<u32>() {
+            Ok(n) => {
+                macros.insert(n, m);
+            }
+            Err(_) => warnings.push(format!("Macro « {number} » : numéro illisible, retirée")),
+        }
+    }
+    let mut macro_executors = BTreeMap::new();
+    for (executor, number) in file.macro_executors {
+        match executor.parse::<u32>() {
+            Ok(e) if macros.contains_key(&number) => {
+                macro_executors.insert(e, number);
+            }
+            _ => warnings.push(format!("Executor {executor} : macro {number} introuvable, retirée")),
+        }
+    }
+
     let tempo = file.tempo.clamp(1.0, 999.0);
-    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage };
+    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage, macros, macro_executors };
     Ok(Loaded { show, warnings })
 }
 
@@ -856,7 +896,10 @@ mod tests {
         ballet.spread = 180.0;
         let effect_pool = BTreeMap::from([(2, ballet)]);
         let stage = BTreeMap::from([(FixtureId(1), StagePlace { x: -2.5, y: 0.0, z: 3.0, floor: true })]);
-        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool, stage }
+        let lines = vec!["Fixture 1 Thru 4".to_string(), "At 100".into(), "Wait 2".into(), "Go Executor 2".into()];
+        let macros = BTreeMap::from([(3, Macro { name: "Ouverture".into(), lines })]);
+        let macro_executors = BTreeMap::from([(7, 3)]);
+        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool, stage, macros, macro_executors }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -886,6 +929,8 @@ mod tests {
         assert_eq!(loaded.show.pages, show.pages);
         assert_eq!(loaded.show.effect_pool, show.effect_pool);
         assert_eq!(loaded.show.stage, show.stage);
+        assert_eq!(loaded.show.macros, show.macros);
+        assert_eq!(loaded.show.macro_executors, show.macro_executors);
         assert_eq!(loaded.show.tempo, 98.0);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);

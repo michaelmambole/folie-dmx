@@ -10,6 +10,7 @@
 //! Effect 2                      Tempo 128
 //! Page 2   Page +   Page -       Go Executor 2.5         Fix Executor 3
 //! Attribute "Pan" At 50          Fixture 1 At + 10       Block Cue 3
+//! Macro 2                        Store Macro 3 "Ballet"  Wait 2 (dans une macro)
 //! Fixture 2 Release             Assert Executor 3
 //! ```
 //!
@@ -54,6 +55,8 @@ pub enum Keyword {
     Block,
     Unblock,
     Attribute,
+    Macro,
+    Wait,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
@@ -68,7 +71,7 @@ const ALIASES: [(&str, Keyword); 7] = [
     ("b", Keyword::Back),
 ];
 
-const KEYWORDS: [(&str, Keyword); 28] = [
+const KEYWORDS: [(&str, Keyword); 30] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -97,6 +100,8 @@ const KEYWORDS: [(&str, Keyword); 28] = [
     ("block", Keyword::Block),
     ("unblock", Keyword::Unblock),
     ("attribute", Keyword::Attribute),
+    ("macro", Keyword::Macro),
+    ("wait", Keyword::Wait),
 ];
 
 impl Keyword {
@@ -130,6 +135,8 @@ impl Keyword {
             Self::Block => "Block",
             Self::Unblock => "Unblock",
             Self::Attribute => "Attribute",
+            Self::Macro => "Macro",
+            Self::Wait => "Wait",
         }
     }
 
@@ -233,6 +240,7 @@ pub enum Object {
     Preset(FeatureGroup, u32),
     /// Cue de la séquence de l'executor sélectionné ; sans numéro pour `Store Cue`.
     Cue(Option<CueNumber>),
+    Macro(u32),
 }
 
 /// Executor désigné en ligne de commande : `3` (page courante) ou `2.3` (page 2, place 3).
@@ -288,6 +296,10 @@ pub enum Command {
     Block(CueNumber),
     /// `Unblock Cue 3` : retire de la cue les valeurs identiques à celles qu'elle suivrait.
     Unblock(CueNumber),
+    /// `Macro 2` : lance la macro.
+    Macro(u32),
+    /// `Wait 2` : pause de 2 secondes, dans une macro.
+    Wait(f32),
 }
 
 struct Parser {
@@ -389,13 +401,16 @@ impl Parser {
         if self.eat(Keyword::Cue) {
             return Ok(Object::Cue(self.optional_cue_number()?));
         }
+        if self.eat(Keyword::Macro) {
+            return Ok(Object::Macro(self.integer("numéro de macro")?));
+        }
         if self.eat(Keyword::Group) {
             Ok(Object::Group(self.integer("numéro de groupe")?))
         } else if self.eat(Keyword::Preset) {
             let (family, number) = self.preset_ref()?;
             Ok(Object::Preset(family, number))
         } else {
-            Err(SyntaxError("Group, Preset ou Cue attendu".into()))
+            Err(SyntaxError("Group, Preset, Cue ou Macro attendu".into()))
         }
     }
 
@@ -555,6 +570,14 @@ impl Parser {
                     },
                     _ => return Err(SyntaxError("Page <numéro>, Page + ou Page - attendu".into())),
                 }
+            }
+            Some(Token::Keyword(Keyword::Macro)) => {
+                self.position += 1;
+                Command::Macro(self.integer("numéro de macro")?)
+            }
+            Some(Token::Keyword(Keyword::Wait)) => {
+                self.position += 1;
+                Command::Wait(self.seconds()?)
             }
             Some(Token::Keyword(k @ (Keyword::Block | Keyword::Unblock))) => {
                 let k = *k;
@@ -765,6 +788,20 @@ mod tests {
         assert!(parse("At + 120").is_err());
         assert!(parse(r#"Attribute "Pan""#).unwrap_err().0.contains("At attendu"));
         assert!(parse("Attribute At 50").unwrap_err().0.contains("guillemets"));
+    }
+
+    #[test]
+    fn macros() {
+        assert_eq!(parse("Macro 2"), Ok(Command::Macro(2)));
+        assert_eq!(parse("ma 12"), Ok(Command::Macro(12)));
+        assert_eq!(parse("Wait 2.5"), Ok(Command::Wait(2.5)));
+        assert_eq!(
+            parse(r#"Store Macro 3 "Ballet""#),
+            Ok(Command::Store { object: Object::Macro(3), name: Some("Ballet".into()), fade: None })
+        );
+        assert_eq!(parse(r#"Label Macro 3 "Noir""#), Ok(Command::Label { object: Object::Macro(3), name: "Noir".into() }));
+        assert_eq!(parse("Delete Macro 3"), Ok(Command::Delete(Object::Macro(3))));
+        assert!(parse("Wait").is_err());
     }
 
     #[test]

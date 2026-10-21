@@ -39,6 +39,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
       `Store Group 3 "Cour"`, `Store Preset 4.1`, `Label`, `Delete`, `Clear`, `ClearAll`
 - [x] Presets référencés (et non recopiés) : faits avec les cues, phase 4
 - [x] Commandes de valeur par attribut (`Attribute "Pan" At 50`), `At` relatif (`At + 10`, `At - 5`)
+- [x] Macros : pool (⌘0), éditeur avec vérification des lignes, `Wait`, `Macro 3`, `Store/Label/Delete Macro`, lancées par un executor
 - **Couche de contrôle** entre les interfaces et le moteur : elle tient le show et le
   programmer, et le langage de commande en est l'**unique point d'entrée**
   (egui, OSC et web passent tous par elle)

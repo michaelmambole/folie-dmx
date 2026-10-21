@@ -9,6 +9,7 @@ pub mod color;
 pub mod command;
 pub mod cues;
 pub mod effects;
+pub mod macros;
 pub mod tracking;
 
 use std::collections::{HashMap, HashSet};
@@ -164,6 +165,10 @@ pub struct Console {
     /// Effets qui tournent dans le programmer.
     effects: Vec<Effect>,
     taps: effects::TapTempo,
+    /// Macros en cours de lecture.
+    macro_runs: Vec<macros::MacroRun>,
+    /// Pendant la lecture des macros : une macro lancée par une ligne attend l'image suivante.
+    macro_ticking: bool,
 }
 
 impl Console {
@@ -180,6 +185,8 @@ impl Console {
             released: HashSet::new(),
             effects: Vec::new(),
             taps: effects::TapTempo::default(),
+            macro_runs: Vec::new(),
+            macro_ticking: false,
         }
     }
 
@@ -387,6 +394,11 @@ impl Console {
                 self.store_preset(family, number, name)
             }
             Command::Store { object: Object::Cue(number), name, fade } => self.store_cue(number, fade, name),
+            Command::Store { object: Object::Macro(number), name, .. } => Ok(self.store_macro(number, name)),
+            Command::Label { object: Object::Macro(number), name } => self.label_macro(number, name),
+            Command::Delete(Object::Macro(number)) => self.delete_macro(number),
+            Command::Macro(number) => self.run_macro(number),
+            Command::Wait(_) => invalid("Wait ne s'utilise que dans une macro"),
             Command::Label { object: Object::Cue(Some(number)), name } => self.label_cue(number, name),
             Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),
@@ -703,7 +715,7 @@ impl Console {
         let slot = match object {
             Object::Group(n) => self.show.groups.get_mut(&n).map(|g| &mut g.name),
             Object::Preset(f, n) => self.show.presets.get_mut(&(f, n)).map(|p| &mut p.name),
-            Object::Cue(_) => None,
+            Object::Cue(_) | Object::Macro(_) => None,
         };
         match slot {
             Some(slot) => {
@@ -723,7 +735,7 @@ impl Console {
                 .presets
                 .remove(&(f, n))
                 .map(|p| format!("Preset {}.{n} « {} » supprimé", f.preset_number(), p.name)),
-            Object::Cue(_) => None,
+            Object::Cue(_) | Object::Macro(_) => None,
         };
         if removed.is_some() {
             self.sync_playback();

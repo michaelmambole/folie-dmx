@@ -107,7 +107,21 @@ fn store_here(ui: &mut egui::Ui, console: &mut Console, executor: u32, store_arm
 
 /// Touches de l'executor selon son mode. Flash : actif tant que la touche est maintenue.
 /// GO est vert quand l'executor a une séquence ; sur un executor vide, tout reste discret.
-fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut BTreeSet<u32>, width: f32) -> Action {
+fn mode_buttons(ui: &mut egui::Ui, console: &mut Console, executor: u32, held: &mut BTreeSet<u32>, width: f32) -> Action {
+    // Executor qui lance une macro : une seule touche verte (Arrêter pendant qu'elle joue).
+    if let Some((number, m)) = console.executor_macro(executor) {
+        let name = m.name.clone();
+        let running = console.macros_in_progress().iter().any(|p| p.number == number);
+        let (button, help) = if running {
+            (egui::Button::new(RichText::new("Arrêter").size(12.0)), format!("Arrêter la macro {number} « {name} »"))
+        } else {
+            (theme::primary_button("Macro"), format!("Lancer la macro {number} « {name} »"))
+        };
+        if ui.add_sized([width, 26.0], button).on_hover_text(help).clicked() {
+            return Some(if running { Ok(console.stop_macro(number)) } else { console.press(executor) });
+        }
+        return None;
+    }
     let assigned = console.executor(executor).is_some();
     let mode = console.executor(executor).map_or(ExecutorMode::Go, |(x, _)| x.mode);
     let quiet = |text: &'static str| {
@@ -125,14 +139,11 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
             let wide = width >= 120.0;
             let go_width = if wide { (width - 6.0) / 3.0 } else { width };
             let small = if wide { go_width } else { (width - 3.0) / 2.0 };
-            let mut go = None;
+            // Les clics sont notés d'abord, puis joués : la console n'est empruntée qu'une fois.
+            let (mut go, mut back, mut off) = (false, false, false);
             let mut back_off = |ui: &mut egui::Ui| {
-                if ui.add_sized([small, 24.0], quiet("Back")).on_hover_text(format!("Back executor {executor}", executor = executor_label(executor))).clicked() {
-                    action = Some(console.back(Some(executor)));
-                }
-                if ui.add_sized([small, 24.0], quiet("Off")).on_hover_text(format!("Éteindre l'executor {executor}", executor = executor_label(executor))).clicked() {
-                    action = Some(console.off(Some(executor)));
-                }
+                back |= ui.add_sized([small, 24.0], quiet("Back")).on_hover_text(format!("Back executor {executor}", executor = executor_label(executor))).clicked();
+                off |= ui.add_sized([small, 24.0], quiet("Off")).on_hover_text(format!("Éteindre l'executor {executor}", executor = executor_label(executor))).clicked();
             };
             ui.horizontal(|ui| {
                 let help = if mode == ExecutorMode::Kill {
@@ -140,9 +151,7 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
                 } else {
                     format!("Go executor {executor}", executor = executor_label(executor))
                 };
-                if ui.add_sized([go_width, 26.0], key(main)).on_hover_text(help).clicked() {
-                    go = Some(console.press(executor));
-                }
+                go = ui.add_sized([go_width, 26.0], key(main)).on_hover_text(help).clicked();
                 if wide {
                     back_off(ui);
                 }
@@ -150,8 +159,14 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
             if !wide {
                 ui.horizontal(back_off);
             }
-            if go.is_some() {
-                action = go;
+            if back {
+                action = Some(console.back(Some(executor)));
+            }
+            if off {
+                action = Some(console.off(Some(executor)));
+            }
+            if go {
+                action = Some(console.press(executor));
             }
         }
         ExecutorMode::Flash | ExecutorMode::Swop => {
@@ -182,15 +197,50 @@ fn mode_buttons(ui: &mut egui::Ui, console: &Console, executor: u32, held: &mut 
 /// Largeur d'une colonne du menu d'un executor.
 const MENU_COLUMN: f32 = 280.0;
 
+/// « Lancer une macro » : sous-menu des macros du show.
+fn macro_choice(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Action {
+    let macros: Vec<(u32, String)> = console.show.macros.iter().map(|(n, m)| (*n, m.name.clone())).collect();
+    if macros.is_empty() {
+        ui.weak("Pas de macro : Store Macro 1, ou le pool Macros");
+        return None;
+    }
+    let current = console.executor_macro(executor).map(|(n, _)| n);
+    let mut action = None;
+    ui.menu_button("Lancer une macro", |ui| {
+        for (number, name) in macros {
+            if ui.add(egui::Button::selectable(current == Some(number), format!("{number}. {name}"))).clicked() {
+                action = Some(console.set_executor_macro(executor, Some(number)));
+                ui.close();
+            }
+        }
+    });
+    action
+}
+
 /// Menu du clic droit : lecture et comportement côte à côte, appliqués dès qu'on
 /// les change ; puis nom, séquence, vider.
 fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Action {
     theme::menu_fields(ui);
     let mut action = None;
     let Some((x, sequence)) = console.executor(executor).map(|(x, s)| (*x, s.name.clone())) else {
-        ui.label("Executor vide");
-        ui.weak("Store, puis cliquez l'executor");
-        return None;
+        // Sans séquence : vide, ou il lance une macro.
+        match console.executor_macro(executor).map(|(n, m)| (n, m.name.clone())) {
+            Some((n, name)) => {
+                ui.label(RichText::new(format!("Lance la macro {n} « {name} »")).color(theme::GO));
+                if ui.button("Ne plus lancer de macro").clicked() {
+                    action = Some(console.set_executor_macro(executor, None));
+                    ui.close();
+                }
+            }
+            None => {
+                ui.label("Executor vide");
+                ui.weak("Store, puis cliquez l'executor");
+            }
+        }
+        if let Some(a) = macro_choice(ui, console, executor) {
+            action = Some(a);
+        }
+        return action;
     };
     let (mut mode, mut o) = (x.mode, x.options);
     ui.horizontal_top(|ui| {
@@ -412,6 +462,7 @@ fn executor_header(
     let mut action = None;
     let selected = console.selected_executor() == executor;
     let info = console.executor(executor).map(|(x, s)| (x.mode.label(), s.name.clone(), option_tags(&x.options)));
+    let launched = console.executor_macro(executor).map(|(n, m)| (n, m.name.clone(), m.lines.len()));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let title = RichText::new(executor_label(executor)).family(theme::medium());
@@ -426,11 +477,11 @@ fn executor_header(
                 action = Some(a);
             }
         });
-        match &info {
-            Some((_, name, _)) => {
+        match (&info, &launched) {
+            (Some((_, name, _)), _) | (None, Some((_, name, _))) => {
                 ui.add(egui::Label::new(RichText::new(name).size(12.0)).truncate());
             }
-            None => {
+            (None, None) => {
                 ui.label(RichText::new("vide").size(12.0).color(theme::MUTED));
             }
         }
@@ -449,6 +500,20 @@ fn executor_header(
         Some((mode, _, tags)) => format!("{mode} · {tags}"),
         None => String::new(),
     };
+    if let Some((number, _, lines)) = &launched {
+        // Macro : son numéro en vert, puis sa progression quand elle joue.
+        line(ui, &format!("Macro {number}"), theme::GO);
+        let progress = console.macros_in_progress().into_iter().find(|p| p.number == *number);
+        let state = match progress {
+            Some(p) if p.waiting => format!("ligne {}/{} · attente", p.line, p.lines),
+            Some(p) => format!("ligne {}/{}", p.line, p.lines),
+            None => format!("{lines} ligne(s)"),
+        };
+        line(ui, &state, if progress.is_some() { theme::GO } else { theme::MUTED });
+        line(ui, "", theme::MUTED);
+        transition_bar(ui, status, width);
+        return action;
+    }
     line(ui, &mode_line, MODE);
     if info.is_some() {
         let (now, next) = cue_lines(console, executor, status);
@@ -974,8 +1039,9 @@ pub fn executors_window(
                 let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
                 let assigned = console.executor(executor).is_some();
+                let used = assigned || console.executor_macro(executor).is_some();
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, !assigned, fixed, |ui| {
+                card(ui, inner, !used, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
@@ -1001,8 +1067,9 @@ pub fn executors_window(
                 let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
                 let assigned = console.executor(executor).is_some();
+                let used = assigned || console.executor_macro(executor).is_some();
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, !assigned, fixed, |ui| {
+                card(ui, inner, !used, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));

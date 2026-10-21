@@ -452,6 +452,12 @@ impl FolieApp {
                 let result = effects_ui::effects_window(ui, &mut self.console);
                 self.report(result);
             }
+            WindowKind::Macros => {
+                let result = egui::ScrollArea::vertical()
+                    .show(ui, |ui| self.pools.macros(ui, &mut self.console, &mut self.store_armed))
+                    .inner;
+                self.report(result);
+            }
             WindowKind::Stage => {
                 let result = crate::stage_ui::stage_window(ui, &mut self.console, &self.snapshot);
                 self.report(result);
