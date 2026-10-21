@@ -705,7 +705,13 @@ mod tests {
         let mut circle = effects::templates()[3].clone();
         circle.targets = vec!["1".parse().unwrap()];
         assert!(circle.lines.iter().all(|l| l.relative), "le cercle tourne autour de la position");
-        cue.effects = Some(vec![wave, circle]);
+        let mut chaser = effects::templates()[1].clone();
+        chaser.lines[0].duty = 20.0;
+        chaser.targets = vec!["1".parse().unwrap()];
+        let mut sparkle = effects::templates()[6].clone();
+        assert_eq!(sparkle.lines[0].waveform, Waveform::Random);
+        sparkle.targets = vec!["1".parse().unwrap()];
+        cue.effects = Some(vec![wave, circle, chaser, sparkle]);
         cue.family_times.insert(FeatureGroup::Position, ParamTiming { fade: Some(4.0), delay: None });
         cue.param_times
             .entry(FixtureId(1))

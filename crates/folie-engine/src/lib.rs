@@ -853,7 +853,14 @@ mod tests {
         let effect = EffectInstance {
             id: 1,
             rate: Rate::Hz(0.0),
-            lines: vec![EffectLine { waveform: Waveform::Square, low: 0x1000, high: 0xC000, relative: false, params: vec![(pan, 0.0)] }],
+            lines: vec![EffectLine {
+                waveform: Waveform::Square,
+                low: 0x1000,
+                high: 0xC000,
+                relative: false,
+                duty: 0.5,
+                params: vec![(pan, 0.0)],
+            }],
         };
         engine.send(Command::SetProgrammerEffects(vec![effect.clone()]));
         assert_eq!(out(10), 0xC0);

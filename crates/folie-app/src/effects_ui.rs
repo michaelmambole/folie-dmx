@@ -11,13 +11,14 @@ type Action = Option<Result<Outcome, CommandError>>;
 
 const TILE: egui::Vec2 = egui::vec2(124.0, 58.0);
 
-/// Courbe d'une forme d'onde sur une période, dans `rect`.
-fn paint_wave(painter: &egui::Painter, rect: egui::Rect, wave: Waveform, color: Color32) {
+/// Courbe d'une forme d'onde dans `rect` : une période, ou huit tirages pour l'aléatoire.
+fn paint_wave(painter: &egui::Painter, rect: egui::Rect, wave: Waveform, duty: f32, color: Color32) {
     let engine = folie_control::effects::waveform(wave);
-    let points: Vec<egui::Pos2> = (0..=48)
+    let cycles = if wave == Waveform::Random { 8.0 } else { 1.0 };
+    let points: Vec<egui::Pos2> = (0..=96)
         .map(|i| {
-            let t = i as f64 / 48.0;
-            let level = engine.level(t) as f32;
+            let t = i as f64 / 96.0;
+            let level = engine.level_with(t * cycles, duty as f64 / 100.0, 1) as f32;
             egui::pos2(rect.left() + rect.width() * t as f32, rect.bottom() - rect.height() * level)
         })
         .collect();
@@ -80,7 +81,7 @@ fn template_tile(ui: &mut egui::Ui, number: u32, template: &Effect) -> bool {
     );
     if let Some(line) = template.lines.first() {
         let wave = egui::Rect::from_min_size(egui::pos2(inner.right() - 46.0, inner.bottom() - 12.0), vec2(46.0, 12.0));
-        paint_wave(&painter, wave, line.waveform, theme::EFFECT);
+        paint_wave(&painter, wave, line.waveform, line.duty, theme::EFFECT);
     }
     let label = format!("{number} {}", template.name);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
@@ -257,6 +258,12 @@ fn effect_settings(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> bool
                 })
                 .response
                 .on_hover_text(format!("Forme d'onde : {name}"));
+            if line.waveform == Waveform::Square {
+                changed |= ui
+                    .add(egui::DragValue::new(&mut line.duty).range(1.0..=99.0).prefix("allumé ").suffix(" %"))
+                    .on_hover_text(format!("Part du cycle où le carré est allumé : {name}"))
+                    .changed();
+            }
             // Absolu (de bas en haut) ou relatif (autour de la valeur en cours).
             let mut relative = line.relative;
             ui.scope(|ui| {

@@ -1290,4 +1290,18 @@ mod tests {
         assert!(tilts.iter().all(|t| (25..=78).contains(t)), "tilt autour de 20 % (51) : {tilts:?}");
         assert!(pans.iter().max() != pans.iter().min(), "le pan bouge : {pans:?}");
     }
+
+    #[test]
+    fn sparkle_differs_from_one_fixture_to_the_next() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 Thru 4");
+        run(&mut c, "Effect 7"); // Scintillement : dimmer aléatoire entre 40 et 100 %
+        // Dimmer des MH 6 : canal 2 de chaque fixture (adresses 1, 15, 29, 43).
+        let levels: Vec<u8> = [2, 16, 30, 44].iter().map(|ch| dmx(&c, *ch)).collect();
+        assert!(levels.iter().all(|v| (100..=255).contains(v)), "entre 40 et 100 % : {levels:?}");
+        let mut distinct = levels.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert!(distinct.len() > 1, "chaque projecteur tire sa valeur : {levels:?}");
+    }
 }

@@ -11,10 +11,11 @@ pub enum Waveform {
     RampDown,
     Square,
     Triangle,
+    Random,
 }
 
 impl Waveform {
-    pub const ALL: [Waveform; 5] = [Self::Sine, Self::RampUp, Self::RampDown, Self::Square, Self::Triangle];
+    pub const ALL: [Waveform; 6] = [Self::Sine, Self::RampUp, Self::RampDown, Self::Square, Self::Triangle, Self::Random];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -23,6 +24,7 @@ impl Waveform {
             Self::RampDown => "ramp_down",
             Self::Square => "square",
             Self::Triangle => "triangle",
+            Self::Random => "random",
         }
     }
 
@@ -37,6 +39,7 @@ impl Waveform {
             Self::RampDown => "Rampe descendante",
             Self::Square => "Carré",
             Self::Triangle => "Triangle",
+            Self::Random => "Aléatoire",
         }
     }
 }
@@ -61,6 +64,8 @@ pub struct EffectLine {
     pub phase: f32,
     /// Relatif : `low` et `high` sont des écarts (−100 à +100 %) autour de la valeur en cours.
     pub relative: bool,
+    /// Part du cycle où un carré est allumé, en pourcentage (rapport cyclique).
+    pub duty: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,8 +101,11 @@ impl Effect {
     }
 }
 
+/// Rapport cyclique d'un carré : allumé la moitié du cycle.
+pub const DEFAULT_DUTY: f32 = 50.0;
+
 fn line(attribute: Attribute, waveform: Waveform, low: f32, high: f32, phase: f32) -> EffectLine {
-    EffectLine { attribute, waveform, low, high, phase, relative: false }
+    EffectLine { attribute, waveform, low, high, phase, relative: false, duty: DEFAULT_DUTY }
 }
 
 /// Ligne relative : de `low` à `high` (en %) autour de la valeur en cours.
@@ -142,6 +150,7 @@ pub fn templates() -> Vec<Effect> {
             ],
         ),
         effect("Pulse", EffectRate::Beats(1.0), 0.0, vec![line(Attribute::Dimmer, Waveform::RampDown, 0.0, 100.0, 0.0)]),
+        effect("Scintillement", EffectRate::Hz(8.0), 0.0, vec![line(Attribute::Dimmer, Waveform::Random, 40.0, 100.0, 0.0)]),
     ]
 }
 
@@ -175,6 +184,16 @@ struct LineEntry {
     phase: f32,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     relative: bool,
+    #[serde(default = "default_duty", skip_serializing_if = "is_default_duty")]
+    duty: f32,
+}
+
+fn default_duty() -> f32 {
+    DEFAULT_DUTY
+}
+
+fn is_default_duty(duty: &f32) -> bool {
+    *duty == DEFAULT_DUTY
 }
 
 impl EffectEntry {
@@ -195,6 +214,7 @@ impl EffectEntry {
                     high: l.high,
                     phase: l.phase,
                     relative: l.relative,
+                    duty: l.duty,
                 })
                 .collect(),
             spread: effect.spread,
@@ -218,6 +238,7 @@ impl EffectEntry {
                     high: l.high.clamp(*range.start(), *range.end()),
                     phase: l.phase,
                     relative: l.relative,
+                    duty: l.duty.clamp(1.0, 99.0),
                 })
             })
             .collect();

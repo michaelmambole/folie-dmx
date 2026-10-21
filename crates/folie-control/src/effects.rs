@@ -22,6 +22,7 @@ pub fn waveform(w: Waveform) -> EngineWave {
         Waveform::RampDown => EngineWave::RampDown,
         Waveform::Square => EngineWave::Square,
         Waveform::Triangle => EngineWave::Triangle,
+        Waveform::Random => EngineWave::Random,
     }
 }
 
@@ -53,7 +54,7 @@ pub fn instance(effect: &Effect, id: u64, patch: &Patch) -> EffectInstance {
             let level = |p: f32| {
                 if line.relative { (p.clamp(-100.0, 100.0) / 100.0 * u16::MAX as f32).round() as i32 } else { percent(p) as i32 }
             };
-            EngineLine { waveform: waveform(line.waveform), low: level(line.low), high: level(line.high), relative: line.relative, params }
+            EngineLine { waveform: waveform(line.waveform), low: level(line.low), high: level(line.high), relative: line.relative, duty: line.duty.clamp(1.0, 99.0) / 100.0, params }
         })
         .collect();
     let rate = match effect.rate {

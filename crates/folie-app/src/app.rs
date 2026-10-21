@@ -970,6 +970,22 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state().console.programmer_effects().is_empty(), "arrêté depuis le Programmer");
         assert!(harness.query_by_label("Cercle · ±10 %").is_none());
+
+        // Chenillard : son carré n'est allumé que 20 % du cycle. Puis le Scintillement, aléatoire.
+        harness.get_by_label("2 Chenillard").click();
+        settle(&mut harness);
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Part du cycle où le carré est allumé : Dimmer")).set_value_accesskit(20.0);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.programmer_effects()[0].lines[0].duty, 20.0);
+        harness.get_by_label("7 Scintillement").click();
+        settle(&mut harness);
+        let sparkle = &harness.state().console.programmer_effects()[1];
+        assert_eq!(sparkle.lines[0].waveform, folie_show::Waveform::Random);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("effects-duty-random.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 
     #[test]

@@ -12,11 +12,28 @@ pub enum Waveform {
     RampDown,
     Square,
     Triangle,
+    /// Une valeur tirée au hasard à chaque cycle, gardée jusqu'au suivant.
+    Random,
+}
+
+/// Nombre pseudo-aléatoire de 0 à 1, toujours le même pour la même graine.
+fn noise(seed: u64) -> f64 {
+    // splitmix64
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (z ^ (z >> 31)) as f64 / u64::MAX as f64
 }
 
 impl Waveform {
-    /// Niveau entre 0 et 1 pour une phase entre 0 et 1.
+    /// Niveau entre 0 et 1 pour une phase (en cycles), carré allumé la moitié du cycle.
     pub fn level(self, phase: f64) -> f64 {
+        self.level_with(phase, 0.5, 0)
+    }
+
+    /// Niveau entre 0 et 1. `duty` : part du cycle où le carré est allumé ; `seed` :
+    /// propre à chaque paramètre, pour que l'aléatoire diffère d'un projecteur à l'autre.
+    pub fn level_with(self, phase: f64, duty: f64, seed: u64) -> f64 {
         let p = phase.rem_euclid(1.0);
         match self {
             // Commence en bas, comme une respiration.
@@ -24,13 +41,14 @@ impl Waveform {
             Self::RampUp => p,
             Self::RampDown => 1.0 - p,
             Self::Square => {
-                if p < 0.5 {
+                if p < duty {
                     1.0
                 } else {
                     0.0
                 }
             }
             Self::Triangle => 1.0 - (2.0 * p - 1.0).abs(),
+            Self::Random => noise(seed ^ (phase.floor() as i64 as u64).wrapping_mul(0x2545_F491_4F6C_DD1D)),
         }
     }
 }
@@ -64,6 +82,8 @@ pub struct EffectLine {
     /// Relatif : l'effet oscille autour de la valeur qui est sous lui (programmer, cue,
     /// valeur par défaut) au lieu d'aller d'une valeur fixe à une autre.
     pub relative: bool,
+    /// Part du cycle où un carré est allumé, de 0 à 1.
+    pub duty: f32,
     pub params: Vec<(ParamKey, f32)>,
 }
 
@@ -84,7 +104,8 @@ impl EffectInstance {
         for line in &self.lines {
             let (low, high) = (line.low as f64, line.high as f64);
             for (key, offset) in &line.params {
-                let level = line.waveform.level(phase + *offset as f64);
+                let seed = ((key.fixture.0 as u64) << 20) ^ key.parameter as u64;
+                let level = line.waveform.level_with(phase + *offset as f64, line.duty as f64, seed);
                 let mut value = low + (high - low) * level;
                 if line.relative {
                     value += base(key) as f64;
@@ -107,8 +128,9 @@ impl Phases {
     /// Avance un effet de `dt` secondes et renvoie sa phase.
     pub(crate) fn advance(&mut self, effect: &EffectInstance, dt: f64, bpm: f32) -> f64 {
         self.used.push(effect.id);
+        // La phase compte les cycles sans revenir à 0 : l'aléatoire change à chaque cycle.
         let phase = self.phases.entry(effect.id).or_insert(0.0);
-        *phase = (*phase + dt * effect.rate.hz(bpm)).rem_euclid(1.0);
+        *phase += dt * effect.rate.hz(bpm);
         *phase
     }
 
@@ -142,6 +164,14 @@ mod tests {
         assert_eq!((Waveform::Square.level(0.2), Waveform::Square.level(0.7)), (1.0, 0.0));
         assert_eq!(Waveform::Triangle.level(0.5), 1.0);
         assert_eq!(Waveform::RampUp.level(1.25), 0.25, "la phase boucle");
+        assert_eq!(Waveform::Square.level_with(0.3, 0.2, 0), 0.0, "carré allumé 20 % du cycle");
+        assert_eq!(Waveform::Square.level_with(0.1, 0.2, 0), 1.0);
+        // Aléatoire : constant pendant un cycle, différent au suivant et d'une graine à l'autre.
+        let random = |phase: f64, seed: u64| Waveform::Random.level_with(phase, 0.5, seed);
+        assert_eq!(random(3.1, 7), random(3.9, 7));
+        assert_ne!(random(3.1, 7), random(4.1, 7));
+        assert_ne!(random(3.1, 7), random(3.1, 8));
+        assert!((0..100).map(|c| random(c as f64, 1)).all(|v| (0.0..=1.0).contains(&v)));
     }
 
     #[test]
@@ -162,6 +192,7 @@ mod tests {
                 low: 0,
                 high: 1000,
                 relative: false,
+                duty: 0.5,
                 params: vec![(key(1), 0.0), (key(2), 0.5)],
             }],
         };
