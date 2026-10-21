@@ -1819,6 +1819,7 @@ mod tests {
         harness.get_all_by_label("À propos de Folie-DMX").last().unwrap().click(); // l'entrée du menu, pas le logo
         harness.run_steps(2);
         harness.get_by_label(&format!("Folie-DMX {}", env!("CARGO_PKG_VERSION")));
+        harness.get_by_label("Console lumière inspirée des standards de l'industrie.");
         harness.get_by_label("Créée par Michaël Mambole");
         harness.get_by_label("Open Fixture Library");
         harness.get_by_label(&dir.path().display().to_string());

@@ -1,6 +1,6 @@
 # Folie-DMX
 
-Logiciel de contrôle lumière inspiré de grandMA2 onPC, écrit en Rust,
+Logiciel de contrôle lumière inspiré des standards de l'industrie, écrit en Rust,
 avec sortie sur Enttec DMX USB Pro.
 
 ## Structure

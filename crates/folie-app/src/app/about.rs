@@ -32,7 +32,7 @@ impl FolieApp {
                 ui.add_space(4.0);
                 ui.label(RichText::new(format!("Folie-DMX {}", env!("CARGO_PKG_VERSION"))).monospace().color(theme::MUTED));
                 ui.add_space(8.0);
-                ui.label("Console lumière inspirée de grandMA2, écrite en Rust.");
+                ui.label("Console lumière inspirée des standards de l'industrie.");
                 ui.label(RichText::new("Créée par Michaël Mambole").color(theme::MUTED));
             });
             ui.add_space(12.0);
