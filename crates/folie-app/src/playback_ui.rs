@@ -637,6 +637,7 @@ fn forget_cue_menu(ctx: &egui::Context, number: CueNumber) {
     ctx.data_mut(|d| {
         d.remove::<String>(egui::Id::unique(("rename-cue", number)));
         d.remove::<bool>(egui::Id::unique(("rename-cue-focused", number)));
+        d.remove::<String>(egui::Id::unique(("cue-command", number)));
     });
 }
 
@@ -663,6 +664,23 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
             renamed = true;
         }
     });
+    // Commande jouée au départ de la cue : OSC vers Reaper, macro, autre executor…
+    let command_id = egui::Id::unique(("cue-command", number));
+    let mut command = ui.data_mut(|d| d.get_temp::<String>(command_id)).unwrap_or_else(|| cue.command.clone());
+    ui.horizontal(|ui| {
+        let label = ui.label("Au départ");
+        let edit = egui::TextEdit::singleline(&mut command)
+            .hint_text("Osc \"Reaper\" \"/play\"")
+            .font(egui::TextStyle::Monospace)
+            .desired_width(220.0);
+        let help = "Jouée quand la cue part : Osc \"Reaper\" \"/marker\" 3, Macro 2, Go Executor 5… Plusieurs : séparées par « ; »";
+        let edit = ui.add(edit).labelled_by(label.id).on_hover_text(help);
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button("Valider").on_hover_text(format!("Commande de la cue {number}")).clicked() || enter) && command.trim() != cue.command {
+            action = Some(console.set_cue_command(number, &command));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(command_id, command));
     ui.horizontal(|ui| {
         let help = "Écrit en dur dans la cue les valeurs qu'elle suit : changer une cue précédente ne la modifie plus";
         if ui.button("Bloquer").on_hover_text(help).clicked() {
@@ -829,6 +847,12 @@ fn cue_row(
                                     CueState::Current => tag(ui, "EN COURS", theme::EXECUTOR, theme::EXECUTOR, Color32::from_rgb(42, 26, 4)),
                                     CueState::Next => tag(ui, "SUIVANTE", Color32::TRANSPARENT, theme::MUTED, theme::MUTED),
                                     _ => {}
+                                }
+                                // Commande jouée au départ : « CMD », la commande au survol.
+                                if !cue.command.is_empty() {
+                                    let text = RichText::new("CMD").size(10.5).color(theme::SELECTION);
+                                    let chip = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::SELECTION)).fill(Color32::TRANSPARENT).small();
+                                    ui.add(chip).on_hover_text(format!("Au départ de la cue : {}", cue.command));
                                 }
                                 // Temps propres par famille, en bleu : « Position 4 s ».
                                 if !cue.family_times.is_empty() {

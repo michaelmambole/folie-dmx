@@ -1,0 +1,25 @@
+[package]
+name = "folie-remote"
+description = "Télécommande web de Folie-DMX : serveur HTTP et WebSocket, page embarquée"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+folie-control.workspace = true
+folie-engine.workspace = true
+folie-show.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "query", "tokio", "ws"] }
+rosc = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+
+[dev-dependencies]
+folie-dmx.workspace = true
+folie-fixture.workspace = true
+env_logger.workspace = true
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

@@ -12,6 +12,7 @@
 //! Attribute "Pan" At 50          Fixture 1 At + 10       Block Cue 3
 //! Macro 2                        Store Macro 3 "Ballet"  Wait 2 (dans une macro)
 //! Fixture 2 Release             Assert Executor 3
+//! Osc "Reaper" "/play"           Osc "Reaper" "/marker" 3
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
@@ -57,11 +58,12 @@ pub enum Keyword {
     Attribute,
     Macro,
     Wait,
+    Osc,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
 /// « fi », « p » et « b » restent Fixture, Preset et Back malgré Fix, Page et Block.
-const ALIASES: [(&str, Keyword); 7] = [
+const ALIASES: [(&str, Keyword); 8] = [
     ("g", Keyword::Group),
     ("exec", Keyword::Executor),
     ("t", Keyword::Thru),
@@ -69,9 +71,10 @@ const ALIASES: [(&str, Keyword); 7] = [
     ("fi", Keyword::Fixture),
     ("p", Keyword::Preset),
     ("b", Keyword::Back),
+    ("o", Keyword::Off),
 ];
 
-const KEYWORDS: [(&str, Keyword); 30] = [
+const KEYWORDS: [(&str, Keyword); 31] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -102,6 +105,7 @@ const KEYWORDS: [(&str, Keyword); 30] = [
     ("attribute", Keyword::Attribute),
     ("macro", Keyword::Macro),
     ("wait", Keyword::Wait),
+    ("osc", Keyword::Osc),
 ];
 
 impl Keyword {
@@ -137,6 +141,7 @@ impl Keyword {
             Self::Attribute => "Attribute",
             Self::Macro => "Macro",
             Self::Wait => "Wait",
+            Self::Osc => "Osc",
         }
     }
 
@@ -258,6 +263,14 @@ pub enum PageMove {
     Previous,
 }
 
+/// Valeur d'un message OSC : `3` (entier), `0.5` (réel), `"texte"`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OscArg {
+    Int(i32),
+    Float(f32),
+    Text(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Sélection éventuellement suivie d'une valeur de dimmer : `Fixture 1 Thru 4 At 50`.
@@ -300,6 +313,8 @@ pub enum Command {
     Macro(u32),
     /// `Wait 2` : pause de 2 secondes, dans une macro.
     Wait(f32),
+    /// `Osc "Reaper" "/marker" 3` : message OSC vers une destination nommée du show.
+    Osc { destination: String, address: String, args: Vec<OscArg> },
 }
 
 struct Parser {
@@ -579,6 +594,28 @@ impl Parser {
                 self.position += 1;
                 Command::Wait(self.seconds()?)
             }
+            Some(Token::Keyword(Keyword::Osc)) => {
+                self.position += 1;
+                let usage = || SyntaxError("Osc \"destination\" \"/adresse\" [valeurs] attendu".into());
+                let destination = self.text().ok_or_else(usage)?;
+                let address = self.text().filter(|a| a.starts_with('/')).ok_or_else(usage)?;
+                let mut args = Vec::new();
+                while let Some(token) = self.next() {
+                    let (sign, token) = match token {
+                        Token::Minus => (-1.0, self.next().ok_or_else(|| SyntaxError("nombre attendu après -".into()))?),
+                        other => (1.0, other),
+                    };
+                    args.push(match token {
+                        Token::Number(n) if !n.contains('.') => {
+                            OscArg::Int(n.parse::<i32>().map_err(|_| SyntaxError(format!("nombre trop grand : {n}")))? * sign as i32)
+                        }
+                        Token::Number(n) => OscArg::Float(n.parse::<f32>().map_err(|_| SyntaxError(format!("nombre invalide : {n}")))? * sign),
+                        Token::Text(t) if sign > 0.0 => OscArg::Text(t),
+                        other => return Err(SyntaxError(format!("valeur OSC inattendue : {other:?}"))),
+                    });
+                }
+                Command::Osc { destination, address, args }
+            }
             Some(Token::Keyword(k @ (Keyword::Block | Keyword::Unblock))) => {
                 let k = *k;
                 self.position += 1;
@@ -821,6 +858,21 @@ mod tests {
         let Ok(Command::Release(Some(selection))) = parse("Fixture 1 Thru 2 Release") else { panic!() };
         assert_eq!(selection.items, [(true, Item::Range(fixture(1), fixture(2)))]);
         assert!(parse("Release 3").unwrap_err().0.contains("en trop"));
+    }
+
+    #[test]
+    fn osc_messages() {
+        let osc = |destination: &str, address: &str, args: Vec<OscArg>| {
+            Ok(Command::Osc { destination: destination.into(), address: address.into(), args })
+        };
+        assert_eq!(parse(r#"Osc "Reaper" "/play""#), osc("Reaper", "/play", vec![]));
+        assert_eq!(
+            parse(r#"osc "Vidéo" "/layer/1" 3 0.5 -2 "fondu""#),
+            osc("Vidéo", "/layer/1", vec![OscArg::Int(3), OscArg::Float(0.5), OscArg::Int(-2), OscArg::Text("fondu".into())])
+        );
+        assert!(parse(r#"Osc "Reaper" "play""#).is_err(), "l'adresse commence par /");
+        assert!(parse("Osc").is_err());
+        assert_eq!(parse("o"), Ok(Command::Off(None)), "« o » reste Off");
     }
 
     #[test]

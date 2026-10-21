@@ -15,11 +15,14 @@ folie-dmx.workspace = true
 folie-engine.workspace = true
 folie-fixture.workspace = true
 folie-show.workspace = true
+folie-remote.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rfd = "0.17"
 dirs = "7"
 display-info = "0.5"
+qrcodegen = "1.8"
+if-addrs = "0.15"
 eframe = "0.37"
 log.workspace = true
 env_logger.workspace = true
@@ -27,3 +30,5 @@ env_logger.workspace = true
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
 tempfile = "3"
+tungstenite = "0.28"
+rosc = "0.11"

@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#141518">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Folie-DMX</title>
+<style>
+:root {
+  --bg: #141518; --s1: #1c1e22; --s2: #24272c; --s3: #2e3239; --line: #30343a;
+  --text: #e8e6e1; --muted: #8b8f96;
+  --prog: #ff5a52; --exec: #f0a63a; --sel: #ffd166; --go: #3fb68b; --danger: #d63630; --info: #3c82e6;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 15px/1.3 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; overscroll-behavior: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+button { font: inherit; color: var(--text); background: var(--s2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 0 10px; min-height: 40px; cursor: pointer; touch-action: manipulation;
+  user-select: none; -webkit-user-select: none; }
+button:active, button.held { background: var(--s3); }
+button:disabled { opacity: .35; }
+.mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+.muted { color: var(--muted); }
+
+header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--s1);
+  border-bottom: 1px solid var(--line); }
+header .title { flex: 1; min-width: 0; }
+header .title b { display: block; font-size: 15px; }
+header .title span { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.led { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); flex: none; }
+.led.on { background: var(--go); box-shadow: 0 0 8px var(--go); }
+#blackout { font-weight: 700; letter-spacing: .04em; }
+#blackout.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+nav { display: flex; gap: 6px; padding: 8px 12px 0; }
+nav button { flex: 1; min-height: 36px; background: transparent; border-color: transparent; color: var(--muted); }
+nav button.active { background: var(--s2); border-color: var(--line); color: var(--text); }
+
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 10px 12px 12px; }
+section[hidden] { display: none !important; }
+
+.bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.bar .page { flex: 1; text-align: center; min-width: 0; }
+.bar .page b { display: block; }
+.bar .page span { font-size: 12px; color: var(--muted); }
+.bar button { min-width: 44px; }
+h2 { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; }
+
+.faders { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; }
+.card { flex: none; width: 112px; background: var(--s1); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; scroll-snap-align: start; }
+.card.empty { background: var(--bg); border-color: var(--s2); }
+.card.fixed { border-style: dashed; border-color: var(--muted); }
+.card.selected { box-shadow: inset 0 0 0 1px var(--sel); }
+.card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
+.card .num { font-weight: 700; color: var(--exec); }
+.card.empty .num { color: var(--muted); }
+.card .mode { font-size: 11px; color: var(--muted); }
+.card .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 17px; }
+.card .cue { font-size: 12px; min-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .cue.on { color: var(--exec); }
+.card .next { font-size: 11px; min-height: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress { height: 4px; border-radius: 2px; background: var(--s2); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--info); }
+
+.fader { position: relative; height: 210px; width: 56px; margin: 4px auto; border-radius: 8px; background: var(--s2);
+  border: 1px solid var(--line); touch-action: none; overflow: hidden; }
+.fader .fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--exec); opacity: .35; }
+.fader .cap { position: absolute; left: 3px; right: 3px; height: 22px; border-radius: 5px; background: var(--exec);
+  box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+.card.empty .fader .fill, .card.empty .fader .cap { background: var(--muted); }
+.card .value { text-align: center; font-size: 12px; }
+
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.keys button { min-height: 40px; padding: 0 4px; font-size: 13px; }
+.keys .main { grid-column: 1 / -1; min-height: 46px; font-weight: 700; }
+button.go { background: var(--go); border-color: var(--go); color: #fff; }
+button.go:active, button.go.held { filter: brightness(1.2); }
+button.lit { background: var(--exec); border-color: var(--exec); color: #141518; }
+
+.buttons { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.buttons .card { width: auto; }
+
+.dock { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--s1); border-top: 1px solid var(--line); }
+.dock button { min-height: 56px; font-size: 17px; font-weight: 700; }
+.dock small { display: block; font-size: 11px; font-weight: 400; opacity: .8; }
+
+.cmd { display: flex; gap: 6px; }
+.cmd input { flex: 1; min-width: 0; font: 16px ui-monospace, "JetBrains Mono", Menlo, monospace; color: var(--text);
+  background: var(--bg); border: 1px solid var(--prog); border-radius: 8px; padding: 0 10px; min-height: 44px; }
+.result { min-height: 20px; margin: 8px 2px; font-size: 13px; }
+.result.ok { color: var(--go); } .result.err { color: var(--prog); }
+.pad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.pad button { min-height: 48px; }
+.pad .word { color: var(--sel); }
+.pad .enter { background: var(--prog); border-color: var(--prog); color: #fff; font-weight: 700; }
+.groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.groups button { min-height: 52px; text-align: left; padding: 6px 8px; }
+.groups button small { display: block; color: var(--muted); font-size: 11px; }
+
+#login { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; padding: 24px; z-index: 10; }
+#login[hidden] { display: none; }
+#login h1 { margin: 0; font-size: 22px; }
+#login input { font: 28px ui-monospace, Menlo, monospace; letter-spacing: .3em; text-align: center; width: 200px;
+  background: var(--s1); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+#login button { width: 200px; min-height: 48px; }
+#login .result { text-align: center; max-width: 280px; }
+/* Code lecture : seulement jouer les executors. */
+body.playback .full-only { display: none !important; }
+body.playback .keys button { grid-column: 1 / -1; }
+body.playback .fader { pointer-events: none; opacity: .6; }
+.badge { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--exec);
+  border: 1px solid var(--exec); border-radius: 6px; padding: 3px 6px; display: none; }
+body.playback .badge { display: inline-block; }
+.toast { position: fixed; left: 12px; right: 12px; bottom: calc(96px + env(safe-area-inset-bottom)); padding: 10px 12px;
+  border-radius: 8px; background: var(--s3); border: 1px solid var(--prog); font-size: 13px; opacity: 0;
+  transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Folie-DMX</h1>
+  <div class="muted">Code affiché sur la console</div>
+  <input id="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="8" aria-label="Code PIN">
+  <button class="go" id="enter">Entrer</button>
+  <div class="result err" id="login-result"></div>
+</div>
+
+<header>
+  <span class="led" id="led" title="Connexion"></span>
+  <div class="title" id="title" title="Changer de code"><b>Folie-DMX</b><span id="show">connexion…</span></div>
+  <span class="badge" title="Code lecture : GO, Back et touches des executors">Lecture</span>
+  <button id="blackout" class="full-only">BLACKOUT</button>
+</header>
+<nav class="full-only">
+  <button class="active" data-tab="executors">Executors</button>
+  <button data-tab="command">Commande</button>
+</nav>
+
+<main>
+  <section id="executors">
+    <div class="bar">
+      <button id="page-prev" class="full-only" aria-label="Page précédente">‹</button>
+      <div class="page"><b id="page-num">Page 1</b><span id="page-name"></span></div>
+      <button id="page-next" class="full-only" aria-label="Page suivante">›</button>
+      <button id="off-all" class="full-only">Tout éteindre</button>
+    </div>
+    <div class="faders" id="faders"></div>
+    <h2>Executors à boutons</h2>
+    <div class="buttons" id="buttons"></div>
+  </section>
+
+  <section id="command" hidden>
+    <div class="cmd">
+      <input id="line" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Fixture 1 Thru 4 At 50" aria-label="Commande">
+      <button class="go" id="send">Envoyer</button>
+    </div>
+    <div class="result" id="result"></div>
+    <div class="pad" id="pad"></div>
+    <h2>Groupes</h2>
+    <div class="groups" id="groups"></div>
+  </section>
+</main>
+
+<div class="dock">
+  <button id="back">Back<small id="back-exec"></small></button>
+  <button class="go" id="go">GO<small id="go-exec"></small></button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let ws = null, state = null, retry = null;
+let pin = localStorage.getItem("folie-pin") || "";
+const dragging = new Set();
+
+function connect() {
+  clearTimeout(retry);
+  if (!pin) { showLogin(""); return; }
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws?pin=${encodeURIComponent(pin)}`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "state") {
+      $("led").classList.add("on");
+      $("login").hidden = true;
+      state = msg;
+      render();
+    }
+    else if (msg.type === "hello") document.body.classList.toggle("playback", msg.role === "playback");
+    else if (msg.type === "reply") reply(msg);
+    else if (msg.type === "refused") refused = msg;
+  };
+  let refused = null;
+  ws.onclose = () => {
+    $("led").classList.remove("on");
+    ws = null;
+    if (refused) {
+      if (refused.reason === "pin") { localStorage.removeItem("folie-pin"); pin = ""; }
+      showLogin(refused.message);
+      return;
+    }
+    $("show").textContent = "console injoignable, nouvel essai…";
+    retry = setTimeout(connect, 1500);
+  };
+}
+
+function showLogin(message) {
+  $("login").hidden = false;
+  $("login-result").textContent = message;
+  $("pin").value = "";
+  setTimeout(() => $("pin").focus(), 50);
+}
+$("enter").onclick = () => {
+  pin = $("pin").value.trim();
+  if (!pin) return;
+  localStorage.setItem("folie-pin", pin);
+  $("login-result").textContent = "";
+  connect();
+};
+$("pin").addEventListener("keydown", (e) => { if (e.key === "Enter") $("enter").click(); });
+
+function send(action) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(action));
+}
+
+let lastCommand = false;
+function reply(msg) {
+  if (lastCommand) {
+    lastCommand = false;
+    const r = $("result");
+    r.textContent = msg.message;
+    r.className = "result " + (msg.ok ? "ok" : "err");
+  } else if (!msg.ok) {
+    toast(msg.message);
+  }
+}
+let toastTimer = null;
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+// Onglets
+document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach((o) => o.classList.toggle("active", o === b));
+  document.querySelectorAll("main section").forEach((s) => s.hidden = s.id !== b.dataset.tab);
+});
+
+// En-tête et dock. Toucher le titre : changer de code (régie ou lecture).
+$("title").onclick = () => {
+  if (!confirm("Changer de code ?")) return;
+  localStorage.removeItem("folie-pin");
+  location.reload();
+};
+$("blackout").onclick = () => state && send({ type: "blackout", on: !state.blackout });
+$("page-prev").onclick = () => state && send({ type: "page", page: Math.max(1, state.page - 1) });
+$("page-next").onclick = () => state && send({ type: "page", page: state.page + 1 });
+$("off-all").onclick = () => send({ type: "off_all" });
+$("go").onclick = () => send({ type: "go", executor: null });
+$("back").onclick = () => send({ type: "back", executor: null });
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// Touche maintenue (Flash, Swop) : enfoncée tant que le doigt reste dessus.
+function holdButton(button, executor) {
+  const down = (e) => { e.preventDefault(); button.classList.add("held"); send({ type: "flash", executor, pressed: true }); };
+  const up = () => {
+    if (!button.classList.contains("held")) return;
+    button.classList.remove("held");
+    send({ type: "flash", executor, pressed: false });
+  };
+  button.addEventListener("pointerdown", down);
+  ["pointerup", "pointercancel", "pointerleave"].forEach((t) => button.addEventListener(t, up));
+}
+
+function keys(x) {
+  const box = el("div", "keys");
+  const used = x.kind !== "empty";
+  const key = (text, cls, onClick) => {
+    const b = el("button", cls, text);
+    b.disabled = !used;
+    if (onClick) b.onclick = onClick;
+    box.append(b);
+    return b;
+  };
+  if (x.kind === "macro") {
+    key(x.on ? "Arrêter" : "Macro", x.on ? "main" : "main go", () => send({ type: "press", executor: x.id }));
+  } else if (x.mode === "Flash" || x.mode === "Swop") {
+    holdButton(key(x.mode, "main go"), x.id);
+  } else if (x.mode === "Bascule") {
+    key("Bascule", "main " + (x.on ? "go" : ""), () => send({ type: "press", executor: x.id }));
+  } else {
+    key(x.mode === "Kill" ? "Kill" : "GO", "main " + (used ? "go" : ""), () => send({ type: "press", executor: x.id }));
+    key("Back", "", () => send({ type: "back", executor: x.id }));
+    key("Off", "full-only", () => send({ type: "off", executor: x.id }));
+  }
+  return box;
+}
+
+function fader(x) {
+  const f = el("div", "fader");
+  const fill = el("div", "fill"), cap = el("div", "cap");
+  f.append(fill, cap);
+  f.set = (level) => {
+    fill.style.height = (level * 100) + "%";
+    cap.style.bottom = `calc((100% - 22px) * ${level})`;
+  };
+  if (x.kind !== "sequence") return f;
+  let pending = null, frame = 0;
+  const at = (e) => {
+    const r = f.getBoundingClientRect();
+    return Math.min(1, Math.max(0, 1 - (e.clientY - r.top - 11) / (r.height - 22)));
+  };
+  const move = (e) => {
+    const level = at(e);
+    f.set(level);
+    f.parentNode.querySelector(".value").textContent = Math.round(level * 100) + " %";
+    pending = level;
+    if (!frame) frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (pending !== null) send({ type: "fader", executor: x.id, level: pending });
+      pending = null;
+    });
+  };
+  f.addEventListener("pointerdown", (e) => { f.setPointerCapture(e.pointerId); dragging.add(x.id); move(e); });
+  f.addEventListener("pointermove", (e) => { if (dragging.has(x.id)) move(e); });
+  const end = () => dragging.delete(x.id);
+  f.addEventListener("pointerup", end);
+  f.addEventListener("pointercancel", end);
+  return f;
+}
+
+// Cartes reconstruites seulement quand leur forme change ; sinon on met à jour le texte
+// (un fader qu'on tient ne doit pas être remplacé sous le doigt).
+const cards = new Map();
+function card(x, withFader) {
+  const shape = [x.id, x.kind, x.mode, x.on, withFader].join("|");
+  let c = cards.get(x.id);
+  if (!c || c.shape !== shape) {
+    c = el("div", "card");
+    c.shape = shape;
+    const head = el("div", "head");
+    head.append(el("span", "num mono", x.label), el("span", "mode", x.mode));
+    c.parts = { name: el("div", "name"), cue: el("div", "cue"), next: el("div", "next"),
+                progress: el("div", "progress"), value: el("div", "value mono") };
+    c.parts.progress.append(el("i"));
+    c.append(head, c.parts.name, c.parts.cue, c.parts.next, c.parts.progress);
+    if (withFader) {
+      c.parts.fader = fader(x);
+      c.append(c.parts.fader, c.parts.value);
+    }
+    c.append(keys(x));
+    cards.set(x.id, c);
+  }
+  c.classList.toggle("empty", x.kind === "empty");
+  c.classList.toggle("fixed", x.fixed);
+  c.classList.toggle("selected", x.label === state.selected);
+  c.parts.name.textContent = x.name || (x.kind === "empty" ? "" : "Séquence");
+  c.parts.cue.textContent = x.now;
+  c.parts.cue.classList.toggle("on", x.on);
+  c.parts.next.textContent = x.next ? "› " + x.next : "";
+  c.parts.progress.firstChild.style.width = x.progress == null ? "0" : (x.progress * 100) + "%";
+  if (withFader && !dragging.has(x.id)) {
+    c.parts.fader.set(x.level);
+    c.parts.value.textContent = Math.round(x.level * 100) + " %";
+  }
+  return c;
+}
+
+function fill(container, nodes) {
+  nodes.forEach((n, i) => { if (container.children[i] !== n) container.insertBefore(n, container.children[i] || null); });
+  while (container.children.length > nodes.length) container.lastChild.remove();
+}
+
+function render() {
+  $("show").textContent = state.show;
+  $("blackout").classList.toggle("on", state.blackout);
+  $("page-num").textContent = "Page " + state.page;
+  $("page-name").textContent = state.page_name;
+  $("page-prev").disabled = state.page <= 1;
+  $("go-exec").textContent = "executor " + state.selected;
+  $("back-exec").textContent = "executor " + state.selected;
+  fill($("faders"), state.executors.filter((x) => x.fader).map((x) => card(x, true)));
+  fill($("buttons"), state.executors.filter((x) => !x.fader).map((x) => card(x, false)));
+  const groups = $("groups");
+  const key = state.groups.map((g) => g.number + g.name).join("|");
+  if (groups.dataset.key !== key) {
+    groups.dataset.key = key;
+    groups.replaceChildren(...state.groups.map((g) => {
+      const b = el("button", "", g.name || "Groupe " + g.number);
+      b.prepend(el("small", "", "Group " + g.number));
+      b.onclick = () => { lastCommand = true; send({ type: "group", number: g.number }); };
+      return b;
+    }));
+    if (!state.groups.length) groups.append(el("div", "muted", "Aucun groupe dans le show"));
+  }
+}
+
+// Ligne de commande et pavé
+function sendLine() {
+  const line = $("line").value.trim();
+  if (!line) return;
+  lastCommand = true;
+  send({ type: "command", line });
+  $("line").value = "";
+}
+$("send").onclick = sendLine;
+$("line").addEventListener("keydown", (e) => { if (e.key === "Enter") sendLine(); });
+const PAD = [
+  ["Fixture", "word"], ["Group", "word"], ["Thru", "word"], ["At", "word"],
+  ["7"], ["8"], ["9"], ["+", "word"],
+  ["4"], ["5"], ["6"], ["-", "word"],
+  ["1"], ["2"], ["3"], ["Full", "word"],
+  ["0"], ["."], ["⌫"], ["Clear", "word"],
+];
+for (const [text, cls] of PAD) {
+  const b = el("button", cls || "mono", text);
+  b.onclick = () => {
+    const input = $("line");
+    if (text === "⌫") input.value = input.value.replace(/\s*\S$/, "");
+    else if (text === "Clear") { lastCommand = true; send({ type: "command", line: "Clear" }); input.value = ""; }
+    else if (/^[0-9.]$/.test(text)) input.value += text;
+    else input.value = (input.value.trim() + " " + text + " ").replace(/^\s+/, "");
+  };
+  $("pad").append(b);
+}
+const enter = el("button", "enter", "Entrée");
+enter.style.gridColumn = "1 / -1";
+enter.onclick = sendLine;
+$("pad").append(enter);
+
+connect();
+</script>
+</body>
+</html>

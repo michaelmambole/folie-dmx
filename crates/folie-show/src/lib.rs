@@ -75,6 +75,8 @@ pub struct Show {
     pub macros: BTreeMap<u32, Macro>,
     /// Executors qui lancent une macro au lieu de jouer une séquence : executor -> macro.
     pub macro_executors: BTreeMap<u32, u32>,
+    /// Destinations OSC nommées, pour la commande `Osc "Reaper" "/play"` : nom -> « adresse:port ».
+    pub osc_destinations: BTreeMap<String, String>,
 }
 
 /// Une macro : des lignes de commande jouées dans l'ordre ; `Wait 2` attend 2 secondes.
@@ -109,6 +111,7 @@ impl Default for Show {
             stage: BTreeMap::new(),
             macros: BTreeMap::new(),
             macro_executors: BTreeMap::new(),
+            osc_destinations: BTreeMap::new(),
         }
     }
 }
@@ -171,6 +174,9 @@ struct ShowFile {
     /// Executor -> macro qu'il lance.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     macro_executors: BTreeMap<String, u32>,
+    /// Nom -> « adresse:port ».
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    osc_destinations: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +218,9 @@ struct CueEntry {
     /// Effets suivis arrêtés dans cette cue : la cue qui les a lancés et leur place.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     stopped_effects: Vec<StoppedEffectEntry>,
+    /// Commande jouée au départ de la cue.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    command: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -463,6 +472,7 @@ pub fn to_json(show: &Show) -> String {
                         .iter()
                         .map(|(origin, index)| StoppedEffectEntry { cue: origin.to_string(), index: *index })
                         .collect(),
+                    command: cue.command.clone(),
                 })
                 .collect(),
         })
@@ -495,6 +505,7 @@ pub fn to_json(show: &Show) -> String {
         stage: show.stage.iter().map(|(id, place)| (id.to_string(), *place)).collect(),
         macros: show.macros.iter().map(|(n, m)| (n.to_string(), m.clone())).collect(),
         macro_executors: show.macro_executors.iter().map(|(e, m)| (e.to_string(), *m)).collect(),
+        osc_destinations: show.osc_destinations.clone(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -596,6 +607,7 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
                     .iter()
                     .filter_map(|s| Some((s.cue.parse::<CueNumber>().ok()?, s.index)))
                     .collect(),
+                command: cue_entry.command,
             };
             for (family, timing) in cue_entry.family_times {
                 match FeatureGroup::from_key(&family) {
@@ -706,7 +718,9 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
     }
 
     let tempo = file.tempo.clamp(1.0, 999.0);
-    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage, macros, macro_executors };
+    let osc_destinations = file.osc_destinations;
+    let show =
+        Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage, macros, macro_executors, osc_destinations };
     Ok(Loaded { show, warnings })
 }
 
@@ -834,6 +848,7 @@ mod tests {
             .entry(FixtureId(1))
             .or_default()
             .insert("Pan".into(), ParamTiming { fade: Some(6.0), delay: Some(1.0) });
+        cue.command = r#"Osc "Reaper" "/marker/1"; Osc "Reaper" "/play""#.into();
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
         let mut black = Cue::new("Noir".into());
         black.stopped_effects.insert((CueNumber::whole(1), 1)); // le cercle s'arrête, la vague continue
@@ -899,7 +914,21 @@ mod tests {
         let lines = vec!["Fixture 1 Thru 4".to_string(), "At 100".into(), "Wait 2".into(), "Go Executor 2".into()];
         let macros = BTreeMap::from([(3, Macro { name: "Ouverture".into(), lines })]);
         let macro_executors = BTreeMap::from([(7, 3)]);
-        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool, stage, macros, macro_executors }
+        let osc_destinations = BTreeMap::from([("Reaper".to_string(), "127.0.0.1:8000".to_string())]);
+        Show {
+            patch,
+            groups,
+            presets,
+            sequences,
+            executors,
+            pages,
+            tempo: 98.0,
+            effect_pool,
+            stage,
+            macros,
+            macro_executors,
+            osc_destinations,
+        }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {

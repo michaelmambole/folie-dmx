@@ -13,6 +13,7 @@ folie-dmx = { path = "crates/folie-dmx" }
 folie-engine = { path = "crates/folie-engine" }
 folie-fixture = { path = "crates/folie-fixture" }
 folie-show = { path = "crates/folie-show" }
+folie-remote = { path = "crates/folie-remote" }
 serialport = { version = "4.7", default-features = false }
 crossbeam-channel = "0.5"
 thiserror = "2"

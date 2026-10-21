@@ -27,6 +27,12 @@ struct Settings {
     /// Sortie Art-Net, en plus de la sortie choisie.
     #[serde(default)]
     artnet: ArtNetSettings,
+    /// Télécommande web.
+    #[serde(default)]
+    remote: RemoteSettings,
+    /// Pilotage OSC.
+    #[serde(default)]
+    osc: OscSettings,
 }
 
 /// Réglages de la sortie Art-Net.
@@ -43,6 +49,56 @@ pub struct ArtNetSettings {
 impl Default for ArtNetSettings {
     fn default() -> Self {
         Self { enabled: false, destination: folie_dmx::artnet::BROADCAST.to_string(), universe: 0 }
+    }
+}
+
+/// Réglages de la télécommande web. Coupée tant qu'on ne l'active pas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Code « régie » (tout permis), tiré au hasard à la première activation.
+    pub pin: String,
+    /// Code « lecture » : GO, Back et touches des executors seulement.
+    pub playback_pin: String,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self { enabled: false, port: 8090, pin: String::new(), playback_pin: String::new() }
+    }
+}
+
+/// Réglages de l'OSC. Coupé tant qu'on ne l'active pas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OscSettings {
+    pub enabled: bool,
+    /// Port d'écoute (TouchOSC envoie vers 8000 par défaut).
+    pub port: u16,
+    /// Port où les clients attendent le retour d'état (9000 chez TouchOSC) ; 0 : celui d'où ils écrivent.
+    pub reply_port: u16,
+    /// Adresses autorisées, séparées par des virgules ou des espaces ; vide : tout le réseau local.
+    pub allowed: String,
+    /// Les marqueurs de Reaper font Goto Cue (marqueur 3 : cue 3).
+    pub reaper_markers: bool,
+}
+
+impl Default for OscSettings {
+    fn default() -> Self {
+        Self { enabled: false, port: 8000, reply_port: 9000, allowed: String::new(), reaper_markers: false }
+    }
+}
+
+impl OscSettings {
+    /// Adresses autorisées, ou la première qui est illisible.
+    pub fn allowed_ips(&self) -> Result<Vec<std::net::IpAddr>, String> {
+        self.allowed
+            .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().map_err(|_| s.to_string()))
+            .collect()
     }
 }
 
@@ -118,6 +174,22 @@ impl Storage {
 
     pub fn set_artnet(&self, artnet: &ArtNetSettings) {
         self.update_settings(|s| s.artnet = artnet.clone());
+    }
+
+    pub fn remote(&self) -> RemoteSettings {
+        self.settings().remote
+    }
+
+    pub fn set_remote(&self, remote: &RemoteSettings) {
+        self.update_settings(|s| s.remote = remote.clone());
+    }
+
+    pub fn osc(&self) -> OscSettings {
+        self.settings().osc
+    }
+
+    pub fn set_osc(&self, osc: &OscSettings) {
+        self.update_settings(|s| s.osc = osc.clone());
     }
 
     pub fn layouts(&self) -> BTreeMap<u8, Layout> {

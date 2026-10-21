@@ -305,7 +305,7 @@ impl Console {
         Some((number, self.show.sequences.get(&number)?))
     }
 
-    fn selected_sequence_mut(&mut self) -> Result<&mut Sequence, CommandError> {
+    pub(crate) fn selected_sequence_mut(&mut self) -> Result<&mut Sequence, CommandError> {
         let executor = self.selected_executor;
         let Some(number) = self.show.executors.get(&executor).map(|x| x.sequence) else {
             return invalid(format!("l'executor {executor} n'a pas de séquence", executor = executor_label(executor)));

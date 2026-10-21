@@ -11,6 +11,7 @@ pub mod cues;
 pub mod effects;
 pub mod gels;
 pub mod macros;
+pub mod osc_out;
 pub mod tracking;
 
 use std::collections::{HashMap, HashSet};
@@ -170,6 +171,10 @@ pub struct Console {
     macro_runs: Vec<macros::MacroRun>,
     /// Pendant la lecture des macros : une macro lancée par une ligne attend l'image suivante.
     macro_ticking: bool,
+    /// Cue en cours de chaque executor à l'image précédente : une cue qui part joue sa commande.
+    cues_seen: HashMap<u32, Option<usize>>,
+    /// Socket d'envoi OSC, ouverte au premier message.
+    osc_socket: Option<std::net::UdpSocket>,
 }
 
 impl Console {
@@ -188,6 +193,8 @@ impl Console {
             taps: effects::TapTempo::default(),
             macro_runs: Vec::new(),
             macro_ticking: false,
+            cues_seen: HashMap::new(),
+            osc_socket: None,
         }
     }
 
@@ -400,6 +407,7 @@ impl Console {
             Command::Delete(Object::Macro(number)) => self.delete_macro(number),
             Command::Macro(number) => self.run_macro(number),
             Command::Wait(_) => invalid("Wait ne s'utilise que dans une macro"),
+            Command::Osc { destination, address, args } => self.send_osc(&destination, &address, &args),
             Command::Label { object: Object::Cue(Some(number)), name } => self.label_cue(number, name),
             Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),

@@ -85,8 +85,9 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Fenêtre Tracking (⌘8) : valeurs de chaque cue, changées, suivies, relâchées, presets, effets
 - [x] Temps par famille (fenêtre Cues) et par paramètre (fenêtre Tracking), fondu et délai propres
 - [x] Mode chenillard (BPM ou tempo du show, fondu entre pas, sens), fader Crossfade A/B, reprise, Ooo, MIB, Swop, Kill, Assert, Release
-- **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/folie/exec/N/go`, `/folie/exec/N/back`,
-  `/folie/cmd "<commande>"`, avec retour d'état vers les clients (TouchOSC, QLab…)
+- [x] **OSC** (crate `rosc`, UDP) : `/folie/exec/N/fader`, `/go`, `/back`, `/off`, `/flash`, `/folie/go`,
+      `/folie/page`, `/folie/blackout`, `/folie/cmd "<commande>"`, avec retour d'état vers les clients
+      (TouchOSC, QLab…) ; réglages dans le menu Télécommande
 
 ➡️ **Fin de phase 4 = console utilisable sur un vrai spectacle.**
 
@@ -107,10 +108,19 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Sortie Art-Net (ArtDmx vers un node ou en diffusion), en plus de la sortie choisie
 - [ ] sACN, univers multiples (l'USB Pro n'en gère qu'un), découverte des nodes (ArtPoll)
 - MIDI pour piloter depuis une surface externe
-- **Télécommande web** : serveur axum + WebSockets, page embarquée dans le binaire
-  (HTML/JS simple ou Leptos, sans Node) : executors, Go/Back, fixtures
-- Sécurité des accès distants : web désactivé par défaut + code PIN, liste d'IP autorisées
-  pour l'OSC, réseau local uniquement, bouton « Remote off » sur la console
+- [x] **Télécommande web** (crate `folie-remote`) : serveur axum + WebSockets, page HTML/JS
+      embarquée dans le binaire ; executors de la page (faders, Go/Back/Off, Flash maintenu,
+      Bascule, macros), pages, Go/Back de l'executor choisi, blackout, ligne de commande avec
+      pavé, groupes ; bouton « Télécommande » de la barre du haut (adresse, QR code, code PIN)
+- [x] Toutes les adresses de l'ordinateur avec le nom de la connexion (Wi-Fi, Ethernet), choix de celle du QR code
+- [x] Sécurité du web : coupé par défaut, deux codes PIN, régie (tout) et lecture (GO, Back,
+      Flash, vérifié par le serveur), une adresse mise à l'écart une minute après
+      5 erreurs), réseau local uniquement, « Couper la télécommande » ; Flash relâché si le
+      téléphone se déconnecte
+- [x] Envoi OSC : destinations nommées dans le show, commande `Osc "Reaper" "/play"`, commande
+      jouée au départ d'une cue (« CMD »), destination Reaper toute prête
+- [x] Marqueurs de Reaper : le marqueur N fait Goto Cue N (à vérifier avec un vrai Reaper)
+- [x] OSC : réseau local uniquement, liste d'adresses autorisées, coupé par défaut
 
 Un seul show et un seul programmer : plusieurs moyens de piloter, pas de multi-utilisateur.
 

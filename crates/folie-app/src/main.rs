@@ -5,6 +5,7 @@ mod effects_ui;
 mod faders;
 mod fixtures;
 mod monitor;
+mod network;
 mod playback_ui;
 mod pools;
 mod screens;

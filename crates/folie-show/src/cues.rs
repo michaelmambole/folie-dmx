@@ -102,6 +102,9 @@ pub struct Cue {
     /// Effets suivis qui s'arrêtent dans cette cue, chacun désigné par la cue qui l'a
     /// lancé et sa place dans la liste de cette cue. Les autres continuent.
     pub stopped_effects: BTreeSet<(CueNumber, usize)>,
+    /// Commande jouée quand la cue part (la « CMD » de grandMA2) : `Osc "Reaper" "/play"`.
+    /// Plusieurs commandes se séparent par « ; ».
+    pub command: String,
 }
 
 impl Cue {
@@ -115,6 +118,7 @@ impl Cue {
             family_times: BTreeMap::new(),
             param_times: BTreeMap::new(),
             stopped_effects: BTreeSet::new(),
+            command: String::new(),
         }
     }
 

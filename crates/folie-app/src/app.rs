@@ -15,10 +15,11 @@ use folie_control::Console;
 use crate::cmdline::CommandLine;
 use crate::fixtures::FixturesView;
 use crate::pools::PoolsView;
-use crate::storage::{ArtNetSettings, Storage};
+use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, Storage};
 use crate::theme;
 
 mod file;
+mod remote;
 mod windows;
 
 /// Rafraîchissement de l'interface : largement suffisant pour suivre le moteur à 44 Hz.
@@ -110,6 +111,14 @@ pub struct FolieApp {
     output: OutputChoice,
     /// Sortie Art-Net, envoyée en plus de `output`.
     pub(crate) artnet: ArtNetSettings,
+    pub(crate) remote_settings: RemoteSettings,
+    /// Serveur de la télécommande web, quand elle est active.
+    pub(crate) remote: Option<folie_remote::RemoteServer>,
+    pub(crate) osc_settings: OscSettings,
+    /// Serveur OSC, quand il est actif.
+    pub(crate) osc: Option<folie_remote::osc::OscServer>,
+    /// Adresses de cet ordinateur, montrées pour la télécommande et l'OSC.
+    addresses: crate::network::AddressCache,
     error: Option<String>,
     display: DisplayMode,
     fader_page: usize,
@@ -133,6 +142,8 @@ impl FolieApp {
         let workspace = storage.workspace();
         let layouts = storage.layouts();
         let artnet = storage.artnet();
+        let remote_settings = storage.remote();
+        let osc_settings = storage.osc();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
             console,
@@ -149,6 +160,11 @@ impl FolieApp {
             ports: Vec::new(),
             output: OutputChoice::Virtual,
             artnet,
+            remote_settings,
+            remote: None,
+            osc_settings,
+            osc: None,
+            addresses: Default::default(),
             error: None,
             display: DisplayMode::Percent,
             fader_page: 0,
@@ -158,6 +174,12 @@ impl FolieApp {
         app.refresh_ports();
         if app.artnet.enabled {
             app.apply_outputs(OutputChoice::Virtual);
+        }
+        if app.remote_settings.enabled {
+            app.remote_changed(&cc.egui_ctx);
+        }
+        if app.osc_settings.enabled {
+            app.osc_changed(&cc.egui_ctx);
         }
         app.startup();
         app
@@ -279,6 +301,7 @@ impl FolieApp {
                 let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
                 ui.add(chip).on_hover_text(help);
             }
+            self.remote_button(ui);
 
             ui.separator();
             let blackout = self.snapshot.blackout;
@@ -350,8 +373,15 @@ impl eframe::App for FolieApp {
                 self.mark_dirty();
             }
         }
+        // Commandes des cues qui viennent de partir (OSC vers Reaper…).
+        for result in self.console.tick_cue_commands(&self.snapshot) {
+            if self.command_line.report(result) {
+                self.mark_dirty();
+            }
+        }
 
         let ctx = ui.ctx().clone();
+        self.remote_tick();
         self.global_shortcuts(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) {
             self.save_workspace_if_changed(true);
@@ -1520,6 +1550,207 @@ mod tests {
         assert!(!harness.state().artnet.enabled);
         assert_eq!(harness.state().snapshot.output_names, ["virtuelle"]);
         harness.get_by_label("Art-Net : adresse « pas une adresse » illisible");
+    }
+
+    #[test]
+    fn web_remote_from_the_top_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut harness = harness(Storage::at(dir.path()));
+        harness.state_mut().remote_settings.port = 0; // port libre, choisi par le système
+        assert!(harness.state().remote.is_none(), "coupée par défaut");
+
+        harness.get_by_label("Télécommande").click();
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("telecommande-coupee.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Activer la télécommande").click();
+        settle(&mut harness);
+        let port = harness.state().remote.as_ref().expect("serveur démarré").port();
+        let pin = harness.state().remote_settings.pin.clone();
+        let playback_pin = harness.state().remote_settings.playback_pin.clone();
+        for code in [&pin, &playback_pin] {
+            assert!(code.len() == 4 && code.chars().all(|c| c.is_ascii_digit()), "{code}");
+        }
+        assert_ne!(pin, playback_pin);
+        assert!(Storage::at(dir.path()).remote().enabled, "gardé pour la prochaine fois");
+        harness.get_by_label(&pin);
+        harness.get_by_label(&playback_pin);
+        harness.get_by_label("Aucun appareil connecté");
+
+        // Un téléphone : il change de page d'executors, la console suit et le lui renvoie.
+        let (mut phone, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}/ws?pin={pin}")).expect("connexion");
+        phone.send(tungstenite::Message::text(r#"{"type":"page","page":2}"#)).unwrap();
+        for _ in 0..50 {
+            settle(&mut harness);
+            if harness.state().console.page() == 2 {
+                break;
+            }
+        }
+        assert_eq!(harness.state().console.page(), 2);
+        let state = loop {
+            let message = phone.read().unwrap();
+            let Ok(text) = message.to_text() else { continue };
+            let json: serde_json::Value = serde_json::from_str(text).unwrap();
+            if json["type"] == "state" && json["page"] == 2 {
+                break json;
+            }
+        };
+        assert_eq!(state["show"], "Sans titre");
+        settle(&mut harness);
+        harness.get_by_label("Télécommande · 1");
+        harness.get_by_label("1 appareil connecté");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("telecommande.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Couper : le téléphone est déconnecté, le réglage retenu.
+        harness.get_by_label("Couper la télécommande").click();
+        settle(&mut harness);
+        assert!(harness.state().remote.is_none());
+        assert!(!Storage::at(dir.path()).remote().enabled);
+        let closed = (0..20).any(|_| phone.read().is_err());
+        assert!(closed, "téléphone déconnecté");
+    }
+
+    #[test]
+    fn osc_from_the_top_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut harness = harness(Storage::at(dir.path()));
+        // Ports choisis par le système ; retour vers le port d'où le client écrit.
+        harness.state_mut().osc_settings.port = 0;
+        harness.state_mut().osc_settings.reply_port = 0;
+        harness.get_by_label("Télécommande").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::TextInput, "Autorisés").focus();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Autorisés").type_text("127.0.0.1, 192.168.1.30");
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state().osc_settings.allowed, "127.0.0.1, 192.168.1.30");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("osc-coupe.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Suivre les marqueurs de Reaper").click();
+        harness.run_steps(2);
+        assert!(harness.state().osc_settings.reaper_markers);
+        harness.get_by_label("Activer l'OSC").click();
+        settle(&mut harness);
+        let port = harness.state().osc.as_ref().expect("OSC démarré").port();
+        assert!(Storage::at(dir.path()).osc().enabled, "gardé pour la prochaine fois");
+
+        // Un client : page 3, puis le retour d'état lui arrive.
+        let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let packet = rosc::OscPacket::Message(rosc::OscMessage { addr: "/folie/page".into(), args: vec![rosc::OscType::Int(3)] });
+        client.send_to(&rosc::encoder::encode(&packet).unwrap(), ("127.0.0.1", port)).unwrap();
+        for _ in 0..50 {
+            settle(&mut harness);
+            if harness.state().console.page() == 3 {
+                break;
+            }
+        }
+        assert_eq!(harness.state().console.page(), 3);
+        let mut buffer = [0u8; rosc::decoder::MTU];
+        let page = (0..20).find_map(|_| {
+            let (size, _) = client.recv_from(&mut buffer).ok()?;
+            let (_, rosc::OscPacket::Bundle(bundle)) = rosc::decoder::decode_udp(&buffer[..size]).ok()? else { return None };
+            bundle.content.into_iter().find_map(|p| match p {
+                rosc::OscPacket::Message(m) if m.addr == "/folie/page" => m.args.first().cloned(),
+                _ => None,
+            })
+        });
+        assert_eq!(page, Some(rosc::OscType::Int(3)));
+        settle(&mut harness);
+        harness.get_by_label("1 client entendu");
+        harness.get_by_label("Télécommande · 1");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("osc.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Couper l'OSC").click();
+        settle(&mut harness);
+        assert!(harness.state().osc.is_none());
+
+        // Une adresse autorisée illisible : l'OSC ne démarre pas et le dit.
+        harness.state_mut().osc_settings.allowed = "192.168.1".into();
+        harness.state_mut().osc_settings.enabled = true;
+        let ctx = harness.ctx.clone();
+        harness.state_mut().osc_changed(&ctx);
+        settle(&mut harness);
+        assert!(harness.state().osc.is_none());
+        harness.get_by_label("OSC : adresse autorisée « 192.168.1 » illisible");
+    }
+
+    #[test]
+    fn cue_command_sends_osc_to_reaper() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Cues,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(560.0, 380.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1400.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Ouverture""#);
+        command(&mut harness, "ClearAll");
+
+        // Destination Reaper toute prête, puis dirigée vers un faux Reaper pour le test.
+        harness.get_by_label("Télécommande").click();
+        harness.run_steps(2);
+        harness.get_by_label("Ajouter Reaper (127.0.0.1:8000)").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.show.osc_destinations["Reaper"], "127.0.0.1:8000");
+        assert!(harness.state().file.dirty, "enregistrée dans le show");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("osc-destinations.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        let reaper = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        reaper.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let address = reaper.local_addr().unwrap().to_string();
+        harness.state_mut().console.set_osc_destination("Reaper", &address).unwrap();
+
+        // Clic droit sur la cue : sa commande.
+        harness.get_by_label("Ouverture").click_secondary();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::TextInput, "Au départ").focus();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Au départ").type_text(r#"Osc "Reaper" "/marker" 1; Osc "Reaper" "/play""#);
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("cue-command.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Valider").click();
+        settle(&mut harness);
+        let number = folie_show::CueNumber::whole(1);
+        assert_eq!(harness.state().console.show.sequences[&1].cues[&number].command, r#"Osc "Reaper" "/marker" 1; Osc "Reaper" "/play""#);
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        harness.get_by_label("CMD"); // repère sur la ligne de la cue
+
+        // GO : Reaper reçoit le marqueur puis la lecture.
+        command(&mut harness, "Go");
+        settle(&mut harness);
+        settle(&mut harness);
+        let mut buffer = [0u8; 1024];
+        let mut received = Vec::new();
+        for _ in 0..2 {
+            let (size, _) = reaper.recv_from(&mut buffer).expect("message OSC");
+            let (_, rosc::OscPacket::Message(m)) = rosc::decoder::decode_udp(&buffer[..size]).unwrap() else { panic!() };
+            received.push(m.addr);
+        }
+        assert_eq!(received, ["/marker", "/play"]);
+        harness.get_by_label("OSC vers Reaper /play");
     }
 
     #[test]
