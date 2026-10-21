@@ -1356,4 +1356,27 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1100));
         assert_eq!(dmx(&c, 2), 0, "effacé : le dimmer revient au programmer (0)");
     }
+
+    #[test]
+    fn my_effects_pool() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 Thru 2");
+        run(&mut c, "Effect 4");
+        c.programmer_effects_mut()[0].spread = 180.0;
+        let stored = c.store_effect_in_pool(0).unwrap();
+        assert_eq!(stored.message, "Effet « Cercle » enregistré dans Mes effets (1)");
+        assert!(stored.show_changed);
+        assert!(c.show.effect_pool[&1].targets.is_empty(), "sans cibles");
+        c.rename_pool_effect(1, "Ballet".into()).unwrap();
+        run(&mut c, "ClearAll");
+
+        run(&mut c, "Fixture 3 Thru 4");
+        assert_eq!(c.apply_pool_effect(1).unwrap().message, "Effet « Ballet » sur 2 cible(s)");
+        let effect = &c.programmer_effects()[0];
+        assert_eq!((effect.spread, effect.targets.len()), (180.0, 2), "réglages gardés, nouvelles cibles");
+        c.store_effect_in_pool(0).unwrap();
+        assert!(c.show.effect_pool.contains_key(&2), "case suivante");
+        c.delete_pool_effect(1).unwrap();
+        assert!(c.apply_pool_effect(1).is_err());
+    }
 }

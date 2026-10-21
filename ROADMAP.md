@@ -97,7 +97,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
 - [x] Effets relatifs (autour de la valeur en cours, donc aussi d'un preset rappelé) ; Cercle relatif
 - [x] Rapport cyclique du carré, forme d'onde aléatoire, modèle Scintillement
-- [ ] Pool d'effets personnalisés
+- [x] Pool d'effets personnalisés (Mes effets : Au pool, relancer, renommer, supprimer)
 - [x] Effets visibles dans la fenêtre Programmer (pastilles, plage, nom de l'effet)
 
 ## Phase 6 — Réseau et télécommande (≈ 1,5 à 2 mois)

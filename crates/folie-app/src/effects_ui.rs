@@ -62,8 +62,8 @@ fn tempo_card(ui: &mut egui::Ui, console: &mut Console) -> Action {
     action
 }
 
-/// Case d'un modèle : numéro, nom, aperçu de son onde. Clic : lancer sur la sélection.
-fn template_tile(ui: &mut egui::Ui, number: u32, template: &Effect) -> bool {
+/// Case d'un modèle ou de Mes effets : numéro, nom, aperçu de son onde. Clic : lancer sur la sélection.
+fn template_tile(ui: &mut egui::Ui, number: u32, template: &Effect) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
     let painter = ui.painter_at(rect.expand(1.0));
     let hovered = response.hovered();
@@ -85,7 +85,33 @@ fn template_tile(ui: &mut egui::Ui, number: u32, template: &Effect) -> bool {
     }
     let label = format!("{number} {}", template.name);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-    response.on_hover_text("Lancer sur la sélection").clicked()
+    response.on_hover_text("Lancer sur la sélection")
+}
+
+/// Menu du clic droit d'une case de Mes effets : renommer, supprimer.
+fn pool_menu(ui: &mut egui::Ui, console: &mut Console, number: u32, name: &str) -> Action {
+    theme::menu_fields(ui);
+    let id = egui::Id::unique(("rename-pool-effect", number));
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| name.to_string());
+    let mut action = None;
+    ui.horizontal(|ui| {
+        let label = ui.label("Nom");
+        let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0)).labelled_by(label.id);
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (ui.button("Renommer").clicked() || enter) && !text.trim().is_empty() {
+            action = Some(console.rename_pool_effect(number, text.trim().to_string()));
+        }
+    });
+    if ui.button("Supprimer").on_hover_text(format!("Retirer « {name} » de Mes effets")).clicked() {
+        action = Some(console.delete_pool_effect(number));
+    }
+    if action.is_some() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        ui.close();
+    } else {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    }
+    action
 }
 
 /// Plage basse–haute d'une ligne : bande violette dont on glisse le bord le plus proche.
@@ -132,10 +158,18 @@ fn range_bar(ui: &mut egui::Ui, id: egui::Id, low: &mut f32, high: &mut f32, rel
     changed
 }
 
-/// Carte d'un effet en cours : nom, cibles, Arrêter, réglages, une ligne par attribut.
-/// Renvoie (changé, arrêter).
-fn effect_card(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> (bool, bool) {
+/// Ce qu'on a demandé sur la carte d'un effet en cours.
+#[derive(Default)]
+struct CardActions {
+    changed: bool,
+    stop: bool,
+    to_pool: bool,
+}
+
+/// Carte d'un effet en cours : nom, cibles, Au pool, Arrêter, réglages, une ligne par attribut.
+fn effect_card(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> CardActions {
     let mut stop = false;
+    let mut to_pool = false;
     let mut changed = false;
     let frame = egui::Frame::new().fill(theme::SURFACE_1).stroke(egui::Stroke::new(1.0, theme::LINE)).inner_margin(egui::Margin { left: 14, right: 12, top: 10, bottom: 10 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -147,6 +181,8 @@ fn effect_card(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> (bool, b
                 let text = RichText::new("Arrêter").color(Color32::from_rgb(255, 138, 132));
                 let button = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::DANGER));
                 stop = ui.add(button).on_hover_text(format!("Arrêter « {} »", effect.name)).clicked();
+                let help = "Enregistrer cet effet dans Mes effets, pour le relancer sur une autre sélection";
+                to_pool = ui.button("Au pool").on_hover_text(help).clicked();
             });
         });
         ui.add_space(4.0);
@@ -155,7 +191,7 @@ fn effect_card(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> (bool, b
     // Liseré violet à gauche : c'est un effet.
     let r = frame.response.rect;
     ui.painter().rect_filled(egui::Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, theme::EFFECT);
-    (changed, stop)
+    CardActions { changed, stop, to_pool }
 }
 
 pub fn effects_window(ui: &mut egui::Ui, console: &mut Console) -> Action {
@@ -170,9 +206,33 @@ pub fn effects_window(ui: &mut egui::Ui, console: &mut Console) -> Action {
         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
         for (i, template) in templates().iter().enumerate() {
             let number = i as u32 + 1;
-            if template_tile(ui, number, template) {
+            if template_tile(ui, number, template).clicked() {
                 action = Some(console.apply_effect(number));
             }
+        }
+    });
+    ui.add_space(8.0);
+
+    ui.horizontal(|ui| {
+        theme::section(ui, "Mes effets");
+        ui.label(RichText::new("Clic : lancer sur la sélection · clic droit : renommer, supprimer").size(11.5).color(theme::MUTED));
+    });
+    let pool: Vec<(u32, Effect)> = console.show.effect_pool.iter().map(|(n, e)| (*n, e.clone())).collect();
+    if pool.is_empty() {
+        ui.label(RichText::new("Vide : « Au pool » sur un effet en cours l'enregistre ici.").color(theme::MUTED));
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        for (number, effect) in &pool {
+            let response = template_tile(ui, *number, effect);
+            if response.clicked() {
+                action = Some(console.apply_pool_effect(*number));
+            }
+            egui::Popup::context_menu(&response).show(|ui| {
+                if let Some(a) = pool_menu(ui, console, *number, &effect.name) {
+                    action = Some(a);
+                }
+            });
         }
     });
     ui.add_space(10.0);
@@ -183,16 +243,23 @@ pub fn effects_window(ui: &mut egui::Ui, console: &mut Console) -> Action {
     }
     let mut changed = false;
     let mut remove = None;
+    let mut to_pool = None;
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         for (index, effect) in console.programmer_effects_mut().iter_mut().enumerate() {
-            let (c, stop) = effect_card(ui, index, effect);
-            changed |= c;
-            if stop {
+            let card = effect_card(ui, index, effect);
+            changed |= card.changed;
+            if card.stop {
                 remove = Some(index);
+            }
+            if card.to_pool {
+                to_pool = Some(index);
             }
             ui.add_space(6.0);
         }
     });
+    if let Some(index) = to_pool {
+        action = Some(console.store_effect_in_pool(index));
+    }
     if let Some(index) = remove {
         console.remove_effect(index);
     } else if changed {

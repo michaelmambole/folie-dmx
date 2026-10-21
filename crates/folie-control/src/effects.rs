@@ -115,16 +115,54 @@ impl Console {
         let Some(template) = number.checked_sub(1).and_then(|i| all.get(i as usize)) else {
             return invalid(format!("l'effet {number} n'existe pas (1 à {})", all.len()));
         };
+        self.launch(template.clone())
+    }
+
+    /// Lance un effet (modèle ou du pool) sur la sélection, dans le programmer.
+    fn launch(&mut self, mut effect: Effect) -> Result<Outcome, CommandError> {
         if self.selection.is_empty() {
             return invalid("aucune sélection");
         }
-        let mut effect = template.clone();
         effect.targets = self.selection.clone();
         let name = effect.name.clone();
         self.effects.push(effect);
         self.effects_changed();
         self.selection_used = true;
         Ok(Outcome::info(format!("Effet « {name} » sur {} cible(s)", self.selection.len())))
+    }
+
+    /// « Au pool » : l'effet du programmer, sans ses cibles, dans la première case libre.
+    pub fn store_effect_in_pool(&mut self, index: usize) -> Result<Outcome, CommandError> {
+        let Some(effect) = self.effects.get(index) else { return invalid("cet effet n'est plus dans le programmer") };
+        let mut effect = effect.clone();
+        effect.targets.clear();
+        let number = (1..).find(|n| !self.show.effect_pool.contains_key(n)).expect("toujours une case libre");
+        let name = effect.name.clone();
+        self.show.effect_pool.insert(number, effect);
+        Ok(Outcome::changed(format!("Effet « {name} » enregistré dans Mes effets ({number})")))
+    }
+
+    /// Relance un effet du pool sur la sélection.
+    pub fn apply_pool_effect(&mut self, number: u32) -> Result<Outcome, CommandError> {
+        let Some(effect) = self.show.effect_pool.get(&number).cloned() else {
+            return invalid(format!("Mes effets : la case {number} est vide"));
+        };
+        self.launch(effect)
+    }
+
+    pub fn rename_pool_effect(&mut self, number: u32, name: String) -> Result<Outcome, CommandError> {
+        let Some(effect) = self.show.effect_pool.get_mut(&number) else {
+            return invalid(format!("Mes effets : la case {number} est vide"));
+        };
+        effect.name = name.clone();
+        Ok(Outcome::changed(format!("Mes effets {number} renommé « {name} »")))
+    }
+
+    pub fn delete_pool_effect(&mut self, number: u32) -> Result<Outcome, CommandError> {
+        match self.show.effect_pool.remove(&number) {
+            Some(effect) => Ok(Outcome::changed(format!("Effet « {} » retiré de Mes effets", effect.name))),
+            None => invalid(format!("Mes effets : la case {number} est vide")),
+        }
     }
 
     pub fn remove_effect(&mut self, index: usize) {

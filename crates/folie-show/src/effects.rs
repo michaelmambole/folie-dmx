@@ -242,6 +242,15 @@ impl EffectEntry {
 
     /// Les lignes et cibles illisibles sont écartées ; `None` s'il ne reste rien.
     pub(crate) fn into_effect(self, keep: impl Fn(Target) -> bool) -> Option<Effect> {
+        self.build(keep, true)
+    }
+
+    /// Effet du pool : sans cibles, il est relancé sur la sélection du moment.
+    pub(crate) fn into_template(self) -> Option<Effect> {
+        self.build(|_| false, false)
+    }
+
+    fn build(self, keep: impl Fn(Target) -> bool, needs_targets: bool) -> Option<Effect> {
         let lines: Vec<EffectLine> = self
             .lines
             .into_iter()
@@ -259,7 +268,7 @@ impl EffectEntry {
             })
             .collect();
         let targets: Vec<Target> = self.targets.iter().filter_map(|t| t.parse().ok()).filter(|t| keep(*t)).collect();
-        (!lines.is_empty() && !targets.is_empty()).then(|| Effect {
+        (!lines.is_empty() && (!needs_targets || !targets.is_empty())).then(|| Effect {
             name: self.name,
             rate: match self.rate {
                 RateEntry::Hz(hz) => EffectRate::Hz(hz),

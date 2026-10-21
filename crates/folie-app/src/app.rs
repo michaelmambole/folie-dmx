@@ -987,6 +987,29 @@ mod tests {
         harness.get_all(fade_out).next().unwrap().set_value_accesskit(2.0);
         harness.run_steps(2);
         assert_eq!(harness.state().console.programmer_effects()[0].fade_out, 2.0);
+
+        // Mes effets : le Chenillard réglé, enregistré, renommé, puis relancé d'un clic.
+        harness.get_by_label("Vide : « Au pool » sur un effet en cours l'enregistre ici.");
+        harness.get_all_by_label("Au pool").next().unwrap().click();
+        harness.run_steps(2);
+        assert!(harness.state().file.dirty, "Mes effets sont enregistrés dans le show");
+        harness.get_by_label("1 Chenillard").click_secondary();
+        harness.run_steps(2);
+        let name = harness.get_by_role_and_label(Role::TextInput, "Nom");
+        name.focus();
+        name.type_text(" court");
+        harness.run_steps(1);
+        harness.get_by_label("Renommer").click();
+        harness.run_steps(2);
+        let pool = &harness.state().console.show.effect_pool;
+        assert_eq!((pool[&1].name.as_str(), pool[&1].lines[0].duty, pool[&1].fade_out), ("Chenillard court", 20.0, 2.0));
+        harness.get_by_label("1 Chenillard court").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.programmer_effects().len(), 3);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("effects-pool.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("effects-duty-random.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");

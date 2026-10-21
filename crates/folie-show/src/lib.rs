@@ -66,6 +66,9 @@ pub struct Show {
     pub pages: BTreeMap<u32, String>,
     /// Battements par minute, pour les effets calés sur le tempo.
     pub tempo: f32,
+    /// Effets enregistrés par l'utilisateur (« Mes effets »), sans cibles : on les relance
+    /// sur la sélection du moment.
+    pub effect_pool: BTreeMap<u32, Effect>,
 }
 
 impl Default for Show {
@@ -78,6 +81,7 @@ impl Default for Show {
             executors: BTreeMap::new(),
             pages: BTreeMap::new(),
             tempo: DEFAULT_TEMPO,
+            effect_pool: BTreeMap::new(),
         }
     }
 }
@@ -129,6 +133,14 @@ struct ShowFile {
     pages: BTreeMap<String, String>,
     #[serde(default = "default_tempo")]
     tempo: f32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    effect_pool: Vec<PoolEffectEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PoolEffectEntry {
+    number: u32,
+    effect: EffectEntry,
 }
 
 fn default_tempo() -> f32 {
@@ -439,6 +451,11 @@ pub fn to_json(show: &Show) -> String {
         executors,
         pages: show.pages.iter().map(|(n, name)| (n.to_string(), name.clone())).collect(),
         tempo: show.tempo,
+        effect_pool: show
+            .effect_pool
+            .iter()
+            .map(|(number, effect)| PoolEffectEntry { number: *number, effect: EffectEntry::from_effect(effect) })
+            .collect(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -610,8 +627,19 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         }
     }
 
+    let mut effect_pool = BTreeMap::new();
+    for entry in file.effect_pool {
+        match entry.effect.into_template() {
+            Some(effect) => {
+                effect_pool.insert(entry.number, effect);
+            }
+            None => warnings.push(format!("Effet {} du pool : illisible, retiré", entry.number)),
+        }
+    }
+
     let tempo = file.tempo.clamp(1.0, 999.0);
-    Ok(Loaded { show: Show { patch, groups, presets, sequences, executors, pages, tempo }, warnings })
+    let show = Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool };
+    Ok(Loaded { show, warnings })
 }
 
 /// Fiche à utiliser pour chaque type du show : la copie embarquée en priorité,
@@ -795,7 +823,11 @@ mod tests {
             ),
         ]);
         let pages = BTreeMap::from([(2, "Acte 2".to_string())]);
-        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0 }
+        let mut ballet = effects::templates()[3].clone();
+        ballet.name = "Ballet".into();
+        ballet.spread = 180.0;
+        let effect_pool = BTreeMap::from([(2, ballet)]);
+        Show { patch, groups, presets, sequences, executors, pages, tempo: 98.0, effect_pool }
     }
 
     fn summary(show: &Show) -> Vec<(u32, String, String, u16)> {
@@ -823,6 +855,7 @@ mod tests {
         assert_eq!(loaded.show.sequences, show.sequences);
         assert_eq!(loaded.show.executors, show.executors);
         assert_eq!(loaded.show.pages, show.pages);
+        assert_eq!(loaded.show.effect_pool, show.effect_pool);
         assert_eq!(loaded.show.tempo, 98.0);
         // L'écriture atomique ne laisse rien derrière elle.
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
