@@ -1304,4 +1304,36 @@ mod tests {
         distinct.dedup();
         assert!(distinct.len() > 1, "chaque projecteur tire sa valeur : {levels:?}");
     }
+
+    #[test]
+    fn one_effect_stops_in_a_cue_the_others_go_on() {
+        let mut c = console();
+        let cue = |n: u32| folie_show::CueNumber::whole(n);
+        run(&mut c, "Fixture 1 Thru 4 At 50");
+        run(&mut c, "Effect 3"); // Vague
+        run(&mut c, "Effect 4"); // Cercle
+        run(&mut c, "Store Cue 1 Fade 0");
+        run(&mut c, "ClearAll");
+        for n in [2, 3] {
+            run(&mut c, "Fixture 1 At 80");
+            run(&mut c, &format!("Store Cue {n} Fade 0"));
+            run(&mut c, "ClearAll");
+        }
+        let names = |c: &Console, n: u32| c.cue_effects(cue(n)).unwrap().into_iter().map(|e| (e.name, e.here, e.stopped)).collect::<Vec<_>>();
+        assert_eq!(names(&c, 1), [("Vague".to_string(), true, false), ("Cercle".to_string(), true, false)]);
+        assert_eq!(names(&c, 2), [("Vague".to_string(), false, false), ("Cercle".to_string(), false, false)]);
+
+        // Le Cercle s'arrête dans la cue 2 ; la Vague continue, avec le même identifiant.
+        assert_eq!(c.set_effect_stopped(cue(2), cue(1), 1, true).unwrap().message, "Cue 2 : effet « Cercle » arrêté");
+        let played = crate::cues::playback_data(&c.show);
+        let ids = |cue: usize| played[&1][cue].effects.iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(1).len(), 1);
+        assert_eq!(ids(1)[0], ids(0)[0], "la Vague garde sa phase");
+        assert_eq!(ids(2), ids(1), "l'arrêt se suit dans la cue 3");
+        assert_eq!(names(&c, 2)[1], ("Cercle".to_string(), false, true));
+        assert!(c.set_effect_stopped(cue(1), cue(1), 0, true).is_err(), "un effet lancé ici ne se suit pas");
+
+        c.set_effect_stopped(cue(2), cue(1), 1, false).unwrap();
+        assert_eq!(crate::cues::playback_data(&c.show)[&1][1].effects.len(), 2, "repris");
+    }
 }

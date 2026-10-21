@@ -1284,6 +1284,48 @@ mod tests {
     }
 
     #[test]
+    fn one_effect_stops_from_the_cue_menu() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Cues,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(620.0, 480.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1000.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 Thru 2 At 50");
+        command(&mut harness, "Effect 3");
+        command(&mut harness, "Effect 4");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Ouverture""#);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 80");
+        command(&mut harness, r#"Store Cue 2 Fade 0 "Suite""#);
+        command(&mut harness, "ClearAll");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1); // ferme le Patch
+        harness.run_steps(2);
+
+        harness.get_by_label("Suite").click_secondary();
+        harness.run_steps(2);
+        assert_eq!(harness.get_all_by_label("suivi depuis la cue 1").count(), 2, "Vague et Cercle");
+        harness.get_all_by_label("Arrêter ici").nth(1).unwrap().click(); // le Cercle
+        harness.run_steps(2);
+        let stopped = |h: &Harness<'_, FolieApp>| {
+            h.state().console.show.sequences[&1].cues[&folie_show::CueNumber::whole(2)].stopped_effects.clone()
+        };
+        assert_eq!(stopped(&harness).into_iter().collect::<Vec<_>>(), [(folie_show::CueNumber::whole(1), 1)]);
+        harness.get_by_label("arrêté ici");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("cue-effects.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Reprendre").click();
+        harness.run_steps(2);
+        assert!(stopped(&harness).is_empty());
+    }
+
+    #[test]
     fn transition_bar_shows_delay_without_moving_the_layout() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

@@ -3,7 +3,7 @@
 //! Une cue ne mémorise que ce qui change (tracking) : son état complet se
 //! déduit des cues précédentes. Ce calcul est fait par la console.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use folie_fixture::{FeatureGroup, FixtureId};
 
@@ -99,6 +99,9 @@ pub struct Cue {
     pub family_times: BTreeMap<FeatureGroup, ParamTiming>,
     /// Temps propres d'un paramètre d'une fixture : ils l'emportent sur ceux de sa famille.
     pub param_times: BTreeMap<FixtureId, BTreeMap<String, ParamTiming>>,
+    /// Effets suivis qui s'arrêtent dans cette cue, chacun désigné par la cue qui l'a
+    /// lancé et sa place dans la liste de cette cue. Les autres continuent.
+    pub stopped_effects: BTreeSet<(CueNumber, usize)>,
 }
 
 impl Cue {
@@ -111,6 +114,7 @@ impl Cue {
             effects: None,
             family_times: BTreeMap::new(),
             param_times: BTreeMap::new(),
+            stopped_effects: BTreeSet::new(),
         }
     }
 

@@ -487,6 +487,10 @@ fn cue_contents(cue: &Cue) -> String {
         Some(effects) if effects.is_empty() => parts.push("effets arrêtés".into()),
         Some(effects) => parts.push(count(effects.len(), "effet")),
     }
+    if !cue.stopped_effects.is_empty() {
+        let n = cue.stopped_effects.len();
+        parts.push(format!("{} arrêté{}", count(n, "effet"), if n > 1 { "s" } else { "" }));
+    }
     if parts.is_empty() { "vide".into() } else { parts.join(" · ") }
 }
 
@@ -604,6 +608,39 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
             action = Some(console.unblock_cue(number));
         }
     });
+    // Effets actifs dans la cue : un effet suivi peut s'arrêter ici, sans les autres.
+    let effects = console.cue_effects(number).unwrap_or_default();
+    if !effects.is_empty() {
+        ui.separator();
+        theme::section(ui, "Effets");
+        egui::Grid::new(("cue-effects", number)).num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+            for effect in &effects {
+                let name = RichText::new(&effect.name).color(if effect.stopped { theme::MUTED } else { theme::EFFECT });
+                ui.add(egui::Label::new(if effect.stopped { name.strikethrough() } else { name }).selectable(false));
+                let status = if effect.here {
+                    "lancé ici".to_string()
+                } else if effect.stopped {
+                    "arrêté ici".to_string()
+                } else {
+                    format!("suivi depuis la cue {}", effect.origin)
+                };
+                ui.add(egui::Label::new(RichText::new(status).size(11.5).color(theme::MUTED)).selectable(false));
+                if effect.here {
+                    ui.label("");
+                } else {
+                    let (text, help) = if effect.stopped {
+                        ("Reprendre", format!("« {} » continue dans la cue {number}", effect.name))
+                    } else {
+                        ("Arrêter ici", format!("Arrêter « {} » dans la cue {number}, sans les autres effets", effect.name))
+                    };
+                    if ui.button(text).on_hover_text(help).clicked() {
+                        action = Some(console.set_effect_stopped(number, effect.origin, effect.index, !effect.stopped));
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    }
     let families = cue_families(console, cue);
     if !families.is_empty() {
         ui.separator();

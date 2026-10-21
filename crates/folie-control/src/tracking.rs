@@ -71,22 +71,20 @@ impl Console {
         let cues: Vec<(CueNumber, String)> = sequence.cues.iter().map(|(n, c)| (*n, c.name.clone())).collect();
 
         // Paramètres animés par les effets en cours dans chaque cue (les effets se suivent aussi).
-        let mut animated: Vec<BTreeSet<(FixtureId, String)>> = Vec::new();
-        let mut current = BTreeSet::new();
-        for cue in sequence.cues.values() {
-            if let Some(effects) = &cue.effects {
-                current = effects
-                    .iter()
-                    .flat_map(|e| crate::effects::instance(e, 0, patch).lines)
+        let animated: Vec<BTreeSet<(FixtureId, String)>> = crate::cues::effects_by_cue(sequence)
+            .into_iter()
+            .map(|active| {
+                active
+                    .into_iter()
+                    .flat_map(|(_, _, e)| crate::effects::instance(e, 0, patch).lines)
                     .flat_map(|line| line.params.into_iter().map(|(key, _)| key))
                     .filter_map(|key| {
                         let fixture = patch.get(key.fixture)?;
                         Some((key.fixture, fixture.mode().parameters.get(key.parameter)?.name.clone()))
                     })
-                    .collect();
-            }
-            animated.push(current.clone());
-        }
+                    .collect()
+            })
+            .collect();
 
         // Parcours des cues : la dernière valeur de chaque paramètre et la cue d'où elle vient.
         let mut held: BTreeMap<(FixtureId, String), TrackedValue> = BTreeMap::new();

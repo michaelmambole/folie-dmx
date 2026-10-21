@@ -31,9 +31,42 @@ fn cue_effect_id(executor: u32, origin: usize, index: usize) -> u64 {
     ((executor as u64) << 40) | ((origin as u64) << 16) | index as u64
 }
 
+/// Effet actif dans une cue : position de la cue qui l'a lancé, sa place dans la liste de
+/// cette cue, et l'effet.
+pub type ActiveEffect<'a> = (usize, usize, &'a Effect);
+
+/// Effets actifs dans chaque cue, suivi compris : ceux d'une cue qui en enregistre
+/// remplacent les précédents, et une cue peut en arrêter un seul.
+pub fn effects_by_cue(sequence: &Sequence) -> Vec<Vec<ActiveEffect<'_>>> {
+    let numbers: Vec<CueNumber> = sequence.cues.keys().copied().collect();
+    let mut current: Vec<ActiveEffect<'_>> = Vec::new();
+    let mut all = Vec::new();
+    for (position, cue) in sequence.cues.values().enumerate() {
+        if let Some(list) = &cue.effects {
+            current = list.iter().enumerate().map(|(i, e)| (position, i, e)).collect();
+        }
+        current.retain(|(origin, index, _)| !cue.stopped_effects.contains(&(numbers[*origin], *index)));
+        all.push(current.clone());
+    }
+    all
+}
+
+/// Effet tel que le menu d'une cue le montre.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CueEffect {
+    /// Cue qui l'a lancé, et sa place dans la liste de cette cue.
+    pub origin: CueNumber,
+    pub index: usize,
+    pub name: String,
+    /// Lancé dans cette cue même.
+    pub here: bool,
+    /// Suivi, mais arrêté dans cette cue.
+    pub stopped: bool,
+}
+
 /// État complet de chaque cue : ce qu'elle change, plus tout ce qui est hérité
 /// des cues précédentes (tracking). `Release` retire un paramètre. Les effets
-/// continuent jusqu'à ce qu'une cue en enregistre d'autres.
+/// continuent jusqu'à ce qu'une cue en enregistre d'autres ou les arrête.
 pub fn tracked_states(
     executor: u32,
     sequence: &Sequence,
@@ -41,12 +74,9 @@ pub fn tracked_states(
     presets: &BTreeMap<(FeatureGroup, u32), Preset>,
 ) -> Vec<CueState> {
     let mut state: HashMap<ParamKey, u16> = HashMap::new();
-    let mut effects: (usize, Vec<Effect>) = (0, Vec::new());
+    let effects = effects_by_cue(sequence);
     let mut states = Vec::new();
     for (position, (number, cue)) in sequence.cues.iter().enumerate() {
-        if let Some(list) = &cue.effects {
-            effects = (position, list.clone());
-        }
         for (fixture, parameters) in &cue.values {
             let Some(patched) = patch.get(*fixture) else { continue };
             for (name, value) in parameters {
@@ -73,11 +103,10 @@ pub fn tracked_states(
             })
             .collect();
         let label = if cue.name.is_empty() { number.to_string() } else { format!("{number} {}", cue.name) };
-        let (origin, list) = &effects;
-        let instances = list
+        // Même identifiant d'une cue à l'autre : un effet suivi continue sans repartir de zéro.
+        let instances = effects[position]
             .iter()
-            .enumerate()
-            .map(|(i, e)| crate::effects::instance(e, cue_effect_id(executor, *origin, i), patch))
+            .map(|(origin, i, e)| crate::effects::instance(e, cue_effect_id(executor, *origin, *i), patch))
             .collect();
         states.push(CueState { label, values: state.clone(), fade: cue.fade, delay: cue.delay, times, effects: instances });
     }
@@ -410,6 +439,63 @@ impl Console {
         }
         self.sync_playback();
         Ok(Outcome::changed(format!("Cue {number} : {parameter} de la fixture {fixture} retiré")))
+    }
+
+    /// Effets actifs dans une cue (lancés ici ou suivis), y compris ceux qu'elle arrête.
+    pub fn cue_effects(&self, number: CueNumber) -> Result<Vec<CueEffect>, CommandError> {
+        let Some((_, sequence)) = self.selected_sequence() else { return invalid("aucune séquence") };
+        let Some(position) = sequence.cues.keys().position(|n| *n == number) else {
+            return invalid(format!("la cue {number} n'existe pas"));
+        };
+        let numbers: Vec<CueNumber> = sequence.cues.keys().copied().collect();
+        let cue = &sequence.cues[&number];
+        let info = |(origin, index, effect): ActiveEffect<'_>, stopped: bool| CueEffect {
+            origin: numbers[origin],
+            index,
+            name: effect.name.clone(),
+            here: origin == position,
+            stopped,
+        };
+        let effects = effects_by_cue(sequence);
+        Ok(match &cue.effects {
+            // La cue lance ses propres effets : ceux d'avant sont remplacés.
+            Some(list) => list.iter().enumerate().map(|(i, e)| info((position, i, e), false)).collect(),
+            None => position
+                .checked_sub(1)
+                .map(|before| effects[before].clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|active| {
+                    let stopped = cue.stopped_effects.contains(&(numbers[active.0], active.1));
+                    info(active, stopped)
+                })
+                .collect(),
+        })
+    }
+
+    /// Arrête (ou reprend) dans une cue un effet suivi, sans toucher aux autres.
+    pub fn set_effect_stopped(
+        &mut self,
+        number: CueNumber,
+        origin: CueNumber,
+        index: usize,
+        stopped: bool,
+    ) -> Result<Outcome, CommandError> {
+        let name = self
+            .cue_effects(number)?
+            .into_iter()
+            .find(|e| e.origin == origin && e.index == index && !e.here)
+            .map(|e| e.name)
+            .ok_or_else(|| CommandError::Invalid(format!("la cue {number} ne suit pas cet effet")))?;
+        let cue = self.selected_sequence_mut()?.cues.get_mut(&number).expect("vérifiée par cue_effects");
+        if stopped {
+            cue.stopped_effects.insert((origin, index));
+        } else {
+            cue.stopped_effects.remove(&(origin, index));
+        }
+        self.sync_playback();
+        let verb = if stopped { "arrêté" } else { "repris" };
+        Ok(Outcome::changed(format!("Cue {number} : effet « {name} » {verb}")))
     }
 
     /// Valeurs que la cue `number` reçoit des cues précédentes (tracking), sans les siennes.

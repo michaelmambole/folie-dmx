@@ -161,6 +161,15 @@ struct CueEntry {
     /// Fixture -> paramètre -> temps propres.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     param_times: BTreeMap<String, BTreeMap<String, TimingEntry>>,
+    /// Effets suivis arrêtés dans cette cue : la cue qui les a lancés et leur place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    stopped_effects: Vec<StoppedEffectEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoppedEffectEntry {
+    cue: String,
+    index: usize,
 }
 
 /// Temps propres dans le fichier ; un temps absent est celui de la cue.
@@ -401,6 +410,11 @@ pub fn to_json(show: &Show) -> String {
                             (id.to_string(), params.iter().map(|(p, t)| (p.clone(), TimingEntry::from_timing(t))).collect())
                         })
                         .collect(),
+                    stopped_effects: cue
+                        .stopped_effects
+                        .iter()
+                        .map(|(origin, index)| StoppedEffectEntry { cue: origin.to_string(), index: *index })
+                        .collect(),
                 })
                 .collect(),
         })
@@ -521,6 +535,11 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
                 effects,
                 family_times: BTreeMap::new(),
                 param_times: BTreeMap::new(),
+                stopped_effects: cue_entry
+                    .stopped_effects
+                    .iter()
+                    .filter_map(|s| Some((s.cue.parse::<CueNumber>().ok()?, s.index)))
+                    .collect(),
             };
             for (family, timing) in cue_entry.family_times {
                 match FeatureGroup::from_key(&family) {
@@ -718,7 +737,9 @@ mod tests {
             .or_default()
             .insert("Pan".into(), ParamTiming { fade: Some(6.0), delay: Some(1.0) });
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
-        cues.insert("1.5".parse().unwrap(), Cue::new("Noir".into()));
+        let mut black = Cue::new("Noir".into());
+        black.stopped_effects.insert((CueNumber::whole(1), 1)); // le cercle s'arrête, la vague continue
+        cues.insert("1.5".parse().unwrap(), black);
         let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
         let executors = BTreeMap::from([
             (1, Executor::new(1)),
