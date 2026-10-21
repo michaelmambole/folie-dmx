@@ -998,6 +998,62 @@ mod tests {
             let path = std::path::Path::new(&dir).join("effects-relative.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+        // La plage du Pan à la souris : poignée droite, bande entière, Option pour la symétrie.
+        let bar = harness.get_all_by_label("Plage -10 à +10 % autour de la valeur").next().unwrap().rect();
+        let x = |v: f32| bar.left() + bar.width() * (v + 100.0) / 200.0;
+        let y = bar.center().y;
+        let gesture = |h: &mut Harness<'_, FolieApp>, from: f32, to: f32, modifiers: egui::Modifiers| {
+            h.hover_at(egui::pos2(from, y));
+            h.run_steps(1);
+            let press = |x: f32, pressed| egui::Event::PointerButton {
+                pos: egui::pos2(x, y),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            h.event_modifiers(press(from, true), modifiers);
+            h.run_steps(1);
+            for i in 1..=8 {
+                h.event_modifiers(egui::Event::PointerMoved(egui::pos2(from + (to - from) * i as f32 / 8.0, y)), modifiers);
+                h.run_steps(1);
+            }
+            h.event_modifiers(press(to, false), modifiers);
+            h.run_steps(2);
+        };
+        let pan = |h: &Harness<'_, FolieApp>| {
+            let line = &h.state().console.programmer_effects()[0].lines[0];
+            (line.low, line.high)
+        };
+        gesture(&mut harness, x(10.0), x(30.0), egui::Modifiers::NONE);
+        assert_eq!(pan(&harness), (-10.0, 30.0), "seule la poignée droite a bougé");
+        gesture(&mut harness, x(0.0), x(-20.0), egui::Modifiers::NONE);
+        assert_eq!(pan(&harness), (-30.0, 10.0), "la bande entière, même largeur");
+        gesture(&mut harness, x(10.0), x(20.0), egui::Modifiers::ALT);
+        assert_eq!(pan(&harness), (-40.0, 20.0), "symétrique autour du centre de la bande (-10)");
+        gesture(&mut harness, x(80.0), x(80.0), egui::Modifiers::NONE);
+        assert_eq!(pan(&harness), (-40.0, 20.0), "un clic dans le vide ne fait rien");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            // Pendant un glissé de la poignée droite : la valeur s'affiche au-dessus.
+            let hold = |x: f32, pressed| egui::Event::PointerButton {
+                pos: egui::pos2(x, y),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            harness.hover_at(egui::pos2(x(20.0), y));
+            harness.run_steps(1);
+            harness.event(hold(x(20.0), true));
+            harness.run_steps(1);
+            for i in 1..=6 {
+                harness.hover_at(egui::pos2(x(20.0 + 4.0 * i as f32), y));
+                harness.run_steps(1);
+            }
+            let path = std::path::Path::new(&dir).join("range-drag.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+            harness.event(hold(x(44.0), false));
+            harness.run_steps(2);
+        }
+
         // Le Pan repasse en absolu : de 0 à 100 %.
         harness.get_all_by_label("Absolu").next().unwrap().click();
         harness.run_steps(2);

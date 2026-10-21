@@ -114,45 +114,136 @@ fn pool_menu(ui: &mut egui::Ui, console: &mut Console, number: u32, name: &str) 
     action
 }
 
-/// Plage basse–haute d'une ligne : bande violette dont on glisse le bord le plus proche.
-/// De 0 à 100 %, ou de −100 à +100 % autour de la valeur en cours (trait blanc) pour une
+/// Ce que l'on tient pendant un glissé sur la plage.
+#[derive(Clone, Copy, PartialEq)]
+enum Grip {
+    Low,
+    High,
+    Band,
+}
+
+/// Geste en cours sur une plage : ce qui est tenu, et la plage au début du geste.
+#[derive(Clone, Copy)]
+struct RangeDrag {
+    grip: Grip,
+    low: f32,
+    high: f32,
+    start_x: f32,
+}
+
+/// Plage basse–haute d'une ligne : bande violette avec une poignée à chaque bord.
+/// Glisser une poignée déplace ce bord, glisser la bande la décale sans changer sa largeur,
+/// Option-glisser une poignée élargit la bande de façon symétrique ; un clic ne fait rien.
+/// De 0 à 100 %, ou de −100 à +100 % autour de la valeur en cours (trait gris) pour une
 /// ligne relative. Renvoie `true` si la plage a changé.
 fn range_bar(ui: &mut egui::Ui, id: egui::Id, low: &mut f32, high: &mut f32, relative: bool, width: f32) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 14.0), Sense::click_and_drag());
+    const GRIP: f32 = 6.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), Sense::drag());
+    let track = egui::Rect::from_center_size(rect.center(), vec2(rect.width(), 14.0));
     let min = if relative { -100.0 } else { 0.0 };
-    let value_at = |x: f32| (min + (x - rect.left()) / rect.width() * (100.0 - min)).clamp(min, 100.0);
-    let x_of = |v: f32| rect.left() + rect.width() * (v - min) / (100.0 - min);
-    let mut changed = false;
-    if let Some(pos) = response.interact_pointer_pos() {
-        // Bord saisi au début du geste : on le garde jusqu'au relâchement.
-        let edge_is_high = if response.drag_started() || response.clicked() {
-            let v = value_at(pos.x);
-            let high_edge = (v - *high).abs() < (v - *low).abs();
-            ui.data_mut(|d| d.insert_temp(id, high_edge));
-            high_edge
+    let span = 100.0 - min;
+    let x_of = |v: f32| track.left() + track.width() * (v - min) / span;
+    let value_per_point = span / track.width();
+    let near = |x: f32, v: f32| (x - x_of(v)).abs() <= GRIP;
+    let grip_at = |x: f32, low: f32, high: f32| {
+        if near(x, high) && (x >= x_of(high) || !near(x, low)) {
+            Some(Grip::High)
+        } else if near(x, low) {
+            Some(Grip::Low)
+        } else if x > x_of(low) && x < x_of(high) {
+            Some(Grip::Band)
         } else {
-            ui.data_mut(|d| d.get_temp::<bool>(id)).unwrap_or(true)
+            None
+        }
+    };
+
+    let mut changed = false;
+    if response.drag_started()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        match grip_at(pos.x, *low, *high) {
+            Some(grip) => {
+                ui.data_mut(|d| d.insert_temp(id, RangeDrag { grip, low: *low, high: *high, start_x: pos.x }));
+            }
+            None => ui.data_mut(|d| d.remove::<RangeDrag>(id)),
+        }
+    }
+    let drag = ui.data_mut(|d| d.get_temp::<RangeDrag>(id)).filter(|_| response.dragged());
+    if let (Some(drag), Some(pos)) = (drag, response.interact_pointer_pos()) {
+        let delta = ((pos.x - drag.start_x) * value_per_point).round();
+        let symmetric = ui.input(|i| i.modifiers.alt);
+        let (new_low, new_high) = match drag.grip {
+            Grip::Band => {
+                // Décalée en entier, sans sortir de la barre.
+                let delta = delta.clamp(min - drag.low, 100.0 - drag.high);
+                (drag.low + delta, drag.high + delta)
+            }
+            Grip::High if symmetric => {
+                let center = (drag.low + drag.high) / 2.0;
+                let half = (drag.high + delta - center).max(0.0).min(100.0 - center).min(center - min);
+                (center - half, center + half)
+            }
+            Grip::Low if symmetric => {
+                let center = (drag.low + drag.high) / 2.0;
+                let half = (center - (drag.low + delta)).max(0.0).min(100.0 - center).min(center - min);
+                (center - half, center + half)
+            }
+            Grip::High => (drag.low, (drag.high + delta).clamp(drag.low, 100.0)),
+            Grip::Low => ((drag.low + delta).clamp(min, drag.high), drag.high),
         };
-        let v = value_at(pos.x).round();
-        let target = if edge_is_high { &mut *high } else { &mut *low };
-        if *target != v {
-            *target = v;
+        if (new_low, new_high) != (*low, *high) {
+            (*low, *high) = (new_low, new_high);
             changed = true;
         }
     }
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<RangeDrag>(id));
+    }
+
+    // Curseur : flèche gauche-droite sur une poignée, main sur la bande.
+    let held = drag.map(|d| d.grip);
+    let hovered = response.hover_pos().and_then(|p| grip_at(p.x, *low, *high));
+    match held.or(hovered) {
+        Some(Grip::Low | Grip::High) => ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal),
+        Some(Grip::Band) if held.is_some() => ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing),
+        Some(Grip::Band) => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
+        None => {}
+    }
+
     let painter = ui.painter();
-    painter.rect_filled(rect, 3.0, theme::SURFACE_2);
-    let (a, b) = (low.min(*high), low.max(*high));
-    let band = egui::Rect::from_x_y_ranges(x_of(a)..=x_of(b), rect.y_range());
-    painter.rect_filled(band, 3.0, theme::EFFECT.gamma_multiply(0.55));
+    painter.rect_filled(track, 3.0, theme::SURFACE_2);
+    let band = egui::Rect::from_x_y_ranges(x_of(*low)..=x_of(*high), track.y_range());
+    painter.rect_filled(band, 3.0, theme::EFFECT.gamma_multiply(0.45));
     if relative {
         // La valeur en cours, au centre : l'effet tourne autour.
-        let center = egui::Rect::from_center_size(egui::pos2(x_of(0.0), rect.center().y), vec2(2.0, rect.height() + 6.0));
-        painter.rect_filled(center, 1.0, theme::TEXT);
+        let center = egui::Rect::from_center_size(egui::pos2(x_of(0.0), track.center().y), vec2(2.0, track.height() + 6.0));
+        painter.rect_filled(center, 1.0, theme::MUTED);
     }
-    if response.hovered() || response.dragged() {
-        painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::MUTED), egui::StrokeKind::Inside);
+    for (value, grip) in [(*low, Grip::Low), (*high, Grip::High)] {
+        let active = held == Some(grip) || (held.is_none() && hovered == Some(grip));
+        let handle = egui::Rect::from_center_size(egui::pos2(x_of(value), rect.center().y), vec2(8.0, 20.0));
+        painter.rect_filled(handle, 3.0, if active { egui::Color32::WHITE } else { theme::TEXT });
+        painter.rect_stroke(handle, 3.0, egui::Stroke::new(1.0, theme::EFFECT), egui::StrokeKind::Inside);
     }
+
+    // Pendant le glissé, la valeur au-dessus de ce que l'on tient.
+    if let Some(grip) = held {
+        let sign = |v: f32| if relative { format!("{v:+}") } else { format!("{v}") };
+        let (text, x) = match grip {
+            Grip::Low => (format!("{} %", sign(*low)), x_of(*low)),
+            Grip::High => (format!("{} %", sign(*high)), x_of(*high)),
+            Grip::Band => (format!("{} à {} %", sign(*low), sign(*high)), (x_of(*low) + x_of(*high)) / 2.0),
+        };
+        let layer = egui::LayerId::new(egui::Order::Tooltip, id.with("valeur"));
+        let painter = ui.ctx().layer_painter(layer);
+        let galley = painter.layout_no_wrap(text, egui::FontId::monospace(11.0), theme::TEXT);
+        let tip = egui::Rect::from_center_size(egui::pos2(x, rect.top() - 10.0), galley.size() + vec2(8.0, 2.0));
+        painter.rect_filled(tip, 4.0, theme::SURFACE_3);
+        painter.rect_stroke(tip, 4.0, egui::Stroke::new(1.0, theme::LINE), egui::StrokeKind::Inside);
+        painter.galley(tip.min + vec2(4.0, 1.0), galley, theme::TEXT);
+    }
+
+    let (a, b) = (*low, *high);
     let text = if relative { format!("Plage {a:+.0} à {b:+.0} % autour de la valeur") } else { format!("Plage {a:.0}–{b:.0} %") };
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, &text));
     changed
