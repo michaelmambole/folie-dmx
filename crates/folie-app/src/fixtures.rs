@@ -190,7 +190,8 @@ impl FixturesView {
             let text = format!("{} × {footprint} = {total} canaux", form.quantity);
             ui.label(RichText::new(text).size(11.5).color(theme::MUTED));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                patch_clicked = ui.add(theme::primary_button("Patcher")).clicked();
+                let button = theme::primary_button("Patcher").min_size(egui::vec2(110.0, 28.0));
+                patch_clicked = ui.add(button).on_hover_text("Ajouter ces fixtures au patch").clicked();
             });
         });
 
@@ -199,7 +200,8 @@ impl FixturesView {
         }
         match self.add_fixtures(&fixture_type, patch) {
             Ok(ids) => {
-                self.message = Some((true, format!("{} fixture(s) patchée(s)", ids.len())));
+                let plural = if ids.len() > 1 { "s" } else { "" };
+                self.message = Some((true, format!("{} fixture{plural} patchée{plural}", ids.len())));
                 self.form.first_id = patch.next_free_id().0;
                 Some(ids)
             }

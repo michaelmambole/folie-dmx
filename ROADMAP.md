@@ -65,6 +65,8 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Logo « Folie » (le « l » et le « i » en jauges, point rouge), icône « li » de l'application et de la télécommande
 - [x] Barre du haut en trois zones (show et menus, touches STORE / CLEAR / BLACKOUT, pastilles d'état),
       ligne de commande `Folie>`, barre d'état réduite à l'essentiel, fenêtre « À propos »
+- [x] Accueil sans sélection (logo, prochaine étape, raccourcis des fenêtres et des touches),
+      cases libres des pools en simple contour, touche Patcher plus visible
 - [x] Executors vides discrets : numéro atténué, rail en pointillés et « vide », sans touches ni fader
 - [x] Gélatines Lee et Rosco (environ 95 références courantes, teintes approchées) dans le sélecteur de couleur
 

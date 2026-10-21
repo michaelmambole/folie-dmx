@@ -21,6 +21,7 @@ use crate::theme;
 mod about;
 mod file;
 mod remote;
+mod welcome;
 mod windows;
 
 /// Rafraîchissement de l'interface : largement suffisant pour suivre le moteur à 44 Hz.
@@ -433,7 +434,11 @@ impl eframe::App for FolieApp {
             self.mark_dirty();
         }
         egui::CentralPanel::default().show(ui, |ui| {
-            self.fixtures_view.attribute_panel(ui, &mut self.console, &self.snapshot, self.display);
+            if self.console.selection().is_empty() {
+                self.welcome(ui);
+            } else {
+                self.fixtures_view.attribute_panel(ui, &mut self.console, &self.snapshot, self.display);
+            }
         });
         self.show_windows(&ctx);
 
@@ -819,7 +824,9 @@ mod tests {
         harness.get_by_label("Fenêtres").click();
         harness.run_steps(2);
         // L'entrée du menu porte aussi son raccourci : « Groupes ⌘2 ».
-        harness.get(By::new().role(Role::Button).label_contains("Groupes")).click();
+        // (l'accueil a aussi un lien « Groupes », plus bas dans la fenêtre).
+        let menu_entry = harness.get_all(By::new().role(Role::Button).label_contains("Groupes")).min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y));
+        menu_entry.unwrap().click();
         harness.run_steps(2);
         assert!(!harness.state().windows.workspace.is_open(WindowKind::Groups));
 

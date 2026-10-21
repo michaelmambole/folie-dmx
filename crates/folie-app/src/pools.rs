@@ -410,9 +410,10 @@ fn cell(ui: &mut egui::Ui, number: u32, item: Option<&Item>, armed: bool) -> egu
     let painter = ui.painter_at(rect.expand(1.0));
     let hovered = response.hovered() && enabled;
 
+    // Case libre : un simple contour, la case pleine ressort seule (comme les executors).
     let (fill, stroke) = match item {
         Some(_) => (if hovered { theme::SURFACE_3 } else { theme::SURFACE_2 }, theme::LINE),
-        None => (if hovered { theme::SURFACE_1 } else { theme::BG }, theme::SURFACE_2),
+        None => (if hovered { theme::SURFACE_2 } else { egui::Color32::TRANSPARENT }, theme::SURFACE_2),
     };
     painter.rect_filled(rect, 8.0, fill);
     // Contour : rouge si Store est armé ou si le preset est dans le programmer.

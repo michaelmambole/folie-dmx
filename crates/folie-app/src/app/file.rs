@@ -21,7 +21,7 @@ const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 
 /// Action qui ferait perdre les modifications : on demande d'abord.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Pending {
+pub(super) enum Pending {
     New,
     Open,
     Quit,
@@ -170,7 +170,7 @@ impl FolieApp {
     }
 
     /// Lance l'action, ou demande d'abord quoi faire des modifications en cours.
-    fn request(&mut self, ctx: &egui::Context, action: Pending) {
+    pub(super) fn request(&mut self, ctx: &egui::Context, action: Pending) {
         if self.file.dirty {
             self.file.pending = Some(action);
         } else {
