@@ -11,6 +11,7 @@ avec sortie sur Enttec DMX USB Pro.
 | `crates/folie-fixture` | Modèle de fixtures, import OFL, patch, rendu attributs → DMX |
 | `crates/folie-show` | Fichier de show `.folie` : lecture, écriture atomique |
 | `crates/folie-control` | Console : sélection, groupes, presets, ligne de commande |
+| `crates/folie-audio` | Réaction au son : entrée audio, niveaux par bande, beat, tempo |
 | `crates/folie-remote` | Télécommande web (axum, WebSocket, page embarquée) et OSC |
 | `crates/folie-engine` | Moteur temps réel : thread dédié à ~44 Hz, commandes par canal, état publié |
 | `crates/folie-cli` | Binaire `folie` : diagnostic et tests matériels |
@@ -83,6 +84,14 @@ l'executor sélectionné.
 
 Sur un même ordinateur, Reaper écoute déjà le port 8000 : mettre l'écoute OSC de Folie sur
 un autre port (8001 par exemple), sinon l'un des deux ne démarre pas.
+
+## Réaction au son
+
+Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie
+de Reaper…), le canal, puis **Écouter** (macOS demande l'accès au micro la première fois).
+Réactions par executor, enregistrées dans le show : *Pas sur le beat* (Go tous les N beats),
+*Fader au niveau* (une bande pilote le fader, entre deux bornes), *Flash sur le beat*.
+« Le tempo suit le beat » cale effets et chenillards sur la musique.
 
 ## Tests
 

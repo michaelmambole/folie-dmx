@@ -62,6 +62,9 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Fenêtres Cues, Patch, Effets et Sortie DMX au même niveau visuel
 - [x] Fenêtre Scène (⌘9) : projecteurs en blocs, faisceaux en traits colorés, caméra, sélection au clic
 - [x] Scène : placement des projecteurs à la souris, hauteur, accroche, plan enregistré dans le show
+- [x] Réaction au son (crate `folie-audio`, fenêtre Son) : entrée audio (appareil, canal, gain),
+      niveaux global / graves / médiums / aigus, beat et tempo détectés ; tempo du show qui suit
+      le beat, pas de chenillard, fader au niveau, flash sur le beat (envoyés au moteur depuis le fil audio)
 - [x] Logo « Folie » (le « l » et le « i » en jauges, point rouge), icône « li » de l'application et de la télécommande
 - [x] Barre du haut en trois zones (show et menus, touches STORE / CLEAR / BLACKOUT, pastilles d'état),
       ligne de commande `Folie>`, barre d'état réduite à l'essentiel, fenêtre « À propos »

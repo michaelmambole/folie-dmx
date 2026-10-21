@@ -15,12 +15,13 @@ use folie_control::Console;
 use crate::cmdline::CommandLine;
 use crate::fixtures::FixturesView;
 use crate::pools::PoolsView;
-use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, Storage};
+use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, SoundSettings, Storage};
 use crate::theme;
 
 mod about;
 mod file;
 mod remote;
+mod sound;
 mod welcome;
 mod windows;
 
@@ -123,6 +124,11 @@ pub struct FolieApp {
     addresses: crate::network::AddressCache,
     /// Fenêtre « À propos » ouverte.
     about_open: bool,
+    pub(crate) sound_settings: SoundSettings,
+    /// Entrée audio en marche, et les réactions qu'elle applique.
+    pub(crate) audio: Option<folie_audio::input::AudioInput>,
+    audio_setup: folie_show::sound::SoundSetup,
+    audio_devices: Vec<folie_audio::input::InputDevice>,
     error: Option<String>,
     display: DisplayMode,
     fader_page: usize,
@@ -148,6 +154,7 @@ impl FolieApp {
         let artnet = storage.artnet();
         let remote_settings = storage.remote();
         let osc_settings = storage.osc();
+        let sound_settings = storage.sound();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
             console,
@@ -170,6 +177,10 @@ impl FolieApp {
             osc: None,
             addresses: Default::default(),
             about_open: false,
+            sound_settings,
+            audio: None,
+            audio_setup: Default::default(),
+            audio_devices: Vec::new(),
             error: None,
             display: DisplayMode::Percent,
             fader_page: 0,
@@ -185,6 +196,9 @@ impl FolieApp {
         }
         if app.osc_settings.enabled {
             app.osc_changed(&cc.egui_ctx);
+        }
+        if app.sound_settings.enabled {
+            app.sound_changed();
         }
         app.startup();
         app
@@ -412,6 +426,7 @@ impl eframe::App for FolieApp {
 
         let ctx = ui.ctx().clone();
         self.remote_tick();
+        self.sound_tick();
         self.global_shortcuts(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) {
             self.save_workspace_if_changed(true);
@@ -1814,6 +1829,51 @@ mod tests {
         harness.get_by_label("Fermer").click();
         harness.run_steps(2);
         assert!(!harness.state().about_open);
+    }
+
+    /// Fenêtre Son, sans ouvrir l'entrée audio (pas de micro pendant les tests).
+    #[test]
+    fn sound_window_reactions() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Sound,
+            placement: Placement::at_size(egui::pos2(1500.0, 40.0), egui::vec2(620.0, 620.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2200.0, 1300.0));
+        harness.get_by_label("Aucune : ajoutez-en une pour l'executor sélectionné.");
+        harness.get_by_label("Ajouter une réaction").click();
+        settle(&mut harness);
+        let sound = |h: &Harness<'_, FolieApp>| h.state().console.show.sound.clone();
+        assert_eq!(sound(&harness).reactions, [folie_show::sound::SoundReaction {
+            executor: 1,
+            reaction: folie_show::sound::Reaction::Step { every: 1 },
+        }]);
+        assert!(harness.state().file.dirty, "enregistré dans le show");
+
+        // Pas sur le beat -> Fader au niveau, graves par défaut.
+        // La liste du type de réaction affiche sa valeur, pas un libellé.
+        harness.get(By::new().predicate(|n| n.value().as_deref() == Some("Pas sur le beat"))).click();
+        harness.run_steps(2);
+        harness.get_all_by_label("Fader au niveau").last().unwrap().click();
+        settle(&mut harness);
+        assert!(matches!(
+            sound(&harness).reactions[0].reaction,
+            folie_show::sound::Reaction::Fader { band: folie_show::sound::Band::Bass, .. }
+        ));
+        harness.get_by_label("Le tempo suit le beat").click();
+        settle(&mut harness);
+        assert!(sound(&harness).tempo);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("son.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Retirer cette réaction")).click();
+        settle(&mut harness);
+        assert!(sound(&harness).reactions.is_empty());
+        assert!(harness.state().audio.is_none(), "l'entrée n'a pas été ouverte");
     }
 
     #[test]

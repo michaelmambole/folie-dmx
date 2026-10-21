@@ -33,6 +33,9 @@ struct Settings {
     /// Pilotage OSC.
     #[serde(default)]
     osc: OscSettings,
+    /// Entrée audio pour la réaction au son.
+    #[serde(default)]
+    sound: SoundSettings,
 }
 
 /// Réglages de la sortie Art-Net.
@@ -99,6 +102,24 @@ impl OscSettings {
             .filter(|s| !s.is_empty())
             .map(|s| s.parse().map_err(|_| s.to_string()))
             .collect()
+    }
+}
+
+/// Entrée audio de la réaction au son (les réactions, elles, sont dans le show).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundSettings {
+    pub enabled: bool,
+    /// Nom de l'appareil ; `None` : l'entrée par défaut du système.
+    pub device: Option<String>,
+    /// Canal suivi, à partir de 0 ; `None` : le mélange de tous.
+    pub channel: Option<u16>,
+    pub gain: f32,
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self { enabled: false, device: None, channel: None, gain: 1.0 }
     }
 }
 
@@ -195,6 +216,14 @@ impl Storage {
 
     pub fn set_osc(&self, osc: &OscSettings) {
         self.update_settings(|s| s.osc = osc.clone());
+    }
+
+    pub fn sound(&self) -> SoundSettings {
+        self.settings().sound
+    }
+
+    pub fn set_sound(&self, sound: &SoundSettings) {
+        self.update_settings(|s| s.sound = sound.clone());
     }
 
     pub fn layouts(&self) -> BTreeMap<u8, Layout> {

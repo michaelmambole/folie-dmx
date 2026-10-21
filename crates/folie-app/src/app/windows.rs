@@ -194,7 +194,9 @@ impl FolieApp {
         }
         for kind in WindowKind::ALL {
             // Bascule, comme dans le menu Fenêtres : ouvre si fermée, ferme si ouverte.
-            if consume_digit(ctx, Modifiers::COMMAND, kind.key()) {
+            if let Some(key) = kind.key()
+                && consume_digit(ctx, Modifiers::COMMAND, key)
+            {
                 self.windows.toggle(kind);
             }
         }
@@ -235,9 +237,9 @@ impl FolieApp {
     pub(super) fn windows_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Fenêtres", |ui| {
             for kind in WindowKind::ALL {
-                let shortcut = ui.ctx().format_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, kind.key()));
+                let shortcut = kind.key().map(|key| ui.ctx().format_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, key)));
                 let open = self.windows.workspace.is_open(kind);
-                let button = egui::Button::selectable(open, kind.title()).shortcut_text(shortcut);
+                let button = egui::Button::selectable(open, kind.title()).shortcut_text(shortcut.unwrap_or_default());
                 if ui.add(button).clicked() {
                     self.windows.toggle(kind);
                 }
@@ -466,6 +468,7 @@ impl FolieApp {
                 let result = tracking_ui::tracking_window(ui, &mut self.console, &self.snapshot, self.display);
                 self.report(result);
             }
+            WindowKind::Sound => self.sound_window(ui),
         }
     }
 

@@ -1,0 +1,13 @@
+[package]
+name = "folie-audio"
+description = "Réaction au son : entrée audio, niveaux par bande, beat et tempo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+folie-engine.workspace = true
+folie-show.workspace = true
+crossbeam-channel.workspace = true
+log.workspace = true
+cpal = "0.18"

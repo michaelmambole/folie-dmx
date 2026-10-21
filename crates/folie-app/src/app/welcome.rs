@@ -19,7 +19,8 @@ const KEYS: [(&str, &str); 5] = [
 
 /// « Cmd 1 » pour la fenêtre Patch (la police n'a pas le symbole de la touche Commande).
 fn window_shortcut(kind: WindowKind) -> String {
-    let digit = format!("{:?}", kind.key()).trim_start_matches("Num").to_string();
+    let Some(key) = kind.key() else { return "menu".into() };
+    let digit = format!("{key:?}").trim_start_matches("Num").to_string();
     if cfg!(target_os = "macos") { format!("Cmd {digit}") } else { format!("Ctrl {digit}") }
 }
 

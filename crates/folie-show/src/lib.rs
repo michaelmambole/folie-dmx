@@ -8,6 +8,7 @@
 //! écartée avec un avertissement, le reste du show est chargé.
 
 pub mod cues;
+pub mod sound;
 pub mod effects;
 
 use std::collections::BTreeMap;
@@ -77,6 +78,8 @@ pub struct Show {
     pub macro_executors: BTreeMap<u32, u32>,
     /// Destinations OSC nommées, pour la commande `Osc "Reaper" "/play"` : nom -> « adresse:port ».
     pub osc_destinations: BTreeMap<String, String>,
+    /// Réaction au son : tempo suivi, executors qui réagissent.
+    pub sound: sound::SoundSetup,
 }
 
 /// Une macro : des lignes de commande jouées dans l'ordre ; `Wait 2` attend 2 secondes.
@@ -112,6 +115,7 @@ impl Default for Show {
             macros: BTreeMap::new(),
             macro_executors: BTreeMap::new(),
             osc_destinations: BTreeMap::new(),
+            sound: sound::SoundSetup::default(),
         }
     }
 }
@@ -177,6 +181,8 @@ struct ShowFile {
     /// Nom -> « adresse:port ».
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     osc_destinations: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "sound::SoundSetup::is_empty")]
+    sound: sound::SoundSetup,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -506,6 +512,7 @@ pub fn to_json(show: &Show) -> String {
         macros: show.macros.iter().map(|(n, m)| (n.to_string(), m.clone())).collect(),
         macro_executors: show.macro_executors.iter().map(|(e, m)| (e.to_string(), *m)).collect(),
         osc_destinations: show.osc_destinations.clone(),
+        sound: show.sound.clone(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
 }
@@ -719,8 +726,22 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
 
     let tempo = file.tempo.clamp(1.0, 999.0);
     let osc_destinations = file.osc_destinations;
-    let show =
-        Show { patch, groups, presets, sequences, executors, pages, tempo, effect_pool, stage, macros, macro_executors, osc_destinations };
+    let sound = file.sound;
+    let show = Show {
+        patch,
+        groups,
+        presets,
+        sequences,
+        executors,
+        pages,
+        tempo,
+        effect_pool,
+        stage,
+        macros,
+        macro_executors,
+        osc_destinations,
+        sound,
+    };
     Ok(Loaded { show, warnings })
 }
 
@@ -928,6 +949,16 @@ mod tests {
             macros,
             macro_executors,
             osc_destinations,
+            sound: sound::SoundSetup {
+                tempo: true,
+                reactions: vec![
+                    sound::SoundReaction { executor: 1, reaction: sound::Reaction::Step { every: 2 } },
+                    sound::SoundReaction {
+                        executor: 11,
+                        reaction: sound::Reaction::Fader { band: sound::Band::Bass, min: 0.2, max: 1.0 },
+                    },
+                ],
+            },
         }
     }
 

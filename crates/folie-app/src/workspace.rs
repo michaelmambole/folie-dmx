@@ -17,10 +17,11 @@ pub enum WindowKind {
     Tracking,
     Stage,
     Macros,
+    Sound,
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 10] = [
+    pub const ALL: [WindowKind; 11] = [
         Self::Patch,
         Self::Groups,
         Self::Presets,
@@ -31,6 +32,7 @@ impl WindowKind {
         Self::Tracking,
         Self::Stage,
         Self::Macros,
+        Self::Sound,
     ];
 
     pub fn title(self) -> &'static str {
@@ -45,12 +47,13 @@ impl WindowKind {
             Self::Tracking => "Tracking",
             Self::Stage => "Scène",
             Self::Macros => "Macros",
+            Self::Sound => "Son",
         }
     }
 
-    /// ⌘1, ⌘2… dans l'ordre du menu Fenêtres.
-    pub fn key(self) -> Key {
-        match self {
+    /// ⌘1, ⌘2… dans l'ordre du menu Fenêtres ; les chiffres épuisés, la fenêtre Son n'en a pas.
+    pub fn key(self) -> Option<Key> {
+        Some(match self {
             Self::Patch => Key::Num1,
             Self::Groups => Key::Num2,
             Self::Presets => Key::Num3,
@@ -61,7 +64,8 @@ impl WindowKind {
             Self::Tracking => Key::Num8,
             Self::Stage => Key::Num9,
             Self::Macros => Key::Num0,
-        }
+            Self::Sound => return None,
+        })
     }
 
     pub fn default_size(self) -> Vec2 {
@@ -75,6 +79,7 @@ impl WindowKind {
             Self::Tracking => egui::vec2(760.0, 560.0),
             Self::Stage => egui::vec2(900.0, 560.0),
             Self::Macros => egui::vec2(560.0, 460.0),
+            Self::Sound => egui::vec2(520.0, 560.0),
         }
     }
 }

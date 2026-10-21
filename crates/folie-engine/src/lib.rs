@@ -149,6 +149,11 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    /// Envoi de commandes depuis un autre fil (réaction au son, au plus près du beat).
+    pub fn sender(&self) -> Sender<Command> {
+        self.tx.clone()
+    }
+
     pub fn send(&self, command: Command) {
         // Le canal ne se ferme que si le moteur s'est arrêté : rien à faire de plus.
         let _ = self.tx.send(command);
