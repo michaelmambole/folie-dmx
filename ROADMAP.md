@@ -62,7 +62,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Fenêtres Cues, Patch, Effets et Sortie DMX au même niveau visuel
 - [x] Fenêtre Scène (⌘9) : projecteurs en blocs, faisceaux en traits colorés, caméra, sélection au clic
 - [x] Scène : placement des projecteurs à la souris, hauteur, accroche, plan enregistré dans le show
-- [ ] Gélatines (Lee, Rosco) dans les couleurs rapides
+- [x] Gélatines Lee et Rosco (environ 95 références courantes, teintes approchées) dans le sélecteur de couleur
 
 ## Phase 4 — Cues et executors (≈ 2 à 3 mois, le cœur)
 - [x] Séquences de cues numérotées au millième (1, 1.5…), fondu et délai par cue

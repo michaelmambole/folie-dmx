@@ -9,6 +9,7 @@ pub mod color;
 pub mod command;
 pub mod cues;
 pub mod effects;
+pub mod gels;
 pub mod macros;
 pub mod tracking;
 

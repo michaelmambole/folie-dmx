@@ -1781,5 +1781,28 @@ mod tests {
             let path = std::path::Path::new(&dir).join("color-picker.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+
+        // Gélatines : nuancier Lee par défaut, recherche, puis Rosco.
+        harness.get_by_label("Gélatines").click();
+        harness.run_steps(2);
+        harness.get_by_label("Lee 201 Full C.T. Blue");
+        assert!(harness.query_by_label("Rosco R80 Primary Blue").is_none(), "Lee d'abord");
+        harness.get_by_label("Lee 106 Primary Red").click();
+        settle(&mut harness);
+        assert_eq!((out(&harness, 4), out(&harness, 5), out(&harness, 6)), (240, 0, 0));
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("gelatines.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Rosco").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::TextInput, "Chercher").focus();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Chercher").type_text("r80");
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Rosco R83 Medium Blue").is_none(), "filtré");
+        harness.get_by_label("Rosco R80 Primary Blue").click();
+        settle(&mut harness);
+        assert_eq!((out(&harness, 4), out(&harness, 5), out(&harness, 6)), (0, 80, 255));
     }
 }

@@ -1,8 +1,9 @@
 //! Sélecteur de couleur du Programmer : carré saturation/luminosité, bande de
-//! teinte, couleurs rapides.
+//! teinte, couleurs rapides, gélatines Lee et Rosco.
 
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, Sense, Stroke, vec2};
 use folie_control::color::{hsv_to_rgb, rgb_to_hsv};
+use folie_control::gels::{Brand, GELS, Gel};
 
 use crate::theme;
 
@@ -106,6 +107,65 @@ fn swatch_button(ui: &mut egui::Ui, name: &str, rgb: [f32; 3]) -> bool {
     response.on_hover_text(name).clicked()
 }
 
+/// Case d'une gélatine : sa couleur, sa référence écrite dessus, son nom au survol.
+fn gel_button(ui: &mut egui::Ui, gel: &Gel) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(52.0, 30.0), Sense::click());
+    let rgb = gel.rgb();
+    let painter = ui.painter();
+    painter.rect_filled(rect, 5.0, color(rgb));
+    let stroke = if response.hovered() { Stroke::new(1.5, Color32::WHITE) } else { Stroke::new(1.0, theme::LINE) };
+    painter.rect_stroke(rect, 5.0, stroke, egui::StrokeKind::Inside);
+    // Texte sombre sur les teintes claires, clair sur les foncées.
+    let light = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2] > 0.55;
+    let text = if light { Color32::from_rgb(20, 21, 24) } else { Color32::WHITE };
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, gel.code, egui::FontId::monospace(11.0), text);
+    let label = gel.label();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    response.on_hover_text(gel.label()).clicked()
+}
+
+/// Bouton « Gélatines » : nuancier Lee ou Rosco, recherche par référence ou par nom.
+fn gels_menu(ui: &mut egui::Ui) -> Option<&'static Gel> {
+    let response = ui.button("Gélatines").on_hover_text("Nuanciers Lee et Rosco (teintes approchées)");
+    let id = egui::Id::unique("gels-menu");
+    let (mut brand, mut query) = ui.data_mut(|d| d.get_temp::<(bool, String)>(id)).unwrap_or_default();
+    let mut chosen = None;
+    egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        theme::menu_fields(ui);
+        ui.set_width(6.0 * 56.0);
+        ui.horizontal(|ui| {
+            for b in Brand::ALL {
+                if ui.selectable_label((b == Brand::Rosco) == brand, b.label()).clicked() {
+                    brand = b == Brand::Rosco;
+                }
+            }
+            let label = ui.label(egui::RichText::new("Chercher").color(theme::MUTED));
+            ui.add(egui::TextEdit::singleline(&mut query).hint_text("201, blue…").desired_width(110.0))
+                .labelled_by(label.id)
+                .on_hover_text("Rechercher par référence ou par nom");
+        });
+        ui.add_space(4.0);
+        let selected = if brand { Brand::Rosco } else { Brand::Lee };
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                let mut any = false;
+                for gel in GELS.iter().filter(|g| g.brand == selected && g.matches(&query)) {
+                    any = true;
+                    if gel_button(ui, gel) {
+                        chosen = Some(gel);
+                    }
+                }
+                if !any {
+                    ui.label(egui::RichText::new("Aucune gélatine").color(theme::MUTED));
+                }
+            });
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, (brand, query)));
+    chosen
+}
+
 /// Sélecteur complet. `current` : couleur produite en ce moment par la cible de
 /// référence. Renvoie la couleur choisie quand l'utilisateur en change.
 pub fn color_picker(ui: &mut egui::Ui, hsv: &mut [f32; 3], current: Option<[u8; 3]>) -> Option<[f32; 3]> {
@@ -141,6 +201,12 @@ pub fn color_picker(ui: &mut egui::Ui, hsv: &mut [f32; 3], current: Option<[u8; 
                     }
                 }
             });
+            ui.add_space(4.0);
+            if let Some(gel) = gels_menu(ui) {
+                let rgb = gel.rgb();
+                *hsv = rgb_to_hsv(rgb);
+                chosen = Some(rgb);
+            }
         });
     });
     chosen
