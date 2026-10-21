@@ -504,6 +504,23 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_role_and_label(Role::Slider, "Pan");
 
+        // R : Relâcher, le programmer lâche la sélection ; Maj-R : Release, pour Store.
+        assert!(!harness.state().console.programmer().is_empty());
+        harness.key_press(egui::Key::R);
+        harness.run_steps(2);
+        assert!(harness.state().console.programmer().is_empty(), "R relâche la sélection");
+        harness.get_by_label("4 cible(s) relâchée(s) : le programmer ne les tient plus");
+        harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::R);
+        harness.run_steps(2);
+        assert!(!harness.state().console.released().is_empty(), "Maj-R marque la sélection relâchée");
+        // Dans la ligne de commande (qui garde la main après Entrée), R reste une lettre.
+        command(&mut harness, "Fixture 1 At 50");
+        harness.key_press(egui::Key::R);
+        harness.run_steps(2);
+        assert!(!harness.state().console.programmer().is_empty(), "R tapé dans la commande ne relâche rien");
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+
         harness.get_by_label("Clear").click();
         settle(&mut harness);
         let out = &harness.state().snapshot.output[0];

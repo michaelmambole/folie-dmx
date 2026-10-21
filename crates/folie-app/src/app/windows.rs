@@ -204,6 +204,17 @@ impl FolieApp {
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::B)) {
             self.toggle_blackout();
         }
+        // Maj-R : Release (la sélection est marquée relâchée, pour Store) ; R : Relâcher (le
+        // programmer lâche la sélection). Maj-R d'abord : R accepterait aussi la touche Maj.
+        if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
+            let result = self.console.release_in_programmer();
+            self.command_line.report(result);
+        } else if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
+            let count = self.console.selection().len();
+            self.console.release_selection();
+            let message = format!("{count} cible(s) relâchée(s) : le programmer ne les tient plus");
+            self.command_line.feedback = Some((true, message));
+        }
         // S : la touche Store, comme sur grandMA2 onPC.
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
             self.store_armed = !self.store_armed;

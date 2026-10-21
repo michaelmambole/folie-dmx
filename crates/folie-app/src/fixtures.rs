@@ -378,10 +378,10 @@ impl FixturesView {
                 if ui.add(theme::primary_button("Full")).on_hover_text("Dimmer à 100 %, shutter ouvert").clicked() {
                     console.full();
                 }
-                if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut").clicked() {
+                if ui.button("Relâcher").on_hover_text("Rend la sélection à ses valeurs par défaut (R)").clicked() {
                     console.release_selection();
                 }
-                let help = "Marque la sélection « relâchée » : Store l'enregistre, et la séquence cesse de la tenir à cette cue";
+                let help = "Marque la sélection « relâchée » : Store l'enregistre, et la séquence cesse de la tenir à cette cue (Maj-R)";
                 if ui.button("Release").on_hover_text(help).clicked() {
                     // Seule erreur possible : aucune sélection, et ce panneau n'apparaît qu'avec une sélection.
                     let _ = console.release_in_programmer();
