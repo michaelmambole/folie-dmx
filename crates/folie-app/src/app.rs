@@ -129,6 +129,8 @@ pub struct FolieApp {
     pub(crate) audio: Option<folie_audio::input::AudioInput>,
     audio_setup: folie_show::sound::SoundSetup,
     audio_devices: Vec<folie_audio::input::InputDevice>,
+    /// Dernier total d'erreurs de sortie, et quand il a augmenté.
+    output_errors: (u64, Option<Instant>),
     error: Option<String>,
     display: DisplayMode,
     fader_page: usize,
@@ -181,6 +183,7 @@ impl FolieApp {
             audio: None,
             audio_setup: Default::default(),
             audio_devices: Vec::new(),
+            output_errors: (0, None),
             error: None,
             display: DisplayMode::Percent,
             fader_page: 0,
@@ -328,14 +331,18 @@ impl FolieApp {
 
     /// Sortie choisie, en pastille : un clic ouvre la liste des interfaces.
     fn output_chip(&mut self, ui: &mut egui::Ui) {
+        let unplugged = !self.snapshot.output_offline.is_empty();
         let (label, help) = match &self.output {
             OutputChoice::Virtual => ("Virtuelle".to_string(), "Sortie virtuelle : aucune interface DMX".to_string()),
+            OutputChoice::Port(path) if unplugged => {
+                ("USB Pro débranchée".to_string(), format!("Enttec USB Pro sur {path} : reconnexion automatique dès son retour"))
+            }
             OutputChoice::Port(path) => ("USB Pro".to_string(), format!("Enttec USB Pro sur {path}")),
         };
-        let state = match (&self.output, self.snapshot.output_errors) {
-            (_, errors) if errors > 0 => Some(theme::DANGER),
-            (OutputChoice::Virtual, _) => None,
-            (OutputChoice::Port(_), _) => Some(theme::GO),
+        let state = match &self.output {
+            _ if unplugged => Some(theme::DANGER),
+            OutputChoice::Virtual => None,
+            OutputChoice::Port(_) => Some(theme::GO),
         };
         let response = theme::status_chip(ui, &label, state).on_hover_text(format!("{help} ; clic : choisir la sortie"));
         let mut choice = None;
@@ -375,6 +382,10 @@ impl FolieApp {
     /// Barre d'état : un message d'erreur s'il y en a un, l'essentiel à droite.
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            for name in &self.snapshot.output_offline {
+                let text = format!("{name} débranchée : reconnexion automatique dès qu'elle revient");
+                ui.label(RichText::new(text).size(12.0).color(theme::DANGER));
+            }
             if let Some(err) = &self.error {
                 ui.label(RichText::new(err).size(12.0).color(theme::DANGER));
             }
@@ -388,12 +399,15 @@ impl FolieApp {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 let snap = &self.snapshot;
                 let small = |text: String, color| RichText::new(text).monospace().size(11.0).color(color);
-                let output = if snap.output_errors > 0 {
+                let output = if !snap.output_offline.is_empty() {
+                    small("sortie débranchée".into(), theme::DANGER)
+                } else if self.output_errors.1.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
                     small(format!("{} erreur(s) de sortie", snap.output_errors), theme::DANGER)
                 } else {
                     small("sortie OK".into(), theme::GO)
                 };
-                ui.label(output).on_hover_text(format!("Sortie : {}", snap.output_names.join(", ")));
+                let help = format!("Sortie : {} ; {} erreur(s) depuis le lancement", snap.output_names.join(", "), snap.output_errors);
+                ui.label(output).on_hover_text(help);
                 if snap.late_frames > 0 {
                     ui.label(small(format!("{} trame(s) en retard", snap.late_frames), theme::EXECUTOR))
                         .on_hover_text("Trames émises après leur échéance : l'ordinateur est très chargé");
@@ -409,7 +423,15 @@ impl FolieApp {
 
 impl eframe::App for FolieApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let was_offline = std::mem::take(&mut self.snapshot.output_offline);
         self.snapshot = self.engine().snapshot();
+        if self.snapshot.output_errors > self.output_errors.0 {
+            self.output_errors = (self.snapshot.output_errors, Some(Instant::now()));
+        }
+        // Une interface revenue : on le dit sur la ligne de commande.
+        for name in was_offline.iter().filter(|n| !self.snapshot.output_offline.contains(n)) {
+            self.command_line.feedback = Some((true, format!("{name} reconnectée")));
+        }
         self.rate.update(self.snapshot.frame);
         // Les macros en cours avancent à chaque image (leurs « Wait » comptent ici).
         for result in self.console.tick_macros(Instant::now()) {
@@ -1875,6 +1897,47 @@ mod tests {
         settle(&mut harness);
         assert!(sound(&harness).reactions.is_empty());
         assert!(harness.state().audio.is_none(), "l'entrée n'a pas été ouverte");
+    }
+
+    /// Interface simulée qu'on débranche et rebranche.
+    struct Pluggable(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl folie_dmx::DmxOutput for Pluggable {
+        fn name(&self) -> &str {
+            "Enttec USB Pro (essai)"
+        }
+        fn send(&mut self, _universe: &folie_dmx::Universe) -> Result<(), folie_dmx::OutputError> {
+            Ok(())
+        }
+        fn connected(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn unplugged_interface_is_shown_until_it_returns() {
+        use std::sync::atomic::Ordering;
+        let mut harness = harness(Storage::disabled());
+        let plugged = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        harness.state_mut().output = OutputChoice::Port("/dev/cu.essai".into());
+        let output = Box::new(Pluggable(plugged.clone()));
+        harness.state().engine().send(Command::SetOutputs(vec![OutputBinding { universe: 0, output }]));
+        settle(&mut harness);
+        harness.get_by_label("USB Pro");
+
+        plugged.store(false, Ordering::Relaxed);
+        settle(&mut harness);
+        harness.get_by_label("USB Pro débranchée");
+        harness.get_by_label("Enttec USB Pro (essai) débranchée : reconnexion automatique dès qu'elle revient");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("usb-debranchee.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        plugged.store(true, Ordering::Relaxed);
+        settle(&mut harness);
+        harness.get_by_label("USB Pro");
+        harness.get_by_label("Enttec USB Pro (essai) reconnectée");
     }
 
     #[test]

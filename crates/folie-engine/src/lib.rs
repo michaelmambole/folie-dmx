@@ -131,6 +131,8 @@ pub struct Snapshot {
     pub late_frames: u64,
     /// Nom de chaque sortie active.
     pub output_names: Vec<String>,
+    /// Sorties débranchées, en attente de reconnexion.
+    pub output_offline: Vec<String>,
     /// Executors qui ont une séquence, et ce qu'ils jouent.
     pub executors: BTreeMap<u32, ExecutorStatus>,
     pub tempo: f32,
@@ -384,6 +386,7 @@ impl Engine {
                     self.outputs = valid_bindings(outputs, self.state.output.len());
                     self.state.output_names =
                         self.outputs.iter().map(|b| b.output.name().to_string()).collect();
+                    self.state.output_offline.clear();
                 }
                 Command::Shutdown => self.shutting_down = true,
             }
@@ -684,6 +687,7 @@ impl Engine {
     }
 
     fn emit(&mut self) {
+        let mut offline = 0;
         for binding in &mut self.outputs {
             if let Err(err) = binding.output.send(&self.state.output[binding.universe]) {
                 self.state.output_errors += 1;
@@ -692,6 +696,12 @@ impl Engine {
                     log::error!("{} : {err}", binding.output.name());
                 }
             }
+            offline += usize::from(!binding.output.connected());
+        }
+        // Liste refaite seulement quand elle change : rien à allouer à chaque trame.
+        if offline != self.state.output_offline.len() {
+            self.state.output_offline =
+                self.outputs.iter().filter(|b| !b.output.connected()).map(|b| b.output.name().to_string()).collect();
         }
     }
 
@@ -732,6 +742,40 @@ mod tests {
             *self.0.lock().unwrap() = Some(universe.clone());
             Ok(())
         }
+    }
+
+    /// Sortie qu'on débranche et rebranche à la main.
+    struct Pluggable(Arc<std::sync::atomic::AtomicBool>);
+
+    impl DmxOutput for Pluggable {
+        fn name(&self) -> &str {
+            "USB Pro"
+        }
+        fn send(&mut self, _universe: &Universe) -> Result<(), OutputError> {
+            if self.connected() { Ok(()) } else { Err(OutputError::Disconnected) }
+        }
+        fn connected(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    #[test]
+    fn unplugged_outputs_are_published() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let plugged = Arc::new(AtomicBool::new(true));
+        let engine = spawn(
+            EngineConfig { universes: 1, rate_hz: 200.0 },
+            vec![OutputBinding { universe: 0, output: Box::new(Pluggable(plugged.clone())) }],
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(engine.snapshot().output_offline.is_empty());
+        plugged.store(false, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(engine.snapshot().output_offline, ["USB Pro"]);
+        plugged.store(true, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(engine.snapshot().output_offline.is_empty(), "revenue");
+        engine.shutdown();
     }
 
     #[test]

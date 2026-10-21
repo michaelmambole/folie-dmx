@@ -8,7 +8,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Pilote Enttec USB Pro (trame label 6, paramètres, numéro de série)
 - [x] Moteur à fréquence fixe, commandes, instantané, blackout
 - [ ] **Validation sur matériel réel** (`folie info`, `folie test`)
-- [ ] Reconnexion automatique si l'interface est débranchée
+- [x] Reconnexion automatique si l'interface est débranchée (une tentative par seconde, alerte rouge jusqu'au retour)
 
 ## Phase 2 — Interface et patch (≈ 1 à 1,5 mois)
 - [x] Interface graphique **egui** : moniteur 512 canaux, banque de 16 faders par page,

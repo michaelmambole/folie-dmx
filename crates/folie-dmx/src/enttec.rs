@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serialport::{SerialPort, SerialPortType};
 
-use crate::{DmxOutput, OutputError, Universe};
+use crate::{DmxOutput, OutputError, Retry, Universe};
 
 const START_OF_MESSAGE: u8 = 0x7E;
 const END_OF_MESSAGE: u8 = 0xE7;
@@ -139,24 +139,35 @@ pub fn find_ports() -> Result<Vec<PortCandidate>, OutputError> {
     Ok(ports)
 }
 
-/// Une interface Enttec DMX USB Pro ouverte.
+fn open_port(path: &str) -> Result<Box<dyn SerialPort>, OutputError> {
+    // Le débit est ignoré par l'interface (liaison USB native), mais le pilote en exige un.
+    Ok(serialport::new(path, 57_600).timeout(Duration::from_millis(500)).open()?)
+}
+
+/// Une interface Enttec DMX USB Pro ouverte. Débranchée, elle est rouverte toute seule
+/// dès qu'elle revient sur le même port.
 pub struct UsbPro {
-    port: Box<dyn SerialPort>,
+    /// `None` : débranchée, en attente de reconnexion.
+    port: Option<Box<dyn SerialPort>>,
+    path: String,
     name: String,
     buf: Vec<u8>,
+    retry: Retry,
 }
 
 impl UsbPro {
     pub fn open(path: &str) -> Result<Self, OutputError> {
-        // Le débit est ignoré par l'interface (liaison USB native), mais le pilote en exige un.
-        let port = serialport::new(path, 57_600)
-            .timeout(Duration::from_millis(500))
-            .open()?;
         Ok(Self {
-            port,
+            port: Some(open_port(path)?),
+            path: path.to_string(),
             name: format!("Enttec USB Pro ({path})"),
             buf: Vec::with_capacity(MAX_PAYLOAD + 5),
+            retry: Retry::default(),
         })
+    }
+
+    fn port(&mut self) -> Result<&mut Box<dyn SerialPort>, OutputError> {
+        self.port.as_mut().ok_or(OutputError::Disconnected)
     }
 
     pub fn widget_parameters(&mut self) -> Result<WidgetParameters, OutputError> {
@@ -171,10 +182,13 @@ impl UsbPro {
     }
 
     fn request(&mut self, label: Label, payload: &[u8]) -> Result<Vec<u8>, OutputError> {
-        self.port.clear(serialport::ClearBuffer::Input)?;
+        self.port()?.clear(serialport::ClearBuffer::Input)?;
         self.buf.clear();
         encode_message(label, payload, &mut self.buf);
-        self.port.write_all(&self.buf)?;
+        let buf = std::mem::take(&mut self.buf);
+        let written = self.port()?.write_all(&buf);
+        self.buf = buf;
+        written?;
         // L'interface peut envoyer d'autres messages entre-temps (entrée DMX…) : on les ignore.
         for _ in 0..8 {
             let (reply_label, reply) = self.read_message()?;
@@ -189,20 +203,20 @@ impl UsbPro {
     fn read_message(&mut self) -> Result<(u8, Vec<u8>), OutputError> {
         let mut byte = [0u8; 1];
         loop {
-            self.port.read_exact(&mut byte)?;
+            self.port()?.read_exact(&mut byte)?;
             if byte[0] == START_OF_MESSAGE {
                 break;
             }
         }
         let mut header = [0u8; 3];
-        self.port.read_exact(&mut header)?;
+        self.port()?.read_exact(&mut header)?;
         let len = u16::from_le_bytes([header[1], header[2]]) as usize;
         if len > MAX_PAYLOAD {
             return Err(OutputError::Protocol(format!("longueur invalide : {len}")));
         }
         let mut payload = vec![0u8; len];
-        self.port.read_exact(&mut payload)?;
-        self.port.read_exact(&mut byte)?;
+        self.port()?.read_exact(&mut payload)?;
+        self.port()?.read_exact(&mut byte)?;
         if byte[0] != END_OF_MESSAGE {
             return Err(OutputError::Protocol("fin de message absente".into()));
         }
@@ -216,9 +230,33 @@ impl DmxOutput for UsbPro {
     }
 
     fn send(&mut self, universe: &Universe) -> Result<(), OutputError> {
+        let now = std::time::Instant::now();
+        if self.port.is_none() {
+            // Débranchée : une tentative par seconde, sans erreur entre-temps.
+            if !self.retry.due(now) {
+                return Ok(());
+            }
+            match open_port(&self.path) {
+                Ok(port) => {
+                    log::info!("{} reconnectée", self.name);
+                    self.port = Some(port);
+                }
+                Err(_) => return Ok(()),
+            }
+        }
         encode_dmx(universe, &mut self.buf);
-        self.port.write_all(&self.buf)?;
+        let port = self.port.as_mut().expect("ouvert juste au-dessus");
+        if let Err(err) = port.write_all(&self.buf) {
+            log::warn!("{} perdue : {err}", self.name);
+            self.port = None;
+            self.retry.lost(now);
+            return Err(OutputError::Disconnected);
+        }
         Ok(())
+    }
+
+    fn connected(&self) -> bool {
+        self.port.is_some()
     }
 }
 

@@ -5,5 +5,5 @@ pub mod enttec;
 pub mod output;
 pub mod universe;
 
-pub use output::{DmxOutput, NullOutput, OutputError};
+pub use output::{DmxOutput, NullOutput, OutputError, Retry};
 pub use universe::{CHANNELS_PER_UNIVERSE, InvalidChannel, Universe};
