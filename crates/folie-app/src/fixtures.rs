@@ -509,7 +509,7 @@ fn current_color(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixtur
 }
 
 /// Valeur réellement envoyée pour un paramètre, relue dans la sortie DMX.
-fn live_value(snapshot: &Snapshot, fixture: &PatchedFixture, parameter: &Parameter) -> Option<u16> {
+pub(crate) fn live_value(snapshot: &Snapshot, fixture: &PatchedFixture, parameter: &Parameter) -> Option<u16> {
     let universe = snapshot.output.get(fixture.universe)?;
     let byte = |offset: u16| universe.get(fixture.address + offset).ok();
     match parameter.offsets.as_slice() {

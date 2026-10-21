@@ -1500,6 +1500,50 @@ mod tests {
     }
 
     #[test]
+    fn stage_view_shows_beams_and_selects() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Stage,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(900.0, 560.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2500.0, 1000.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 Thru 4 At 100");
+        // La MH 6 est une LED RGBW : sans couleur, elle n'éclaire pas. Blanc sur les trois premières.
+        command(&mut harness, r#"Fixture 1 Thru 3 Attribute "White" At 100"#);
+        command(&mut harness, r#"Fixture 2 Attribute "Tilt" At 75"#);
+        command(&mut harness, r#"Fixture 3 Attribute "Pan" At 70"#);
+        command(&mut harness, r#"Attribute "Tilt" At 70"#);
+        command(&mut harness, r#"Fixture 4 Attribute "Red" At 100"#);
+        command(&mut harness, "Clear"); // vide la sélection, garde le programmer
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1); // ferme le Patch
+        settle(&mut harness);
+
+        harness.get_by_label("Vue de la scène");
+        for n in 1..=4 {
+            harness.get_by_label(&format!("Projecteur {n} · Rush MH 6 Wash {n}"));
+        }
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("stage.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Projecteur 2 · Rush MH 6 Wash 2").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.selection(), [Target::whole(FixtureId(2))], "un clic sélectionne");
+
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Vue Dessus")).click();
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("stage-top.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+    }
+
+    #[test]
     fn transition_bar_shows_delay_without_moving_the_layout() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);

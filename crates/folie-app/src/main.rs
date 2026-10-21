@@ -9,6 +9,7 @@ mod playback_ui;
 mod pools;
 mod screens;
 mod storage;
+mod stage_ui;
 mod theme;
 mod tracking_ui;
 mod workspace;

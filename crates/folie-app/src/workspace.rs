@@ -15,10 +15,11 @@ pub enum WindowKind {
     Executors,
     Effects,
     Tracking,
+    Stage,
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 8] = [
+    pub const ALL: [WindowKind; 9] = [
         Self::Patch,
         Self::Groups,
         Self::Presets,
@@ -27,6 +28,7 @@ impl WindowKind {
         Self::Executors,
         Self::Effects,
         Self::Tracking,
+        Self::Stage,
     ];
 
     pub fn title(self) -> &'static str {
@@ -39,6 +41,7 @@ impl WindowKind {
             Self::Executors => "Executors",
             Self::Effects => "Effets",
             Self::Tracking => "Tracking",
+            Self::Stage => "Scène",
         }
     }
 
@@ -53,6 +56,7 @@ impl WindowKind {
             Self::Executors => Key::Num6,
             Self::Effects => Key::Num7,
             Self::Tracking => Key::Num8,
+            Self::Stage => Key::Num9,
         }
     }
 
@@ -65,6 +69,7 @@ impl WindowKind {
             Self::Executors => egui::vec2(1000.0, 360.0),
             Self::Effects => egui::vec2(560.0, 520.0),
             Self::Tracking => egui::vec2(760.0, 560.0),
+            Self::Stage => egui::vec2(900.0, 560.0),
         }
     }
 }

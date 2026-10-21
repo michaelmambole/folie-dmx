@@ -59,6 +59,8 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Sélecteur de couleur traduit par appareil (RGB, RGBW, CMY, roue seule), couleurs rapides
 - [x] Executors : fader dessiné, cartes adaptatives ; pools : couleur obtenue, LED d'état
 - [x] Fenêtres Cues, Patch, Effets et Sortie DMX au même niveau visuel
+- [x] Fenêtre Scène (⌘9) : projecteurs en blocs, faisceaux en traits colorés, caméra, sélection au clic
+- [ ] Scène : placement des projecteurs à la souris, hauteur, plan enregistré dans le show
 - [ ] Gélatines (Lee, Rosco) dans les couleurs rapides
 
 ## Phase 4 — Cues et executors (≈ 2 à 3 mois, le cœur)
