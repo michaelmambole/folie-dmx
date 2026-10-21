@@ -3,6 +3,7 @@
 pub mod artnet;
 pub mod enttec;
 pub mod output;
+pub mod sacn;
 pub mod universe;
 
 pub use output::{DmxOutput, NullOutput, OutputError, Retry};

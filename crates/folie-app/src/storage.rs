@@ -27,6 +27,9 @@ struct Settings {
     /// Sortie Art-Net, en plus de la sortie choisie.
     #[serde(default)]
     artnet: ArtNetSettings,
+    /// Sortie sACN, en plus de la sortie choisie.
+    #[serde(default)]
+    sacn: SacnSettings,
     /// Télécommande web.
     #[serde(default)]
     remote: RemoteSettings,
@@ -52,6 +55,24 @@ pub struct ArtNetSettings {
 impl Default for ArtNetSettings {
     fn default() -> Self {
         Self { enabled: false, destination: folie_dmx::artnet::BROADCAST.to_string(), universe: 0 }
+    }
+}
+
+/// Réglages de la sortie sACN (E1.31).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SacnSettings {
+    pub enabled: bool,
+    /// Univers sACN, 1 à 63999.
+    pub universe: u16,
+    /// Adresse d'un node ; vide : multicast (tous les récepteurs de l'univers).
+    pub destination: String,
+    pub priority: u8,
+}
+
+impl Default for SacnSettings {
+    fn default() -> Self {
+        Self { enabled: false, universe: 1, destination: String::new(), priority: folie_dmx::sacn::DEFAULT_PRIORITY }
     }
 }
 
@@ -200,6 +221,14 @@ impl Storage {
 
     pub fn set_artnet(&self, artnet: &ArtNetSettings) {
         self.update_settings(|s| s.artnet = artnet.clone());
+    }
+
+    pub fn sacn(&self) -> SacnSettings {
+        self.settings().sacn
+    }
+
+    pub fn set_sacn(&self, sacn: &SacnSettings) {
+        self.update_settings(|s| s.sacn = sacn.clone());
     }
 
     pub fn remote(&self) -> RemoteSettings {

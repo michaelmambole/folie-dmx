@@ -115,7 +115,8 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 
 ## Phase 6 — Réseau et télécommande (≈ 1,5 à 2 mois)
 - [x] Sortie Art-Net (ArtDmx vers un node ou en diffusion), en plus de la sortie choisie
-- [ ] sACN, univers multiples (l'USB Pro n'en gère qu'un), découverte des nodes (ArtPoll)
+- [x] Sortie sACN (E1.31) : multicast ou node, univers 1 à 63999, priorité, en plus de la sortie choisie
+- [ ] Univers multiples (l'USB Pro n'en gère qu'un), découverte des nodes (ArtPoll)
 - MIDI pour piloter depuis une surface externe
 - [x] **Télécommande web** (crate `folie-remote`) : serveur axum + WebSockets, page HTML/JS
       embarquée dans le binaire ; executors de la page (faders, Go/Back/Off, Flash maintenu,

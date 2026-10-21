@@ -512,6 +512,7 @@ impl FolieApp {
     fn output_status(&mut self, ui: &mut egui::Ui) {
         let snapshot = self.snapshot.clone();
         let mut artnet = self.artnet.clone();
+        let mut sacn = self.sacn.clone();
         theme::card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -549,9 +550,35 @@ impl FolieApp {
                 let detail = format!("net {net} · sous-réseau {subnet} · univers {universe}");
                 ui.label(egui::RichText::new(detail).size(11.5).color(theme::MUTED));
             });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                theme::section(ui, "sACN");
+                ui.checkbox(&mut sacn.enabled, "Actif").on_hover_text("Envoyer aussi l'univers en sACN (E1.31), en plus de la sortie choisie");
+                let label = ui.label(egui::RichText::new("Univers").color(theme::MUTED));
+                let (min, max) = (folie_dmx::sacn::MIN_UNIVERSE, folie_dmx::sacn::MAX_UNIVERSE);
+                ui.add(egui::DragValue::new(&mut sacn.universe).range(min..=max)).labelled_by(label.id);
+                let label = ui.label(egui::RichText::new("Node").color(theme::MUTED));
+                let id = egui::Id::unique("sacn-destination");
+                let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| sacn.destination.clone());
+                let edit = ui
+                    .add(egui::TextEdit::singleline(&mut text).hint_text("multicast").desired_width(130.0).font(egui::TextStyle::Monospace))
+                    .labelled_by(label.id)
+                    .on_hover_text("Vide : multicast, tous les récepteurs de l'univers. Sinon l'adresse d'un node.");
+                if edit.lost_focus() {
+                    sacn.destination = text.trim().to_string();
+                    ui.data_mut(|d| d.remove::<String>(id));
+                } else if edit.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, text));
+                }
+                let label = ui.label(egui::RichText::new("Priorité").color(theme::MUTED));
+                ui.add(egui::DragValue::new(&mut sacn.priority).range(0..=200))
+                    .labelled_by(label.id)
+                    .on_hover_text("0 à 200 (100 par défaut) : un récepteur suit la source de plus haute priorité");
+            });
         });
-        if artnet != self.artnet {
+        if artnet != self.artnet || sacn != self.sacn {
             self.artnet = artnet;
+            self.sacn = sacn;
             self.artnet_changed();
         }
     }

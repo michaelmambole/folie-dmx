@@ -7,7 +7,7 @@ avec sortie sur Enttec DMX USB Pro.
 
 | Crate | Rôle |
 |---|---|
-| `crates/folie-dmx` | Types DMX (`Universe`), trait `DmxOutput`, pilote Enttec USB Pro |
+| `crates/folie-dmx` | Types DMX (`Universe`), trait `DmxOutput`, Enttec USB Pro, Art-Net, sACN |
 | `crates/folie-fixture` | Modèle de fixtures, import OFL, patch, rendu attributs → DMX |
 | `crates/folie-show` | Fichier de show `.folie` : lecture, écriture atomique |
 | `crates/folie-control` | Console : sélection, groupes, presets, ligne de commande |

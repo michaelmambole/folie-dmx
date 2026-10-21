@@ -15,7 +15,7 @@ use folie_control::Console;
 use crate::cmdline::CommandLine;
 use crate::fixtures::FixturesView;
 use crate::pools::PoolsView;
-use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, SoundSettings, Storage};
+use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, SacnSettings, SoundSettings, Storage};
 use crate::theme;
 
 mod about;
@@ -114,6 +114,8 @@ pub struct FolieApp {
     output: OutputChoice,
     /// Sortie Art-Net, envoyée en plus de `output`.
     pub(crate) artnet: ArtNetSettings,
+    /// Sortie sACN, envoyée en plus de `output`.
+    pub(crate) sacn: SacnSettings,
     pub(crate) remote_settings: RemoteSettings,
     /// Serveur de la télécommande web, quand elle est active.
     pub(crate) remote: Option<folie_remote::RemoteServer>,
@@ -154,6 +156,7 @@ impl FolieApp {
         let workspace = storage.workspace();
         let layouts = storage.layouts();
         let artnet = storage.artnet();
+        let sacn = storage.sacn();
         let remote_settings = storage.remote();
         let osc_settings = storage.osc();
         let sound_settings = storage.sound();
@@ -173,6 +176,7 @@ impl FolieApp {
             ports: Vec::new(),
             output: OutputChoice::Virtual,
             artnet,
+            sacn,
             remote_settings,
             remote: None,
             osc_settings,
@@ -191,7 +195,7 @@ impl FolieApp {
             rate: RateMeter { since: Instant::now(), frame: 0, hz: 0.0 },
         };
         app.refresh_ports();
-        if app.artnet.enabled {
+        if app.artnet.enabled || app.sacn.enabled {
             app.apply_outputs(OutputChoice::Virtual);
         }
         if app.remote_settings.enabled {
@@ -262,12 +266,31 @@ impl FolieApp {
                 }
             }
         }
+        if self.sacn.enabled {
+            let destination = self.sacn.destination.trim();
+            let target = if destination.is_empty() {
+                Ok(None)
+            } else {
+                destination.parse::<std::net::IpAddr>().map(Some).map_err(|_| format!("sACN : adresse « {destination} » illisible"))
+            };
+            let opened = target.and_then(|ip| {
+                folie_dmx::sacn::Sacn::open(self.sacn.universe, ip, self.sacn.priority).map_err(|err| format!("sACN : {err}"))
+            });
+            match opened {
+                Ok(sacn) => outputs.push(OutputBinding { universe: 0, output: Box::new(sacn) }),
+                Err(err) => {
+                    self.sacn.enabled = false;
+                    self.error = Some(err);
+                }
+            }
+        }
         self.engine().send(Command::SetOutputs(outputs));
         self.output = choice;
         self.file.storage.set_artnet(&self.artnet);
+        self.file.storage.set_sacn(&self.sacn);
     }
 
-    /// Les réglages Art-Net ont changé : on reconstruit les sorties.
+    /// Les réglages Art-Net ou sACN ont changé : on reconstruit les sorties.
     pub(crate) fn artnet_changed(&mut self) {
         let choice = self.output.clone();
         self.apply_outputs(choice);
@@ -302,6 +325,13 @@ impl FolieApp {
             if self.artnet.enabled {
                 let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
                 if theme::status_chip(ui, "Art-Net", Some(theme::GO)).on_hover_text(help).clicked() {
+                    self.windows.open(crate::workspace::WindowKind::Output);
+                }
+            }
+            if self.sacn.enabled {
+                let to = if self.sacn.destination.trim().is_empty() { "multicast".to_string() } else { self.sacn.destination.clone() };
+                let help = format!("sACN univers {} ({to}) : réglages dans la fenêtre Sortie DMX", self.sacn.universe);
+                if theme::status_chip(ui, "sACN", Some(theme::GO)).on_hover_text(help).clicked() {
                     self.windows.open(crate::workspace::WindowKind::Output);
                 }
             }
@@ -1605,7 +1635,7 @@ mod tests {
         harness.key_press(egui::Key::Enter);
         harness.run_steps(2);
         assert_eq!(harness.state().artnet.destination, "127.0.0.1");
-        harness.get_by_label("Actif").click();
+        harness.get_all_by_label("Actif").next().unwrap().click(); // la première : Art-Net
         settle(&mut harness);
         assert!(harness.state().artnet.enabled);
         let names = harness.state().snapshot.output_names.clone();
@@ -1624,6 +1654,23 @@ mod tests {
         assert!(!harness.state().artnet.enabled);
         assert_eq!(harness.state().snapshot.output_names, ["virtuelle"]);
         harness.get_by_label("Art-Net : adresse « pas une adresse » illisible");
+
+        // sACN, univers 1 en multicast, en plus de la sortie virtuelle.
+        harness.get_all_by_label("Actif").nth(1).unwrap().click();
+        settle(&mut harness);
+        assert!(harness.state().sacn.enabled);
+        assert_eq!(harness.state().snapshot.output_names, ["virtuelle", "sACN univers 1 (multicast)"]);
+        harness.get_by_label("sACN"); // pastille de la barre du haut
+        assert!(Storage::at(dir.path()).sacn().enabled, "gardé pour la prochaine fois");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sacn.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.state_mut().sacn.destination = "node ?".into();
+        harness.state_mut().artnet_changed();
+        settle(&mut harness);
+        assert!(!harness.state().sacn.enabled);
+        harness.get_by_label("sACN : adresse « node ? » illisible");
     }
 
     #[test]
