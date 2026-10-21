@@ -241,6 +241,19 @@ fn effect_settings(ui: &mut egui::Ui, index: usize, effect: &mut Effect) -> bool
         ui.add_space(8.0);
         let label = ui.label(muted("Blocs"));
         changed |= ui.add(egui::DragValue::new(&mut effect.blocks).range(1..=16)).labelled_by(label.id).changed();
+        ui.add_space(8.0);
+        ui.label(muted("Fondus"));
+        fn seconds<'a>(value: &'a mut f32, prefix: &str) -> egui::DragValue<'a> {
+            egui::DragValue::new(value).range(0.0..=3600.0).speed(0.1).max_decimals(2).prefix(prefix).suffix(" s")
+        }
+        changed |= ui
+            .add(seconds(&mut effect.fade_in, "entrée "))
+            .on_hover_text("Secondes pour que l'effet grandisse à son lancement")
+            .changed();
+        changed |= ui
+            .add(seconds(&mut effect.fade_out, "sortie "))
+            .on_hover_text("Secondes pour qu'il s'efface à son arrêt, au lieu de couper net")
+            .changed();
     });
     ui.add_space(4.0);
 

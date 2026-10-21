@@ -982,6 +982,11 @@ mod tests {
         settle(&mut harness);
         let sparkle = &harness.state().console.programmer_effects()[1];
         assert_eq!(sparkle.lines[0].waveform, folie_show::Waveform::Random);
+        // Fondu de sortie du Chenillard : 2 s pour s'effacer.
+        let fade_out = By::new().predicate(|n| n.description().as_deref() == Some("Secondes pour qu'il s'efface à son arrêt, au lieu de couper net"));
+        harness.get_all(fade_out).next().unwrap().set_value_accesskit(2.0);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.programmer_effects()[0].fade_out, 2.0);
         if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
             let path = std::path::Path::new(&dir).join("effects-duty-random.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");

@@ -6,6 +6,9 @@
 //! lente ou bloquée ne peut donc jamais retarder la sortie DMX.
 
 mod effects;
+
+/// Couche des effets du programmer (les executors utilisent leur numéro).
+const PROGRAMMER_LAYER: u64 = u64::MAX;
 mod playback;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -581,16 +584,15 @@ impl Engine {
             // Sous cet executor : ce que les précédents (priorité plus basse) ont déjà mis.
             let under = |k: &ParamKey| merged.get(k).map_or_else(|| Self::default_value(patch, k), |(_, v, _)| *v);
             let mut values = playback.values(cues, now, |k| Self::is_intensity(patch, k), under);
-            // Les effets de la cue en cours passent devant ses valeurs fixes.
-            if let Some(cue) = playback.current().and_then(|c| cues.get(c)) {
-                let mut animated = HashMap::new();
-                for effect in &cue.effects {
-                    let phase = phases.advance(effect, dt * playback.effect_speed(), bpm);
-                    // Un effet relatif tourne autour de la valeur de la cue, sinon de ce qui est dessous.
-                    animated.extend(effect.values(phase, |k| values.get(k).copied().unwrap_or_else(|| under(k))));
-                }
-                values.extend(animated);
+            // Les effets de la cue en cours passent devant ses valeurs fixes. Même sans cue,
+            // la couche avance : les effets qui viennent de s'arrêter s'y effacent.
+            let effects = playback.current().and_then(|c| cues.get(c)).map_or(&[][..], |cue| &cue.effects[..]);
+            let mut animated = HashMap::new();
+            for (effect, phase, size) in phases.layer(*executor as u64, effects, dt * playback.effect_speed(), dt, bpm) {
+                // Un effet relatif tourne autour de la valeur de la cue, sinon de ce qui est dessous.
+                animated.extend(effect.values(phase, size, |k| values.get(k).copied().unwrap_or_else(|| under(k))));
             }
+            values.extend(animated);
             let priority = playback.options.priority;
             let swopped = swop && !playback.swopping && !playback.options.swop_protect;
             let level = if swopped { 0.0 } else { playback.intensity_level() };
@@ -646,11 +648,11 @@ impl Engine {
         // un effet relatif tourne autour de ce qui est dessous.
         values.extend(self.state.attributes.iter().map(|(k, v)| (*k, *v)));
         let mut programmer_effects = HashMap::new();
-        for effect in &self.programmer_effects {
-            let phase = self.phases.advance(effect, dt, self.state.tempo);
+        let played = self.phases.layer(PROGRAMMER_LAYER, &self.programmer_effects, dt, dt, self.state.tempo);
+        for (effect, phase, size) in played {
             let patch = &self.state.patch;
-            programmer_effects
-                .extend(effect.values(phase, |k| values.get(k).copied().unwrap_or_else(|| Self::default_value(patch, k))));
+            let base = |k: &ParamKey| values.get(k).copied().unwrap_or_else(|| Self::default_value(patch, k));
+            programmer_effects.extend(effect.values(phase, size, base));
         }
         values.extend(programmer_effects);
         self.state.running_effects = self.phases.running();
@@ -861,6 +863,8 @@ mod tests {
                 duty: 0.5,
                 params: vec![(pan, 0.0)],
             }],
+            fade_in: 0.0,
+            fade_out: 0.0,
         };
         engine.send(Command::SetProgrammerEffects(vec![effect.clone()]));
         assert_eq!(out(10), 0xC0);

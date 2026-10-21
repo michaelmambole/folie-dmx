@@ -61,7 +61,7 @@ pub fn instance(effect: &Effect, id: u64, patch: &Patch) -> EffectInstance {
         EffectRate::Hz(hz) => Rate::Hz(hz),
         EffectRate::Beats(beats) => Rate::Beats(beats),
     };
-    EffectInstance { id, rate, lines }
+    EffectInstance { id, rate, lines, fade_in: effect.fade_in, fade_out: effect.fade_out }
 }
 
 /// Mesure du tempo par taps successifs.

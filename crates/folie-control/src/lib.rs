@@ -1336,4 +1336,24 @@ mod tests {
         c.set_effect_stopped(cue(2), cue(1), 1, false).unwrap();
         assert_eq!(crate::cues::playback_data(&c.show)[&1][1].effects.len(), 2, "repris");
     }
+
+    #[test]
+    fn a_stopped_effect_fades_out() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 At 0");
+        run(&mut c, "Effect 1"); // Sinus dimmer, figé à 100 % pour le test
+        {
+            let effect = &mut c.programmer_effects_mut()[0];
+            effect.rate = folie_show::EffectRate::Hz(0.0);
+            effect.lines[0].low = 100.0;
+            effect.fade_out = 1.0;
+        }
+        c.effects_changed();
+        assert_eq!(dmx(&c, 2), 255);
+        c.remove_effect(0);
+        let fading = dmx(&c, 2);
+        assert!((100..255).contains(&fading), "l'effet s'efface au lieu de couper : {fading}");
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(dmx(&c, 2), 0, "effacé : le dimmer revient au programmer (0)");
+    }
 }

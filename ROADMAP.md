@@ -94,7 +94,7 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Modèles : Sinus dimmer, Chenillard, Vague, Cercle, Arc-en-ciel, Pulse (`Effect n`)
 - [x] Effets dans le programmer, enregistrés dans les cues, suivis par tracking
 - [x] Fenêtre Effets (⌘7)
-- [ ] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
+- [x] Arrêter un effet seul dans une cue, fondu d'entrée et de sortie des effets
 - [x] Effets relatifs (autour de la valeur en cours, donc aussi d'un preset rappelé) ; Cercle relatif
 - [x] Rapport cyclique du carré, forme d'onde aléatoire, modèle Scintillement
 - [ ] Pool d'effets personnalisés

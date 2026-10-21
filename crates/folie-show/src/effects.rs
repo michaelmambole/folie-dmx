@@ -82,6 +82,10 @@ pub struct Effect {
     pub blocks: u32,
     /// Fixtures concernées, dans l'ordre de sélection.
     pub targets: Vec<Target>,
+    /// Secondes pour que l'effet grandisse à son lancement (0 : d'un coup).
+    pub fade_in: f32,
+    /// Secondes pour qu'il s'efface à son arrêt (0 : il coupe net).
+    pub fade_out: f32,
 }
 
 impl Effect {
@@ -123,6 +127,8 @@ pub fn templates() -> Vec<Effect> {
         wings: 1,
         blocks: 1,
         targets: Vec::new(),
+        fade_in: 0.0,
+        fade_out: 0.0,
     };
     let color = |c: &str| Attribute::ColorMix(c.into());
     vec![
@@ -166,6 +172,14 @@ pub(crate) struct EffectEntry {
     wings: u32,
     blocks: u32,
     targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    fade_in: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    fade_out: f32,
+}
+
+fn is_zero(seconds: &f32) -> bool {
+    *seconds == 0.0
 }
 
 #[derive(Serialize, Deserialize)]
@@ -221,6 +235,8 @@ impl EffectEntry {
             wings: effect.wings,
             blocks: effect.blocks,
             targets: effect.targets.iter().map(Target::to_string).collect(),
+            fade_in: effect.fade_in,
+            fade_out: effect.fade_out,
         }
     }
 
@@ -254,6 +270,8 @@ impl EffectEntry {
             wings: self.wings.max(1),
             blocks: self.blocks.max(1),
             targets,
+            fade_in: self.fade_in.clamp(0.0, 3600.0),
+            fade_out: self.fade_out.clamp(0.0, 3600.0),
         })
     }
 }

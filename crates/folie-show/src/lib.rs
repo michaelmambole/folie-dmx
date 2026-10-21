@@ -726,6 +726,8 @@ mod tests {
         assert!(circle.lines.iter().all(|l| l.relative), "le cercle tourne autour de la position");
         let mut chaser = effects::templates()[1].clone();
         chaser.lines[0].duty = 20.0;
+        chaser.fade_in = 2.0;
+        chaser.fade_out = 3.5;
         chaser.targets = vec!["1".parse().unwrap()];
         let mut sparkle = effects::templates()[6].clone();
         assert_eq!(sparkle.lines[0].waveform, Waveform::Random);
