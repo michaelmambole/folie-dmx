@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
 use folie_dmx::NullOutput;
+use folie_dmx::artnet::ArtNet;
 use folie_dmx::enttec::{self, PortCandidate, UsbPro};
 use folie_dmx::CHANNELS_PER_UNIVERSE;
 use folie_engine::{Command, EngineConfig, EngineHandle, OutputBinding, Snapshot};
@@ -14,7 +15,8 @@ use folie_control::Console;
 use crate::cmdline::CommandLine;
 use crate::fixtures::FixturesView;
 use crate::pools::PoolsView;
-use crate::storage::Storage;
+use crate::storage::{ArtNetSettings, Storage};
+use crate::theme;
 
 mod file;
 mod windows;
@@ -106,6 +108,8 @@ pub struct FolieApp {
     snapshot: Snapshot,
     ports: Vec<PortCandidate>,
     output: OutputChoice,
+    /// Sortie Art-Net, envoyée en plus de `output`.
+    pub(crate) artnet: ArtNetSettings,
     error: Option<String>,
     display: DisplayMode,
     fader_page: usize,
@@ -128,6 +132,7 @@ impl FolieApp {
         let console = Console::new(engine);
         let workspace = storage.workspace();
         let layouts = storage.layouts();
+        let artnet = storage.artnet();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
             console,
@@ -143,6 +148,7 @@ impl FolieApp {
             fixtures_view: FixturesView::new(),
             ports: Vec::new(),
             output: OutputChoice::Virtual,
+            artnet,
             error: None,
             display: DisplayMode::Percent,
             fader_page: 0,
@@ -150,6 +156,9 @@ impl FolieApp {
             rate: RateMeter { since: Instant::now(), frame: 0, hz: 0.0 },
         };
         app.refresh_ports();
+        if app.artnet.enabled {
+            app.apply_outputs(OutputChoice::Virtual);
+        }
         app.startup();
         app
     }
@@ -175,7 +184,13 @@ impl FolieApp {
     }
 
     fn select_output(&mut self, choice: OutputChoice) {
-        let output: Box<dyn folie_dmx::DmxOutput> = match &choice {
+        self.apply_outputs(choice);
+    }
+
+    /// Sorties du moteur : la sortie choisie, plus l'Art-Net s'il est actif. Une adresse
+    /// Art-Net illisible désactive l'Art-Net et le dit, sans toucher à l'autre sortie.
+    fn apply_outputs(&mut self, choice: OutputChoice) {
+        let primary: Box<dyn folie_dmx::DmxOutput> = match &choice {
             OutputChoice::Virtual => Box::new(NullOutput),
             OutputChoice::Port(path) => match UsbPro::open(path) {
                 Ok(pro) => Box::new(pro),
@@ -185,9 +200,33 @@ impl FolieApp {
                 }
             },
         };
-        self.engine().send(Command::SetOutputs(vec![OutputBinding { universe: 0, output }]));
-        self.output = choice;
+        let mut outputs = vec![OutputBinding { universe: 0, output: primary }];
         self.error = None;
+        if self.artnet.enabled {
+            let opened = self
+                .artnet
+                .destination
+                .trim()
+                .parse::<std::net::IpAddr>()
+                .map_err(|_| format!("Art-Net : adresse « {} » illisible", self.artnet.destination))
+                .and_then(|ip| ArtNet::open(ip, self.artnet.universe).map_err(|err| format!("Art-Net : {err}")));
+            match opened {
+                Ok(artnet) => outputs.push(OutputBinding { universe: 0, output: Box::new(artnet) }),
+                Err(err) => {
+                    self.artnet.enabled = false;
+                    self.error = Some(err);
+                }
+            }
+        }
+        self.engine().send(Command::SetOutputs(outputs));
+        self.output = choice;
+        self.file.storage.set_artnet(&self.artnet);
+    }
+
+    /// Les réglages Art-Net ont changé : on reconstruit les sorties.
+    pub(crate) fn artnet_changed(&mut self) {
+        let choice = self.output.clone();
+        self.apply_outputs(choice);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -232,6 +271,13 @@ impl FolieApp {
             }
             if let Some(choice) = choice.filter(|c| *c != self.output) {
                 self.select_output(choice);
+            }
+            // L'Art-Net part en plus de la sortie choisie ; il se règle dans la fenêtre Sortie DMX.
+            if self.artnet.enabled {
+                let text = RichText::new("Art-Net").size(12.0).color(theme::TEXT);
+                let chip = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::GO)).fill(theme::GO.gamma_multiply(0.12));
+                let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
+                ui.add(chip).on_hover_text(help);
             }
 
             ui.separator();
@@ -1351,6 +1397,50 @@ mod tests {
         harness.get_by_label("Reprendre").click();
         harness.run_steps(2);
         assert!(stopped(&harness).is_empty());
+    }
+
+    #[test]
+    fn artnet_output_from_the_dmx_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Output,
+            placement: Placement::at_size(egui::pos2(40.0, 820.0), egui::vec2(1100.0, 720.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::at(dir.path()), workspace, egui::vec2(2000.0, 1600.0));
+        assert!(harness.query_by_label("Art-Net").is_none(), "pas de pastille tant qu'il est inactif");
+
+        // Destination : ce Mac, puis Actif.
+        harness.get_by_role_and_label(Role::TextInput, "Destination").focus();
+        harness.run_steps(1);
+        harness.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]); // tout le texte
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Destination").type_text("127.0.0.1");
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state().artnet.destination, "127.0.0.1");
+        harness.get_by_label("Actif").click();
+        settle(&mut harness);
+        assert!(harness.state().artnet.enabled);
+        let names = harness.state().snapshot.output_names.clone();
+        assert_eq!(names, ["virtuelle", "Art-Net 127.0.0.1 (0:0:0)"], "en plus de la sortie choisie");
+        harness.get_by_label("Art-Net"); // pastille de la barre du haut
+        assert!(Storage::at(dir.path()).artnet().enabled, "gardé pour la prochaine fois");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("artnet.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Une adresse illisible : l'Art-Net se coupe et le dit.
+        harness.state_mut().artnet.destination = "pas une adresse".into();
+        harness.state_mut().artnet_changed();
+        settle(&mut harness);
+        assert!(!harness.state().artnet.enabled);
+        assert_eq!(harness.state().snapshot.output_names, ["virtuelle"]);
+        harness.get_by_label("Art-Net : adresse « pas une adresse » illisible");
     }
 
     #[test]

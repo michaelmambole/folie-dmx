@@ -1,5 +1,6 @@
 //! Types DMX de base et pilotes de sortie.
 
+pub mod artnet;
 pub mod enttec;
 pub mod output;
 pub mod universe;

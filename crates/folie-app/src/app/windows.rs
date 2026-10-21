@@ -485,8 +485,9 @@ impl FolieApp {
     }
 
     /// Carte d'état de la sortie : interface, fréquence, erreurs, légende de la grille.
-    fn output_status(&self, ui: &mut egui::Ui) {
-        let snapshot = &self.snapshot;
+    fn output_status(&mut self, ui: &mut egui::Ui) {
+        let snapshot = self.snapshot.clone();
+        let mut artnet = self.artnet.clone();
         theme::card(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -501,7 +502,34 @@ impl FolieApp {
                     theme::chip(ui, monitor::PATCHED, "patché");
                 });
             });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                theme::section(ui, "Art-Net");
+                ui.checkbox(&mut artnet.enabled, "Actif").on_hover_text("Envoyer aussi l'univers en Art-Net, en plus de la sortie choisie");
+                let label = ui.label(egui::RichText::new("Destination").color(theme::MUTED));
+                let id = egui::Id::unique("artnet-destination");
+                let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| artnet.destination.clone());
+                let edit = ui
+                    .add(egui::TextEdit::singleline(&mut text).desired_width(130.0).font(egui::TextStyle::Monospace))
+                    .labelled_by(label.id)
+                    .on_hover_text("Adresse d'un node, ou de diffusion : 255.255.255.255, 2.255.255.255…");
+                if edit.lost_focus() {
+                    artnet.destination = text.trim().to_string();
+                    ui.data_mut(|d| d.remove::<String>(id));
+                } else if edit.has_focus() {
+                    ui.data_mut(|d| d.insert_temp(id, text));
+                }
+                let label = ui.label(egui::RichText::new("Univers").color(theme::MUTED));
+                ui.add(egui::DragValue::new(&mut artnet.universe).range(0..=folie_dmx::artnet::MAX_UNIVERSE)).labelled_by(label.id);
+                let (net, subnet, universe) = folie_dmx::artnet::split_universe(artnet.universe);
+                let detail = format!("net {net} · sous-réseau {subnet} · univers {universe}");
+                ui.label(egui::RichText::new(detail).size(11.5).color(theme::MUTED));
+            });
         });
+        if artnet != self.artnet {
+            self.artnet = artnet;
+            self.artnet_changed();
+        }
     }
 
     /// Affiche le résultat d'une action dans la ligne de commande ; le show est

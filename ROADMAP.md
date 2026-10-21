@@ -101,7 +101,8 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] Effets visibles dans la fenêtre Programmer (pastilles, plage, nom de l'effet)
 
 ## Phase 6 — Réseau et télécommande (≈ 1,5 à 2 mois)
-- Art-Net et sACN (univers multiples ; l'USB Pro n'en gère qu'un)
+- [x] Sortie Art-Net (ArtDmx vers un node ou en diffusion), en plus de la sortie choisie
+- [ ] sACN, univers multiples (l'USB Pro n'en gère qu'un), découverte des nodes (ArtPoll)
 - MIDI pour piloter depuis une surface externe
 - **Télécommande web** : serveur axum + WebSockets, page embarquée dans le binaire
   (HTML/JS simple ou Leptos, sans Node) : executors, Go/Back, fixtures

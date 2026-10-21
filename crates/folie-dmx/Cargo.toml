@@ -1,6 +1,6 @@
 [package]
 name = "folie-dmx"
-description = "Types DMX et pilotes de sortie (Enttec DMX USB Pro)"
+description = "Types DMX et pilotes de sortie (Enttec DMX USB Pro, Art-Net)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

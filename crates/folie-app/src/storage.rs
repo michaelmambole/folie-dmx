@@ -24,6 +24,26 @@ struct Settings {
     /// Dispositions enregistrées, par case (1 à 9).
     #[serde(default)]
     layouts: BTreeMap<u8, Layout>,
+    /// Sortie Art-Net, en plus de la sortie choisie.
+    #[serde(default)]
+    artnet: ArtNetSettings,
+}
+
+/// Réglages de la sortie Art-Net.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtNetSettings {
+    pub enabled: bool,
+    /// Adresse d'un node ou de diffusion.
+    pub destination: String,
+    /// Adresse de port Art-Net (net, sous-réseau, univers sur 15 bits).
+    pub universe: u16,
+}
+
+impl Default for ArtNetSettings {
+    fn default() -> Self {
+        Self { enabled: false, destination: folie_dmx::artnet::BROADCAST.to_string(), universe: 0 }
+    }
 }
 
 /// Sauvegarde automatique trouvée au démarrage.
@@ -90,6 +110,14 @@ impl Storage {
 
     pub fn set_workspace(&self, workspace: &Workspace) {
         self.update_settings(|s| s.workspace = Some(workspace.clone()));
+    }
+
+    pub fn artnet(&self) -> ArtNetSettings {
+        self.settings().artnet
+    }
+
+    pub fn set_artnet(&self, artnet: &ArtNetSettings) {
+        self.update_settings(|s| s.artnet = artnet.clone());
     }
 
     pub fn layouts(&self) -> BTreeMap<u8, Layout> {
