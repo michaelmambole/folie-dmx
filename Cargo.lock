@@ -1469,6 +1469,7 @@ dependencies = [
  "folie-remote",
  "folie-show",
  "if-addrs",
+ "image",
  "log",
  "qrcodegen",
  "rfd",

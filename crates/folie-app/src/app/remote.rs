@@ -153,10 +153,6 @@ impl FolieApp {
         let active = self.remote.is_some() || self.osc.is_some();
         let clients = self.remote.as_ref().map_or(0, RemoteServer::clients) + self.osc.as_ref().map_or(0, OscServer::clients);
         let label = if clients > 0 { format!("Télécommande · {clients}") } else { "Télécommande".to_string() };
-        let mut button = egui::Button::new(RichText::new(label).size(12.0).color(if active { theme::TEXT } else { theme::MUTED }));
-        if active {
-            button = button.stroke(egui::Stroke::new(1.0, theme::GO)).fill(theme::GO.gamma_multiply(0.12));
-        }
         let help = match (&self.remote, &self.osc) {
             (None, None) => "Télécommande web et OSC coupées : piloter depuis un téléphone, une tablette ou TouchOSC".to_string(),
             (web, osc) => {
@@ -171,7 +167,7 @@ impl FolieApp {
                 lines.join("\n")
             }
         };
-        let response = ui.add(button).on_hover_text(help);
+        let response = theme::status_chip(ui, &label, active.then_some(theme::GO)).on_hover_text(help);
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {

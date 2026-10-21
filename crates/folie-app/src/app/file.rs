@@ -214,6 +214,10 @@ impl FolieApp {
             if item(ui, "Enregistrer sous…", &SAVE_AS) {
                 self.save_as();
             }
+            ui.separator();
+            if ui.button("À propos de Folie-DMX").clicked() {
+                self.about_open = true;
+            }
         });
     }
 
@@ -230,28 +234,32 @@ impl FolieApp {
         }
     }
 
-    /// État du show dans la barre du haut : « Non enregistré » (un clic enregistre),
-    /// ou « Enregistré », plus visible quelques secondes après l'enregistrement.
+    /// Nom du show dans la barre du haut, et son état dessous : « Non enregistré » en ambre
+    /// (un clic enregistre), ou « Enregistré », plus visible quelques secondes après.
     pub(super) fn file_status(&mut self, ui: &mut egui::Ui) {
         let shortcut = ui.ctx().format_shortcut(&SAVE);
-        if self.file.dirty {
-            let text = RichText::new("Non enregistré").family(theme::medium()).color(theme::TEXT);
-            let button = egui::Button::new(text).fill(theme::SURFACE_3).stroke(egui::Stroke::new(1.0, theme::MUTED));
-            let (dot, _) = ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover());
-            ui.painter().circle_filled(dot.center(), 3.0, theme::TEXT);
-            if ui.add(button).on_hover_text(format!("Enregistrer le show ({shortcut})")).clicked() {
-                self.save();
+        let name = self.file.show_name();
+        let path = self.file.path.as_deref().map(|p| p.display().to_string()).unwrap_or_else(|| "Jamais enregistré".into());
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add(egui::Label::new(RichText::new(name).family(theme::medium()).size(13.0)).truncate()).on_hover_text(path);
+            if self.file.dirty {
+                let text = RichText::new("Non enregistré").size(11.0).color(theme::EXECUTOR);
+                let button = egui::Button::new(text).frame(false);
+                if ui.add(button).on_hover_text(format!("Enregistrer le show ({shortcut})")).clicked() {
+                    self.save();
+                }
+            } else if self.file.path.is_some() {
+                const CONFIRM: Duration = Duration::from_secs(3);
+                let recent = self.file.saved_at.is_some_and(|t| t.elapsed() < CONFIRM);
+                ui.label(RichText::new("Enregistré").size(11.0).color(if recent { theme::GO } else { theme::MUTED }));
+                if recent {
+                    ui.ctx().request_repaint_after(CONFIRM);
+                }
+            } else {
+                ui.label(RichText::new("Nouveau show").size(11.0).color(theme::MUTED));
             }
-        } else if self.file.path.is_some() {
-            const CONFIRM: Duration = Duration::from_secs(3);
-            let recent = self.file.saved_at.is_some_and(|t| t.elapsed() < CONFIRM);
-            let color = if recent { theme::TEXT } else { theme::MUTED };
-            ui.label(RichText::new("Enregistré").size(12.0).color(color))
-                .on_hover_text(self.file.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default());
-            if recent {
-                ui.ctx().request_repaint_after(CONFIRM);
-            }
-        }
+        });
     }
 
     /// À appeler à chaque image : copie de secours, fermeture, titre de la fenêtre.

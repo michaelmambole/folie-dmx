@@ -466,7 +466,14 @@ fn executor_header(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let title = RichText::new(executor_label(executor)).family(theme::medium());
-        let title = if selected { title.color(theme::SELECTION) } else { title };
+        let empty = info.is_none() && launched.is_none();
+        let title = if selected {
+            title.color(theme::SELECTION)
+        } else if empty {
+            title.color(theme::MUTED)
+        } else {
+            title
+        };
         let response = ui.selectable_label(selected, title).on_hover_text("Sélectionner (clic) · réglages (clic droit)");
         if response.clicked() {
             action = Some(Ok(console.select_executor(executor)));
@@ -481,9 +488,8 @@ fn executor_header(
             (Some((_, name, _)), _) | (None, Some((_, name, _))) => {
                 ui.add(egui::Label::new(RichText::new(name).size(12.0)).truncate());
             }
-            (None, None) => {
-                ui.label(RichText::new("vide").size(12.0).color(theme::MUTED));
-            }
+            // Executor vide : rien à côté du numéro, la carte le dit déjà.
+            (None, None) => {}
         }
     });
     // Lignes de hauteur fixe, coupées si trop longues : les cartes restent alignées.
@@ -523,9 +529,32 @@ fn executor_header(
     } else {
         line(ui, "", theme::MUTED);
         line(ui, "", theme::MUTED);
+        // Executor vide : la place de la jauge, sans la jauge.
+        ui.allocate_exact_size(egui::vec2(width, BAR_HEIGHT), egui::Sense::hover());
+        return action;
     }
     transition_bar(ui, status, width);
     action
+}
+
+/// Corps d'un executor vide : la même place qu'un executor plein (les cartes restent
+/// alignées), mais seulement un rail en pointillés et « vide ». Rien à cliquer.
+fn empty_body(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let body = ui
+        .scope(|ui| {
+            ui.set_invisible();
+            add(ui);
+        })
+        .response
+        .rect;
+    let painter = ui.painter();
+    let top = egui::pos2(body.center().x, body.top() + 6.0);
+    let bottom = egui::pos2(body.center().x, body.bottom() - 26.0);
+    if bottom.y - top.y > 30.0 {
+        painter.extend(egui::Shape::dashed_line(&[top, bottom], egui::Stroke::new(1.0, theme::SURFACE_3), 4.0, 4.0));
+    }
+    let label = egui::pos2(body.center().x, body.bottom() - 12.0);
+    painter.text(label, egui::Align2::CENTER_CENTER, "vide", egui::FontId::proportional(11.5), theme::DEFAULT);
 }
 
 /// Ce que mémorise une cue, en quelques mots : « 4 fixtures · 1 preset · 1 effet ».
@@ -1070,6 +1099,14 @@ pub fn executors_window(
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
                     }
+                    if !used {
+                        empty_body(ui, |ui| {
+                            theme::fader(ui, &mut 1.0, theme::EXECUTOR, false, egui::vec2(fader_width, fader_height));
+                            ui.label(RichText::new("100 %").monospace().size(12.0));
+                            mode_buttons(ui, console, executor, held, inner);
+                        });
+                        return;
+                    }
                     let speed = console.executor(executor).is_some_and(|(x, _)| x.options.fader == FaderFunction::Speed);
                     let mut level = status.map_or(1.0, |s| s.level);
                     let response = theme::fader(ui, &mut level, theme::EXECUTOR, assigned, egui::vec2(fader_width, fader_height))
@@ -1097,6 +1134,10 @@ pub fn executors_window(
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
+                    } else if !used {
+                        empty_body(ui, |ui| {
+                            mode_buttons(ui, console, executor, held, inner);
+                        });
                     } else {
                         keep(mode_buttons(ui, console, executor, held, inner));
                     }

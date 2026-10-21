@@ -18,6 +18,7 @@ use crate::pools::PoolsView;
 use crate::storage::{ArtNetSettings, OscSettings, RemoteSettings, Storage};
 use crate::theme;
 
+mod about;
 mod file;
 mod remote;
 mod windows;
@@ -119,6 +120,8 @@ pub struct FolieApp {
     pub(crate) osc: Option<folie_remote::osc::OscServer>,
     /// Adresses de cet ordinateur, montrées pour la télécommande et l'OSC.
     addresses: crate::network::AddressCache,
+    /// Fenêtre « À propos » ouverte.
+    about_open: bool,
     error: Option<String>,
     display: DisplayMode,
     fader_page: usize,
@@ -165,6 +168,7 @@ impl FolieApp {
             osc_settings,
             osc: None,
             addresses: Default::default(),
+            about_open: false,
             error: None,
             display: DisplayMode::Percent,
             fader_page: 0,
@@ -251,114 +255,139 @@ impl FolieApp {
         self.apply_outputs(choice);
     }
 
+    /// Barre du haut en trois zones : le show et les menus à gauche, les touches de jeu au
+    /// centre, les états (sortie, Art-Net, télécommande) et l'affichage à droite.
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("Folie-DMX").strong());
+        const HEIGHT: f32 = 32.0;
+        // Trois touches de 78 points et leurs écarts.
+        let keys_width = 3.0 * 78.0 + 2.0 * ui.spacing().item_spacing.x;
+        let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
+        let zone = |rect: egui::Rect, layout: egui::Layout| egui::UiBuilder::new().max_rect(rect).layout(layout);
+        let centered = egui::Align::Center;
+        ui.scope_builder(zone(row, egui::Layout::left_to_right(centered)), |ui| {
+            let logo = crate::brand::mark_widget(ui, 24.0).interact(egui::Sense::click());
+            if logo.on_hover_text("À propos de Folie-DMX").clicked() {
+                self.about_open = true;
+            }
+            self.file_status(ui);
+            ui.add_space(4.0);
             self.file_menu(ui);
             self.windows_menu(ui);
-            self.file_status(ui);
-            ui.separator();
-            crate::pools::store_button(ui, &mut self.store_armed);
-            ui.separator();
-
-            let output_label = ui.label("Sortie :");
-            let selected_text = match &self.output {
-                OutputChoice::Virtual => "Virtuelle".to_string(),
-                OutputChoice::Port(path) => path.clone(),
-            };
-            let mut choice = None;
-            egui::ComboBox::from_id_salt("output")
-                .selected_text(selected_text)
-                .width(280.0)
-                .show_ui(ui, |ui| {
-                    let virtual_selected = self.output == OutputChoice::Virtual;
-                    if ui.selectable_label(virtual_selected, "Virtuelle (aucune interface)").clicked() {
-                        choice = Some(OutputChoice::Virtual);
-                    }
-                    for port in &self.ports {
-                        let mut label = port.path.clone();
-                        if port.is_ftdi {
-                            label = format!("{label}  [FTDI]");
-                        }
-                        let is_selected = self.output == OutputChoice::Port(port.path.clone());
-                        if ui.selectable_label(is_selected, label).clicked() {
-                            choice = Some(OutputChoice::Port(port.path.clone()));
-                        }
-                    }
-                })
-                .response
-                .labelled_by(output_label.id);
-            if ui.button("Rechercher").on_hover_text("Rechercher les interfaces branchées").clicked() {
-                self.refresh_ports();
-            }
-            if let Some(choice) = choice.filter(|c| *c != self.output) {
-                self.select_output(choice);
-            }
+        });
+        let keys = egui::Rect::from_center_size(row.center(), egui::vec2(keys_width, HEIGHT));
+        ui.scope_builder(zone(keys, egui::Layout::left_to_right(centered)), |ui| self.play_keys(ui));
+        ui.scope_builder(zone(row, egui::Layout::right_to_left(centered)), |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            self.display_switch(ui);
+            self.remote_button(ui);
             // L'Art-Net part en plus de la sortie choisie ; il se règle dans la fenêtre Sortie DMX.
             if self.artnet.enabled {
-                let text = RichText::new("Art-Net").size(12.0).color(theme::TEXT);
-                let chip = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::GO)).fill(theme::GO.gamma_multiply(0.12));
                 let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
-                ui.add(chip).on_hover_text(help);
+                if theme::status_chip(ui, "Art-Net", Some(theme::GO)).on_hover_text(help).clicked() {
+                    self.windows.open(crate::workspace::WindowKind::Output);
+                }
             }
-            self.remote_button(ui);
-
-            ui.separator();
-            let blackout = self.snapshot.blackout;
-            let (fill, text) = if blackout {
-                (Color32::from_rgb(200, 30, 30), Color32::WHITE)
-            } else {
-                (ui.visuals().widgets.inactive.weak_bg_fill, ui.visuals().text_color())
-            };
-            let button = egui::Button::new(RichText::new("BLACKOUT").strong().color(text)).fill(fill);
-            if ui.add(button).on_hover_text("Coupe toute la sortie (B)").clicked() {
-                self.toggle_blackout();
-            }
-            let clear_help = "Vide le programmer : fixtures à leurs valeurs par défaut, canaux forcés relâchés";
-            if ui.button("Clear").on_hover_text(clear_help).clicked() {
-                let result = self.console.execute("ClearAll");
-                self.command_line.report(result);
-            }
-
-            ui.separator();
-            ui.label("Affichage :");
-            ui.selectable_value(&mut self.display, DisplayMode::Percent, "%");
-            ui.selectable_value(&mut self.display, DisplayMode::Dmx, "DMX");
+            self.output_chip(ui);
         });
     }
 
+    /// STORE, CLEAR et BLACKOUT : les touches qu'on joue, au centre.
+    fn play_keys(&mut self, ui: &mut egui::Ui) {
+        crate::pools::store_key(ui, &mut self.store_armed);
+        let clear_help = "Vide le programmer : fixtures à leurs valeurs par défaut, canaux forcés relâchés";
+        if ui.add(theme::key_button("CLEAR", theme::LINE, theme::SURFACE_2, theme::TEXT)).on_hover_text(clear_help).clicked() {
+            let result = self.console.execute("ClearAll");
+            self.command_line.report(result);
+        }
+        let blackout = self.snapshot.blackout;
+        let button = if blackout {
+            theme::key_button("BLACKOUT", theme::DANGER, theme::DANGER, Color32::WHITE)
+        } else {
+            theme::key_button("BLACKOUT", theme::DANGER, theme::DANGER.gamma_multiply(0.18), Color32::from_rgb(255, 138, 132))
+        };
+        let help = if blackout { "Sortie coupée : cliquer pour rallumer (B)" } else { "Coupe toute la sortie (B)" };
+        if ui.add(button).on_hover_text(help).clicked() {
+            self.toggle_blackout();
+        }
+    }
+
+    /// Sortie choisie, en pastille : un clic ouvre la liste des interfaces.
+    fn output_chip(&mut self, ui: &mut egui::Ui) {
+        let (label, help) = match &self.output {
+            OutputChoice::Virtual => ("Virtuelle".to_string(), "Sortie virtuelle : aucune interface DMX".to_string()),
+            OutputChoice::Port(path) => ("USB Pro".to_string(), format!("Enttec USB Pro sur {path}")),
+        };
+        let state = match (&self.output, self.snapshot.output_errors) {
+            (_, errors) if errors > 0 => Some(theme::DANGER),
+            (OutputChoice::Virtual, _) => None,
+            (OutputChoice::Port(_), _) => Some(theme::GO),
+        };
+        let response = theme::status_chip(ui, &label, state).on_hover_text(format!("{help} ; clic : choisir la sortie"));
+        let mut choice = None;
+        egui::Popup::menu(&response).show(|ui| {
+            theme::section(ui, "Sortie DMX");
+            if ui.selectable_label(self.output == OutputChoice::Virtual, "Virtuelle (aucune interface)").clicked() {
+                choice = Some(OutputChoice::Virtual);
+            }
+            for port in &self.ports {
+                let text = if port.is_ftdi { format!("{}  [FTDI]", port.path) } else { port.path.clone() };
+                if ui.selectable_label(self.output == OutputChoice::Port(port.path.clone()), text).clicked() {
+                    choice = Some(OutputChoice::Port(port.path.clone()));
+                }
+            }
+            ui.separator();
+            if ui.button("Rechercher les interfaces").clicked() {
+                self.refresh_ports();
+            }
+        });
+        if let Some(choice) = choice.filter(|c| *c != self.output) {
+            self.select_output(choice);
+        }
+    }
+
+    /// Valeurs en % ou en DMX.
+    fn display_switch(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            // Dans une disposition de droite à gauche : DMX d'abord.
+            ui.selectable_value(&mut self.display, DisplayMode::Dmx, RichText::new("DMX").monospace().size(12.0))
+                .on_hover_text("Valeurs en DMX (0 à 255)");
+            ui.selectable_value(&mut self.display, DisplayMode::Percent, RichText::new("%").monospace().size(12.0))
+                .on_hover_text("Valeurs en pourcentage");
+        });
+    }
+
+    /// Barre d'état : un message d'erreur s'il y en a un, l'essentiel à droite.
     fn status_bar(&self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let snap = &self.snapshot;
-            ui.label(RichText::new(self.file.show_name()).strong());
-            ui.separator();
-            ui.monospace(format!("trame {:>8}", snap.frame));
-            ui.separator();
-            ui.monospace(format!("{:>4.1} Hz", self.rate.hz));
-            ui.separator();
-            ui.label(format!("Sortie : {}", snap.output_names.join(", ")));
-            ui.separator();
-            let errors = RichText::new(format!("erreurs {}", snap.output_errors));
-            ui.label(if snap.output_errors > 0 { errors.color(Color32::LIGHT_RED) } else { errors });
-            ui.label(format!("retards {}", snap.late_frames));
-            ui.separator();
-            ui.label(format!("{} fixtures patchées", self.console.show.patch.fixtures().len()));
-            if !self.library_errors.is_empty() {
-                let details: Vec<String> = self
-                    .library_errors
-                    .iter()
-                    .map(|e| format!("{} : {}", e.path.display(), e.message))
-                    .collect();
-                ui.colored_label(
-                    Color32::LIGHT_RED,
-                    format!("{} fichier(s) de bibliothèque ignoré(s)", self.library_errors.len()),
-                )
-                .on_hover_text(details.join("\n"));
-            }
             if let Some(err) = &self.error {
-                ui.separator();
-                ui.colored_label(Color32::LIGHT_RED, err);
+                ui.label(RichText::new(err).size(12.0).color(theme::DANGER));
             }
+            if !self.library_errors.is_empty() {
+                let details: Vec<String> =
+                    self.library_errors.iter().map(|e| format!("{} : {}", e.path.display(), e.message)).collect();
+                let text = format!("{} fichier(s) de bibliothèque ignoré(s)", self.library_errors.len());
+                ui.label(RichText::new(text).size(12.0).color(theme::DANGER)).on_hover_text(details.join("\n"));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                let snap = &self.snapshot;
+                let small = |text: String, color| RichText::new(text).monospace().size(11.0).color(color);
+                let output = if snap.output_errors > 0 {
+                    small(format!("{} erreur(s) de sortie", snap.output_errors), theme::DANGER)
+                } else {
+                    small("sortie OK".into(), theme::GO)
+                };
+                ui.label(output).on_hover_text(format!("Sortie : {}", snap.output_names.join(", ")));
+                if snap.late_frames > 0 {
+                    ui.label(small(format!("{} trame(s) en retard", snap.late_frames), theme::EXECUTOR))
+                        .on_hover_text("Trames émises après leur échéance : l'ordinateur est très chargé");
+                }
+                ui.label(small(format!("{:.0} Hz", self.rate.hz), theme::MUTED)).on_hover_text(format!("Trame {}", snap.frame));
+                let fixtures = self.console.show.patch.fixtures().len();
+                let plural = if fixtures > 1 { "s" } else { "" };
+                ui.label(small(format!("{fixtures} fixture{plural} patchée{plural}"), theme::MUTED));
+            });
         });
     }
 }
@@ -410,6 +439,7 @@ impl eframe::App for FolieApp {
 
         self.file_modals(&ctx);
         self.layout_dialog(&ctx);
+        self.about_dialog(&ctx);
         ctx.request_repaint_after(UI_REFRESH);
     }
 }
@@ -557,7 +587,7 @@ mod tests {
         harness.key_press(egui::Key::Escape);
         harness.run_steps(2);
 
-        harness.get_by_label("Clear").click();
+        harness.get_by_label("CLEAR").click();
         settle(&mut harness);
         let out = &harness.state().snapshot.output[0];
         assert_eq!((out.get(2), out.get(8)), (Ok(0), Ok(0)));
@@ -879,7 +909,7 @@ mod tests {
 
         // Store armé, puis « Enregistrer ici » sur l'executor 2, encore vide.
         command(&mut harness, "Fixture 2 At 100");
-        harness.get_all_by_label("Store").next().unwrap().click(); // celui de la barre du haut
+        harness.get_by_label("STORE").click(); // celui de la barre du haut
         harness.run_steps(2);
         harness.get_all_by_label("Enregistrer ici").nth(1).unwrap().click();
         settle(&mut harness);
@@ -1656,15 +1686,20 @@ mod tests {
         }
         assert_eq!(harness.state().console.page(), 3);
         let mut buffer = [0u8; rosc::decoder::MTU];
-        let page = (0..20).find_map(|_| {
-            let (size, _) = client.recv_from(&mut buffer).ok()?;
-            let (_, rosc::OscPacket::Bundle(bundle)) = rosc::decoder::decode_udp(&buffer[..size]).ok()? else { return None };
-            bundle.content.into_iter().find_map(|p| match p {
+        // Le premier envoi peut encore dire page 1 : on lit jusqu'à la page 3.
+        let mut pages = Vec::new();
+        for _ in 0..40 {
+            let Ok((size, _)) = client.recv_from(&mut buffer) else { break };
+            let Ok((_, rosc::OscPacket::Bundle(bundle))) = rosc::decoder::decode_udp(&buffer[..size]) else { continue };
+            pages.extend(bundle.content.into_iter().filter_map(|p| match p {
                 rosc::OscPacket::Message(m) if m.addr == "/folie/page" => m.args.first().cloned(),
                 _ => None,
-            })
-        });
-        assert_eq!(page, Some(rosc::OscType::Int(3)));
+            }));
+            if pages.last() == Some(&rosc::OscType::Int(3)) {
+                break;
+            }
+        }
+        assert_eq!(pages.last(), Some(&rosc::OscType::Int(3)), "{pages:?}");
         settle(&mut harness);
         harness.get_by_label("1 client entendu");
         harness.get_by_label("Télécommande · 1");
@@ -1751,6 +1786,27 @@ mod tests {
         }
         assert_eq!(received, ["/marker", "/play"]);
         harness.get_by_label("OSC vers Reaper /play");
+    }
+
+    #[test]
+    fn about_from_the_file_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut harness = harness(Storage::at(dir.path()));
+        harness.get_by_label("Fichier").click();
+        harness.run_steps(2);
+        harness.get_all_by_label("À propos de Folie-DMX").last().unwrap().click(); // l'entrée du menu, pas le logo
+        harness.run_steps(2);
+        harness.get_by_label(&format!("Folie-DMX {}", env!("CARGO_PKG_VERSION")));
+        harness.get_by_label("Créée par Michaël Mambole");
+        harness.get_by_label("Open Fixture Library");
+        harness.get_by_label(&dir.path().display().to_string());
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("a-propos.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Fermer").click();
+        harness.run_steps(2);
+        assert!(!harness.state().about_open);
     }
 
     #[test]

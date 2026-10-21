@@ -34,6 +34,20 @@ pub struct PoolsView {
 pub fn store_button(ui: &mut egui::Ui, armed: &mut bool) {
     let text = RichText::new("Store").family(theme::medium());
     let button = if *armed { egui::Button::new(text.color(Color32::WHITE)).fill(ARMED) } else { egui::Button::new(text) };
+    store_with(ui, armed, button);
+}
+
+/// Touche STORE de la barre du haut : cadre rouge, pleine quand elle est armée.
+pub fn store_key(ui: &mut egui::Ui, armed: &mut bool) {
+    let button = if *armed {
+        theme::key_button("STORE", ARMED, ARMED, Color32::WHITE)
+    } else {
+        theme::key_button("STORE", ARMED, theme::SURFACE_1, Color32::from_rgb(255, 138, 132))
+    };
+    store_with(ui, armed, button);
+}
+
+fn store_with(ui: &mut egui::Ui, armed: &mut bool, button: egui::Button<'_>) {
     let help = "Armer (touche S), puis cliquer une case de pool, un executor ou une cue pour y enregistrer (Échap pour annuler)";
     if ui.add(button).on_hover_text(help).clicked() {
         *armed = !*armed;

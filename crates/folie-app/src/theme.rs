@@ -219,6 +219,34 @@ pub fn legend(ui: &mut egui::Ui) {
     });
 }
 
+/// Touche de jeu de la barre du haut (STORE, CLEAR, BLACKOUT) : capitales, cadre coloré.
+pub fn key_button(text: &str, stroke: Color32, fill: Color32, color: Color32) -> egui::Button<'_> {
+    let text = egui::RichText::new(text).family(medium()).size(12.5).extra_letter_spacing(0.6).color(color);
+    egui::Button::new(text).fill(fill).stroke(Stroke::new(1.0, stroke)).min_size(egui::vec2(78.0, 26.0))
+}
+
+/// Pastille d'état de la barre du haut : un point (vert actif, rouge en erreur, gris
+/// sinon) et un libellé discret. Cliquable.
+pub fn status_chip(ui: &mut egui::Ui, label: &str, state: Option<Color32>) -> egui::Response {
+    let text = egui::RichText::new(label).size(12.0).color(if state.is_some() { TEXT } else { MUTED });
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    const DOT: f32 = 7.0;
+    const PAD: f32 = 7.0;
+    let size = egui::vec2(PAD + DOT + 6.0 + galley.size().x + PAD, 24.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, RADIUS, SURFACE_2);
+    }
+    let dot = egui::pos2(rect.left() + PAD + DOT / 2.0, rect.center().y);
+    painter.circle_filled(dot, DOT / 2.0, state.unwrap_or(DEFAULT));
+    let text_pos = egui::pos2(rect.left() + PAD + DOT + 6.0, rect.center().y - galley.size().y / 2.0);
+    painter.galley(text_pos, galley, TEXT);
+    let label = label.to_string();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &label));
+    response
+}
+
 /// Bouton d'action principale (GO) : plein, vert.
 pub fn primary_button(text: &str) -> egui::Button<'_> {
     egui::Button::new(egui::RichText::new(text).family(medium()).color(Color32::from_rgb(10, 40, 30))).fill(GO)

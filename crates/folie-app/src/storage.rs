@@ -130,6 +130,11 @@ impl Storage {
         Self { dir: Some(dir.to_path_buf()) }
     }
 
+    /// Dossier des réglages, s'il y en a un.
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
     fn file(&self, name: &str) -> Option<PathBuf> {
         self.dir.as_ref().map(|d| d.join(name))
     }

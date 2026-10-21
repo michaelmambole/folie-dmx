@@ -1,4 +1,5 @@
 mod app;
+mod brand;
 mod cmdline;
 mod color_picker;
 mod effects_ui;
@@ -26,7 +27,8 @@ fn main() -> eframe::Result {
         .with_title("Folie-DMX")
         .with_inner_size(main.size().unwrap_or(eframe::egui::vec2(1100.0, 760.0)))
         .with_min_inner_size([700.0, 480.0])
-        .with_fullscreen(main.fullscreen);
+        .with_fullscreen(main.fullscreen)
+        .with_icon(std::sync::Arc::new(brand::icon(512)));
     if let Some(position) = main.position() {
         viewport = viewport.with_position(position);
     }

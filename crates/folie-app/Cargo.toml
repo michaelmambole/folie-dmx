@@ -32,3 +32,4 @@ egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
 tempfile = "3"
 tungstenite = "0.28"
 rosc = "0.11"
+image = { version = "0.25", default-features = false, features = ["png"] }

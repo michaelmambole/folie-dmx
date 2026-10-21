@@ -1,6 +1,8 @@
 //! Ligne de commande façon grandMA, avec historique (flèches haut et bas).
 
-use eframe::egui::{self, Color32, Key, RichText};
+use eframe::egui::{self, Key, RichText};
+
+use crate::theme;
 use folie_control::{CommandError, Console, Outcome};
 
 pub struct CommandLine {
@@ -36,12 +38,26 @@ impl CommandLine {
     pub fn show(&mut self, ui: &mut egui::Ui, console: &mut Console) -> bool {
         let mut changed = false;
         ui.horizontal(|ui| {
-            let label = ui.label(RichText::new("Commande").strong());
+            // Invite rouge, comme le programmer : c'est ici qu'on lui parle.
+            let prompt = RichText::new("Folie>").family(egui::FontFamily::Monospace).size(14.0).color(theme::PROGRAMMER);
+            ui.add(egui::Label::new(prompt).selectable(false)).on_hover_text("Ligne de commande");
             let edit = egui::TextEdit::singleline(&mut self.input)
                 .hint_text("Fixture 1 Thru 4 At 50")
-                .font(egui::TextStyle::Monospace)
-                .desired_width(480.0);
-            let response = ui.add(edit).labelled_by(label.id);
+                .font(egui::FontId::monospace(15.0))
+                .margin(egui::Margin::symmetric(8, 5))
+                .background_color(theme::BG)
+                .desired_width((ui.available_width() * 0.55).clamp(320.0, 760.0));
+            let response = ui
+                .scope(|ui| {
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    widgets.inactive.bg_stroke = egui::Stroke::new(1.0, theme::PROGRAMMER.gamma_multiply(0.5));
+                    widgets.hovered.bg_stroke = egui::Stroke::new(1.0, theme::PROGRAMMER.gamma_multiply(0.8));
+                    ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, theme::PROGRAMMER);
+                    ui.add(edit)
+                })
+                .inner;
+            // Le nom accessible reste « Commande » (tests, lecteurs d'écran), pas « Folie> ».
+            ui.ctx().accesskit_node_builder(response.id, |node| node.set_label("Commande"));
 
             if response.has_focus() {
                 self.browse_history(ui);
@@ -61,8 +77,8 @@ impl CommandLine {
             }
 
             if let Some((ok, text)) = &self.feedback {
-                let color = if *ok { Color32::LIGHT_GREEN } else { Color32::LIGHT_RED };
-                ui.colored_label(color, text);
+                let color = if *ok { theme::GO } else { theme::PROGRAMMER };
+                ui.add(egui::Label::new(RichText::new(text).size(12.5).color(color)).truncate());
             }
         });
         changed
