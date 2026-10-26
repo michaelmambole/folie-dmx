@@ -219,6 +219,9 @@ struct OflChannel {
     default_value: Option<Value>,
     capability: Option<OflCapability>,
     capabilities: Option<Vec<OflCapability>>,
+    /// Extension propre à Folie (ignorée par OFL) : canaux à mettre à 0 quand celui-ci sert.
+    #[serde(default, rename = "folieTurnsOff")]
+    turns_off: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -381,6 +384,7 @@ fn parse_parameter(name: &str, reference: &ChannelRef<'_>, offsets: Vec<u16>) ->
         offsets,
         default,
         capabilities,
+        turns_off: channel.turns_off.clone(),
     })
 }
 

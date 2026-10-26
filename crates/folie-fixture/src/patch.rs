@@ -220,6 +220,7 @@ mod tests {
                 offsets: vec![i],
                 default: 0x0A00,
                 capabilities: Vec::new(),
+                turns_off: Vec::new(),
             })
             .collect();
         Arc::new(FixtureType {

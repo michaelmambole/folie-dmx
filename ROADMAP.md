@@ -12,8 +12,11 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
   Validés sur LEDBeam 350 (mode 2) et SupraKolor HD (TOUR) : dimmer, shutter/strobe, pan/tilt,
   couleurs RGBW et sélecteur, zoom, cue avec fondu, effet. Rush MH 6 : roue de couleurs simulée
   et sens du zoom (large à 0) ; couleurs blanches par défaut.
-- [ ] Reste à essayer sur appareil : **ServoColor 4K**, **Sunstrip** ; la LEDBeam annoncée en 001 n'a pas répondu sur la ligne essayée (autre ligne ?)
+- [ ] Reste à essayer sur appareil : **Sunstrip** (rangés pour l'instant) ; la LEDBeam annoncée en 001 n'a pas répondu sur la ligne essayée (autre ligne ?)
 - [ ] Fluidité des fondus à 25 trames/s à surveiller sur des fondus lents de dimmer
+- [x] **ServoColor 4K** vérifiée (dimmer, strobe dès 11, pan/tilt, zoom large à 0) ; sa roue virtuelle
+  exige le Blanc à 0 (ses blancs 1 à 10 aussi RGB à fond) : Blanc à 0 par défaut, et remis à 0 tout
+  seul dès qu'on utilise la roue (extension `folieTurnsOff` dans la fiche) ; défilement dès 251.
 - [x] Reconnexion automatique si l'interface est débranchée (une tentative par seconde, alerte rouge jusqu'au retour)
 
 ## Phase 2 — Interface et patch (≈ 1 à 1,5 mois)

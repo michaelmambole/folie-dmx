@@ -236,6 +236,9 @@ pub struct Parameter {
     pub offsets: Vec<u16>,
     pub default: u16,
     pub capabilities: Vec<Capability>,
+    /// Paramètres (nom de base) que l'appareil exige à 0 dès que celui-ci quitte sa position
+    /// neutre : la roue virtuelle de la ServoColor 4K n'agit qu'avec le Blanc à 0.
+    pub turns_off: Vec<String>,
 }
 
 impl Parameter {
@@ -305,6 +308,7 @@ mod tests {
             offsets,
             default: 0,
             capabilities: Vec::new(),
+            turns_off: Vec::new(),
         }
     }
 

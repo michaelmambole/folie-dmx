@@ -299,6 +299,24 @@ impl Console {
         self.released.remove(&key);
         self.programmer.insert(key, value);
         self.engine.send(EngineCommand::SetAttribute { key, value });
+        self.turn_off_companions(target, parameter, value);
+    }
+
+    /// Un paramètre quitte sa position neutre : les canaux que l'appareil exige alors à 0
+    /// (`Parameter::turns_off`) y sont mis, dans le programmer comme le reste.
+    fn turn_off_companions(&mut self, target: Target, parameter: usize, value: u16) {
+        let companions: Vec<usize> = {
+            let parameters = self.show.patch.parameters_of(target);
+            let Some((_, p)) = parameters.iter().find(|(i, _)| *i == parameter) else { return };
+            let neutral = p.capability_at(value).is_none_or(|c| c.kind == CapabilityKind::NoFunction);
+            if p.turns_off.is_empty() || neutral {
+                return;
+            }
+            parameters.iter().filter(|(_, q)| p.turns_off.contains(&q.base_name)).map(|(i, _)| *i).collect()
+        };
+        for companion in companions {
+            self.send_value(target, companion, 0);
+        }
     }
 
     /// Donne à toute la sélection la valeur d'un paramètre de référence.
@@ -880,6 +898,31 @@ mod tests {
         assert_eq!(c.show.presets[&(FeatureGroup::Color, 1)].name, "Cyan");
         run(&mut c, "Delete Preset 4.1");
         assert!(c.show.presets.is_empty());
+    }
+
+    /// La roue virtuelle de la ServoColor 4K n'agit qu'avec le Blanc à 0 (vérifié sur l'appareil).
+    #[test]
+    fn servocolor_wheel_turns_white_off() {
+        let mut c = console();
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
+        let (library, _) = Library::load_dir(root);
+        let fixture_type = library.get("starway/servo-color-4k").unwrap().clone();
+        let mode = fixture_type.modes.iter().position(|m| m.footprint == 20).unwrap();
+        let servo = PatchedFixture { id: FixtureId(20), name: "Servo".into(), fixture_type, mode, universe: 0, address: 201 };
+        c.show.patch.add(servo).unwrap();
+        c.patch_changed();
+        let parameters = c.show.patch.get(FixtureId(20)).unwrap().mode().parameters.clone();
+        let find = |name: &str| parameters.iter().position(|p| p.name == name).unwrap();
+        let (wheel, white) = (find("Virtual Color Wheel"), find("White"));
+        let key = |parameter| ParamKey { fixture: FixtureId(20), parameter };
+
+        run(&mut c, "Fixture 20");
+        c.set_like(&parameters[white], u16::MAX);
+        c.set_like(&parameters[wheel], 0);
+        assert_eq!(c.programmer().get(&key(white)), Some(&u16::MAX), "roue au neutre : le Blanc reste");
+        c.set_like(&parameters[wheel], 11 * 257);
+        assert_eq!(c.programmer().get(&key(white)), Some(&0), "roue utilisée : Blanc à 0");
+        assert_eq!(c.programmer().get(&key(wheel)), Some(&(11 * 257)));
     }
 
     #[test]

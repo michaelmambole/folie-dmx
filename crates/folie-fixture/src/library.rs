@@ -106,4 +106,23 @@ mod tests {
         let white = tour.parameters.iter().find(|p| p.name == "White").unwrap();
         assert_eq!(white.default, u16::MAX);
     }
+
+    /// Vérifié sur l'appareil le 2026-10-26 : 250 donne un rouge fixe, la roue virtuelle
+    /// défile en avant de 251 à 253 (la fiche OFL plaçait un rouge en double à 251) ; elle
+    /// n'agit qu'avec le Blanc à 0.
+    #[test]
+    fn servocolor_wheel_rotates_from_251_and_needs_white_off() {
+        use crate::CapabilityKind;
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
+        let (library, _) = Library::load_dir(root);
+        for mode in &library.get("starway/servo-color-4k").unwrap().modes {
+            let wheel = mode.parameters.iter().find(|p| p.name == "Virtual Color Wheel").unwrap();
+            let at = |dmx: u16| &wheel.capability_at(dmx * 257).unwrap().kind;
+            assert!(matches!(at(250), CapabilityKind::ColorPreset { .. }), "250 : rouge fixe");
+            assert!(!matches!(at(251), CapabilityKind::ColorPreset { .. }), "251 : défilement");
+            // La roue n'agit qu'avec le Blanc à 0, et ses blancs avec RGB à fond.
+            let default = |name: &str| mode.parameters.iter().find(|p| p.name == name).unwrap().default;
+            assert_eq!((default("White"), default("Red")), (0, u16::MAX));
+        }
+    }
 }

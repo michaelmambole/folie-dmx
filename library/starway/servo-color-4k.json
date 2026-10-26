@@ -6,7 +6,7 @@
   "meta": {
     "authors": ["MullRR", "Flo Edelmann"],
     "createDate": "2020-03-29",
-    "lastModifyDate": "2020-03-29"
+    "lastModifyDate": "2026-10-26"
   },
   "links": {
     "manual": [
@@ -144,13 +144,14 @@
     },
     "White": {
       "fineChannelAliases": ["White fine"],
-      "defaultValue": "100%",
+      "defaultValue": 0,
       "capability": {
         "type": "ColorIntensity",
         "color": "White"
       }
     },
     "Virtual Color Wheel": {
+      "folieTurnsOff": ["White"],
       "defaultValue": 0,
       "capabilities": [
         {
@@ -163,7 +164,7 @@
         {
           "dmxRange": [1, 1],
           "type": "ColorPreset",
-          "comment": "White",
+          "comment": "White; checked on the fixture: the whole wheel needs the White channel at 0; whites 1-10 (cold to warm) also need Red, Green and Blue at full",
           "colors": ["#ffffff"],
           "colorTemperature": "10000K",
           "switchChannels": {
@@ -263,7 +264,7 @@
         {
           "dmxRange": [11, 11],
           "type": "ColorPreset",
-          "comment": "Red",
+          "comment": "Red; checked on the fixture: colours from 11 need the White channel at 0; Red, Green and Blue have no effect on them",
           "colors": ["#f1525b"],
           "switchChannels": {
             "Effect Speed": "Color Fade Time"
@@ -356,19 +357,10 @@
           }
         },
         {
-          "dmxRange": [251, 251],
-          "type": "ColorPreset",
-          "comment": "Red",
-          "colors": ["#f1525b"],
-          "switchChannels": {
-            "Effect Speed": "Color Fade Time"
-          }
-        },
-        {
-          "dmxRange": [252, 253],
+          "dmxRange": [251, 253],
           "type": "Effect",
           "effectPreset": "ColorFade",
-          "comment": "virtual color wheel rotation (forwards)",
+          "comment": "virtual color wheel rotation (forwards); checked on the fixture: 250 is fixed red, rotation starts at 251",
           "switchChannels": {
             "Effect Speed": "Virtual Color Wheel Rotation Speed Forwards"
           }
