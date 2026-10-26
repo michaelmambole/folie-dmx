@@ -10,7 +10,7 @@
       "Folie-DMX"
     ],
     "createDate": "2026-10-20",
-    "lastModifyDate": "2026-10-20"
+    "lastModifyDate": "2026-10-26"
   },
   "comment": "14 x 15 W RGBW LEDs, IP66, zoom 8°-40°. Written from the 'SupraKolor' user manual (2014 v2); the HD libraries share the same folder. Only the TOUR (12 ch) mode is described.",
   "links": {
@@ -301,14 +301,15 @@
         {
           "dmxRange": [
             0,
-            10
+            3
           ],
           "type": "ShutterStrobe",
-          "shutterEffect": "Open"
+          "shutterEffect": "Open",
+          "comment": "Checked on the fixture: the manual says 0-10, it strobes from 4"
         },
         {
           "dmxRange": [
-            11,
+            4,
             255
           ],
           "type": "ShutterStrobe",
@@ -561,7 +562,7 @@
         "type": "Zoom",
         "angleStart": "wide",
         "angleEnd": "narrow",
-        "comment": "8°-40°, direction to be checked"
+        "comment": "8°-40°, direction checked on the fixture"
       }
     },
     "Zoom Reset": {

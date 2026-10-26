@@ -90,4 +90,17 @@ mod tests {
         assert!(library.get("martin/rush-mh-6-wash").is_some());
         assert_eq!(library.get("martin/rush-mh-2-wash").unwrap().manufacturer, "Martin");
     }
+
+    /// Vérifié sur l'appareil le 2026-10-26 : le manuel annonce « ouvert » jusqu'à 10,
+    /// mais le SupraKolor clignote dès 4.
+    #[test]
+    fn suprakolor_strobe_starts_at_4() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
+        let (library, _) = Library::load_dir(root);
+        let tour = &library.get("starway/suprakolor-hd").unwrap().modes[0];
+        let strobe = tour.parameters.iter().find(|p| p.name == "Strobe").unwrap();
+        let dmx = |v: u16| v >> 8;
+        assert_eq!(dmx(*strobe.capabilities[0].range.end()), 3, "ouvert de 0 à 3");
+        assert_eq!(dmx(*strobe.capabilities[1].range.start()), 4, "strobe à partir de 4");
+    }
 }

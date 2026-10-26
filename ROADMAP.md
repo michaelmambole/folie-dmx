@@ -3,11 +3,17 @@
 Estimations pour un développement **à temps partiel** (soirs et week-ends).
 Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichissement.
 
-## Phase 1 — Noyau DMX ✅ (en cours de validation)
+## Phase 1 — Noyau DMX ✅
 - [x] Univers, trait de sortie, sortie virtuelle
 - [x] Pilote Enttec USB Pro (trame label 6, paramètres, numéro de série)
 - [x] Moteur à fréquence fixe, commandes, instantané, blackout
-- [ ] **Validation sur matériel réel** (`folie info`, `folie test`)
+- [x] **Validation sur matériel réel** (2026-10-26, au gril d'une salle) : l'USB Pro exige 250 000 bauds
+  et un débit limité (~25 trames/s) ; interface choisie automatiquement au lancement.
+  Validés sur LEDBeam 350 (mode 2) et SupraKolor HD (TOUR) : dimmer, shutter/strobe, pan/tilt,
+  couleurs RGBW et sélecteur, zoom, cue avec fondu, effet.
+- [ ] Reste à essayer sur appareil : roue de couleurs simulée de la **Rush MH 6**, **ServoColor 4K**,
+  **Sunstrip** ; la LEDBeam annoncée en 001 n'a pas répondu sur la ligne essayée (autre ligne ?)
+- [ ] Fluidité des fondus à 25 trames/s à surveiller sur des fondus lents de dimmer
 - [x] Reconnexion automatique si l'interface est débranchée (une tentative par seconde, alerte rouge jusqu'au retour)
 
 ## Phase 2 — Interface et patch (≈ 1 à 1,5 mois)
