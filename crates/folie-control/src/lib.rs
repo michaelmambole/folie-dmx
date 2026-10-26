@@ -857,24 +857,24 @@ mod tests {
     #[test]
     fn presets_store_and_apply() {
         let mut c = console();
-        // Rouge sur la fixture 1 : on règle le canal Red puis on enregistre la couleur.
+        // Sans rouge sur la fixture 1 : on règle le canal Red puis on enregistre la couleur.
         let red = c.show.patch.get(FixtureId(1)).unwrap().mode().parameters[2].clone();
         assert_eq!(red.name, "Red");
         run(&mut c, "Fixture 1");
-        c.set_like(&red, u16::MAX);
+        c.set_like(&red, 0);
         settled(&c);
-        let stored = run(&mut c, r#"Store Preset 4.1 "Rouge""#);
-        assert_eq!(stored.message, "Preset 4.1 « Rouge » enregistré (1 fixture)");
+        let stored = run(&mut c, r#"Store Preset 4.1 "Sans rouge""#);
+        assert_eq!(stored.message, "Preset 4.1 « Sans rouge » enregistré (1 fixture)");
         assert!(c.execute("Store Preset 2.1").is_err(), "aucune valeur de position");
 
         // Appliqué à la fixture 1 seulement : elle est la seule dans le preset.
         run(&mut c, "ClearAll");
         settled(&c);
-        assert_eq!(dmx(&c, 4), 0, "Red par défaut à 0 sur la MH 6");
+        assert_eq!(dmx(&c, 4), 255, "Red par défaut à fond sur la MH 6 (blanc)");
         let applied = run(&mut c, "Preset 4.1");
         assert_eq!(c.selection(), [fixture(1)], "sans sélection : les fixtures du preset");
         assert!(applied.message.contains("appliqué à 1 cible"));
-        assert_eq!(dmx(&c, 4), 255);
+        assert_eq!(dmx(&c, 4), 0);
 
         run(&mut c, r#"Label Preset 4.1 "Cyan""#);
         assert_eq!(c.show.presets[&(FeatureGroup::Color, 1)].name, "Cyan");
@@ -888,10 +888,10 @@ mod tests {
         run(&mut c, "Fixture 1 Thru 2 At 100");
         let fixture = c.show.patch.get(FixtureId(1)).unwrap().clone();
         let red = fixture.mode().parameters[2].clone();
-        c.set_like(&red, u16::MAX);
+        c.set_like(&red, 0);
         settled(&c);
         c.release_like(&red);
-        assert_eq!((dmx(&c, 4), dmx(&c, 18)), (0, 0), "rouge relâché sur les deux fixtures");
+        assert_eq!((dmx(&c, 4), dmx(&c, 18)), (255, 255), "rouge relâché sur les deux fixtures : retour au blanc");
         assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 255), "le dimmer reste programmé");
         assert_eq!(c.programmer().len(), 2);
     }
@@ -1015,9 +1015,12 @@ mod tests {
                 values.iter().map(|(n, v)| (n.to_string(), *v)).collect(),
             )]),
         };
-        // MH 6 : rouge seul, puis rouge + vert = jaune ; la roue (couleur 12, vert) prime.
-        assert_eq!(preset_color(&preset(&[("Red", 65_535)], 1), &c.show.patch), Some([255, 0, 0]));
-        assert_eq!(preset_color(&preset(&[("Red", 65_535), ("Green", 65_535)], 1), &c.show.patch), Some([255, 255, 0]));
+        // MH 6 (blanc par défaut) : rouge seul, puis rouge + vert = jaune ; la roue (couleur 12, vert) prime.
+        let red = [("Red", 65_535), ("Green", 0), ("Blue", 0), ("White", 0)];
+        assert_eq!(preset_color(&preset(&red, 1), &c.show.patch), Some([255, 0, 0]));
+        let yellow = [("Red", 65_535), ("Green", 65_535), ("Blue", 0), ("White", 0)];
+        assert_eq!(preset_color(&preset(&yellow, 1), &c.show.patch), Some([255, 255, 0]));
+        assert_eq!(preset_color(&preset(&[("Red", 65_535)], 1), &c.show.patch), Some([255, 255, 255]), "le reste au défaut");
         let wheel = preset(&[("Red", 65_535), ("Color Wheel", 66 * 257)], 1);
         assert_eq!(preset_color(&wheel, &c.show.patch), Some([0, 255, 0]));
         // Le Sunstrip n'a pas de couleur.

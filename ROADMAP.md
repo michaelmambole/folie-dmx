@@ -10,9 +10,9 @@ Objectif : une console utilisable en spectacle en **6 à 9 mois**, puis enrichis
 - [x] **Validation sur matériel réel** (2026-10-26, au gril d'une salle) : l'USB Pro exige 250 000 bauds
   et un débit limité (~25 trames/s) ; interface choisie automatiquement au lancement.
   Validés sur LEDBeam 350 (mode 2) et SupraKolor HD (TOUR) : dimmer, shutter/strobe, pan/tilt,
-  couleurs RGBW et sélecteur, zoom, cue avec fondu, effet.
-- [ ] Reste à essayer sur appareil : roue de couleurs simulée de la **Rush MH 6**, **ServoColor 4K**,
-  **Sunstrip** ; la LEDBeam annoncée en 001 n'a pas répondu sur la ligne essayée (autre ligne ?)
+  couleurs RGBW et sélecteur, zoom, cue avec fondu, effet. Rush MH 6 : roue de couleurs simulée
+  et sens du zoom (large à 0) ; couleurs blanches par défaut.
+- [ ] Reste à essayer sur appareil : **ServoColor 4K**, **Sunstrip** ; la LEDBeam annoncée en 001 n'a pas répondu sur la ligne essayée (autre ligne ?)
 - [ ] Fluidité des fondus à 25 trames/s à surveiller sur des fondus lents de dimmer
 - [x] Reconnexion automatique si l'interface est débranchée (une tentative par seconde, alerte rouge jusqu'au retour)
 

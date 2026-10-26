@@ -6,7 +6,7 @@
   "meta": {
     "authors": ["novasfronteiras.co"],
     "createDate": "2017-08-07",
-    "lastModifyDate": "2018-09-04"
+    "lastModifyDate": "2026-10-26"
   },
   "comment": "Rush MH 2 Wash:\n- DMX, music trig and auto trig operation\n- 17° one-tenth peak angle\n- Extremely fast and agile\n- Electronic dimming and strobe\n- 3 & 5 pin XLR",
   "links": {
@@ -523,24 +523,28 @@
       ]
     },
     "Red": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Red"
       }
     },
     "Green": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Green"
       }
     },
     "Blue": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Blue"
       }
     },
     "White": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "White"

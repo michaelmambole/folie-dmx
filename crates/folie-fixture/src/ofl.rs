@@ -642,6 +642,9 @@ mod tests {
         assert_eq!(find("Pan").attribute, Attribute::Pan);
         assert_eq!(find("Pan").default, 32_768); // 50 %
         assert_eq!(find("Shutter").default, 12 * 256);
+        // Blanc par défaut : un simple « At 50 » allume (choix validé sur l'appareil).
+        assert_eq!(find("Red").default, u16::MAX);
+        assert_eq!(find("White").default, u16::MAX);
         assert_eq!(find("Shutter").attribute, Attribute::Shutter);
         assert_eq!(find("Color Wheel").attribute, Attribute::ColorMacro);
         assert_eq!(find("Fixture Control Settings").attribute.group(), FeatureGroup::Control);

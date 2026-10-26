@@ -91,16 +91,19 @@ mod tests {
         assert_eq!(library.get("martin/rush-mh-2-wash").unwrap().manufacturer, "Martin");
     }
 
-    /// Vérifié sur l'appareil le 2026-10-26 : le manuel annonce « ouvert » jusqu'à 10,
-    /// mais le SupraKolor clignote dès 4.
+    /// Vérifié sur l'appareil le 2026-10-26, en valeurs DMX : le manuel annonce « ouvert »
+    /// jusqu'à 10, mais le SupraKolor clignote dès 10.
     #[test]
-    fn suprakolor_strobe_starts_at_4() {
+    fn suprakolor_strobe_starts_at_10() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
         let (library, _) = Library::load_dir(root);
         let tour = &library.get("starway/suprakolor-hd").unwrap().modes[0];
         let strobe = tour.parameters.iter().find(|p| p.name == "Strobe").unwrap();
         let dmx = |v: u16| v >> 8;
-        assert_eq!(dmx(*strobe.capabilities[0].range.end()), 3, "ouvert de 0 à 3");
-        assert_eq!(dmx(*strobe.capabilities[1].range.start()), 4, "strobe à partir de 4");
+        assert_eq!(dmx(*strobe.capabilities[0].range.end()), 9, "ouvert de 0 à 9");
+        assert_eq!(dmx(*strobe.capabilities[1].range.start()), 10, "strobe à partir de 10");
+        // Blanc par défaut, comme la MH 6 : un simple « At 50 » allume.
+        let white = tour.parameters.iter().find(|p| p.name == "White").unwrap();
+        assert_eq!(white.default, u16::MAX);
     }
 }

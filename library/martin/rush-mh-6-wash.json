@@ -11,7 +11,7 @@
       "Folie-DMX"
     ],
     "createDate": "2026-10-20",
-    "lastModifyDate": "2026-10-20"
+    "lastModifyDate": "2026-10-26"
   },
   "comment": "12 RGBW LEDs, 10°-60° zoom, simulated color wheel with 36 presets. Channel 8 (color wheel) overrides RGBW channels 4-7 unless set to 0-10.",
   "links": {
@@ -138,24 +138,28 @@
       }
     },
     "Red": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Red"
       }
     },
     "Green": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Green"
       }
     },
     "Blue": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Blue"
       }
     },
     "White": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "White"

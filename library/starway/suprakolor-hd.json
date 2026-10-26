@@ -43,24 +43,28 @@
       }
     },
     "Red": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Red"
       }
     },
     "Green": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Green"
       }
     },
     "Blue": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "Blue"
       }
     },
     "White": {
+      "defaultValue": "100%",
       "capability": {
         "type": "ColorIntensity",
         "color": "White"
@@ -301,15 +305,15 @@
         {
           "dmxRange": [
             0,
-            3
+            9
           ],
           "type": "ShutterStrobe",
           "shutterEffect": "Open",
-          "comment": "Checked on the fixture: the manual says 0-10, it strobes from 4"
+          "comment": "Checked on the fixture: the manual says 0-10, it strobes from 10"
         },
         {
           "dmxRange": [
-            4,
+            10,
             255
           ],
           "type": "ShutterStrobe",
