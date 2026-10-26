@@ -7,6 +7,7 @@
 
 pub mod color;
 pub mod command;
+pub mod completion;
 pub mod cues;
 pub mod effects;
 pub mod gels;

@@ -63,7 +63,7 @@ pub enum Keyword {
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
 /// « fi », « p » et « b » restent Fixture, Preset et Back malgré Fix, Page et Block.
-const ALIASES: [(&str, Keyword); 8] = [
+pub(crate) const ALIASES: [(&str, Keyword); 8] = [
     ("g", Keyword::Group),
     ("exec", Keyword::Executor),
     ("t", Keyword::Thru),
@@ -74,7 +74,7 @@ const ALIASES: [(&str, Keyword); 8] = [
     ("o", Keyword::Off),
 ];
 
-const KEYWORDS: [(&str, Keyword); 31] = [
+pub(crate) const KEYWORDS: [(&str, Keyword); 31] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -146,7 +146,7 @@ impl Keyword {
     }
 
     /// Mot exact, sinon préfixe sans ambiguïté.
-    fn parse(word: &str) -> Result<Self, SyntaxError> {
+    pub(crate) fn parse(word: &str) -> Result<Self, SyntaxError> {
         let word = word.to_lowercase();
         if let Some((_, k)) = KEYWORDS.iter().chain(&ALIASES).find(|(name, _)| *name == word) {
             return Ok(*k);
