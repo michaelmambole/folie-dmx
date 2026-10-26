@@ -28,6 +28,7 @@ const MAX_PAYLOAD: usize = 600;
 #[repr(u8)]
 pub enum Label {
     GetWidgetParameters = 3,
+    SetWidgetParameters = 4,
     OutputOnlySendDmx = 6,
     GetWidgetSerialNumber = 10,
 }
@@ -211,6 +212,21 @@ impl UsbPro {
         // Les deux octets demandent 0 octet de configuration utilisateur.
         let reply = self.request(Label::GetWidgetParameters, &[0, 0])?;
         WidgetParameters::parse(&reply)
+    }
+
+    /// Règle le break, le MAB (unités de 10,67 µs) et la cadence de sortie. L'interface les
+    /// garde en mémoire, même débranchée. Pas de réponse à ce message.
+    pub fn set_widget_parameters(&mut self, break_time: u8, mab_time: u8, refresh_rate: u8) -> Result<(), OutputError> {
+        // Bornes de la spécification Enttec.
+        if !(9..=127).contains(&break_time) || !(1..=127).contains(&mab_time) || refresh_rate > 40 {
+            return Err(OutputError::Protocol("break 9-127, MAB 1-127, cadence 0-40".into()));
+        }
+        self.buf.clear();
+        encode_message(Label::SetWidgetParameters, &[0, 0, break_time, mab_time, refresh_rate], &mut self.buf);
+        let buf = std::mem::take(&mut self.buf);
+        let written = self.port()?.write_all(&buf);
+        self.buf = buf;
+        Ok(written?)
     }
 
     pub fn serial_number(&mut self) -> Result<u32, OutputError> {

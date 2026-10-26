@@ -23,6 +23,15 @@ enum Cmd {
         #[arg(long)]
         port: String,
     },
+    /// Règle le break et le MAB de l'USB Pro, en µs (gardés par l'interface, même débranchée).
+    Reglages {
+        #[arg(long)]
+        port: String,
+        #[arg(long)]
+        break_us: f64,
+        #[arg(long)]
+        mab_us: f64,
+    },
     /// Fait « respirer » des canaux. Sans --port, la sortie est virtuelle.
     Test {
         #[arg(long)]
@@ -40,6 +49,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Cmd::Ports => ports(),
         Cmd::Info { port } => info(&port),
+        Cmd::Reglages { port, break_us, mab_us } => settings(&port, break_us, mab_us),
         Cmd::Test { port, channels, seconds } => test(port.as_deref(), &channels, seconds),
     }
 }
@@ -77,6 +87,17 @@ fn info(port: &str) -> Result<()> {
     };
     println!("Rafraîchissement: {rate}");
     Ok(())
+}
+
+fn settings(port: &str, break_us: f64, mab_us: f64) -> Result<()> {
+    let mut pro = UsbPro::open(port).with_context(|| format!("ouverture de {port}"))?;
+    let rate = pro.widget_parameters().context("lecture des paramètres")?.refresh_rate;
+    let units = |us: f64| (us / 10.67).round().clamp(0.0, 255.0) as u8;
+    pro.set_widget_parameters(units(break_us), units(mab_us), rate).context("réglage")?;
+    std::thread::sleep(Duration::from_millis(100));
+    drop(pro);
+    println!("Réglé. Relecture :");
+    info(port)
 }
 
 fn test(port: Option<&str>, channels: &str, seconds: f64) -> Result<()> {
