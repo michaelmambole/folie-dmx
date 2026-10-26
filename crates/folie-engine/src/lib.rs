@@ -174,13 +174,26 @@ impl EngineHandle {
         self.stop();
     }
 
+    /// Arrête le moteur. Si une sortie ne se ferme pas (pilote d'interface bloqué),
+    /// on n'attend pas plus de `STOP_TIMEOUT` : l'application doit pouvoir quitter.
     fn stop(&mut self) {
         if let Some(thread) = self.thread.take() {
             self.send(Command::Shutdown);
-            let _ = thread.join();
+            let deadline = Instant::now() + STOP_TIMEOUT;
+            while !thread.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            } else {
+                log::warn!("le moteur ne s'arrête pas (sortie bloquée) : abandonné");
+            }
         }
     }
 }
+
+/// Attente maximale de l'arrêt du moteur.
+const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
@@ -757,6 +770,35 @@ mod tests {
         fn connected(&self) -> bool {
             self.0.load(std::sync::atomic::Ordering::Relaxed)
         }
+    }
+
+    /// Sortie dont la fermeture ne rend jamais la main, comme un pilote série bloqué.
+    struct StuckOnClose;
+
+    impl DmxOutput for StuckOnClose {
+        fn name(&self) -> &str {
+            "bloquée"
+        }
+        fn send(&mut self, _universe: &Universe) -> Result<(), OutputError> {
+            Ok(())
+        }
+    }
+
+    impl Drop for StuckOnClose {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+    }
+
+    #[test]
+    fn shutdown_does_not_wait_for_a_stuck_output() {
+        let engine = spawn(
+            EngineConfig { universes: 1, rate_hz: 200.0 },
+            vec![OutputBinding { universe: 0, output: Box::new(StuckOnClose) }],
+        );
+        let start = Instant::now();
+        engine.shutdown();
+        assert!(start.elapsed() < STOP_TIMEOUT + Duration::from_secs(1), "l'application doit pouvoir quitter");
     }
 
     #[test]

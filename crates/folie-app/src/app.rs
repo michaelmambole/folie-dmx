@@ -49,6 +49,12 @@ enum OutputChoice {
     Port(String),
 }
 
+/// Sortie choisie au lancement : la première interface FTDI détectée (très probablement
+/// une Enttec), sinon la sortie virtuelle.
+fn startup_output(ports: &[PortCandidate]) -> OutputChoice {
+    ports.iter().find(|p| p.is_ftdi).map_or(OutputChoice::Virtual, |p| OutputChoice::Port(p.path.clone()))
+}
+
 /// Mesure la fréquence réelle du moteur à partir du compteur de trames.
 struct RateMeter {
     since: Instant,
@@ -195,8 +201,10 @@ impl FolieApp {
             rate: RateMeter { since: Instant::now(), frame: 0, hz: 0.0 },
         };
         app.refresh_ports();
-        if app.artnet.enabled || app.sacn.enabled {
-            app.apply_outputs(OutputChoice::Virtual);
+        // Les tests ne doivent jamais ouvrir l'interface réelle branchée sur la machine.
+        let choice = if cfg!(test) { OutputChoice::Virtual } else { startup_output(&app.ports) };
+        if choice != OutputChoice::Virtual || app.artnet.enabled || app.sacn.enabled {
+            app.apply_outputs(choice);
         }
         if app.remote_settings.enabled {
             app.remote_changed(&cc.egui_ctx);
@@ -540,6 +548,17 @@ mod tests {
                 window(WindowKind::Presets, 1520.0, 430.0, 340.0, 420.0),
             ],
         }
+    }
+
+    #[test]
+    fn startup_picks_the_first_ftdi_interface() {
+        let port = |path: &str, is_ftdi| PortCandidate { path: path.into(), is_ftdi, description: None, serial_number: None };
+        assert_eq!(startup_output(&[]), OutputChoice::Virtual);
+        assert_eq!(startup_output(&[port("/dev/cu.Bluetooth", false)]), OutputChoice::Virtual, "pas une interface DMX");
+        assert_eq!(
+            startup_output(&[port("/dev/cu.Bluetooth", false), port("/dev/cu.usbserial-EN1", true)]),
+            OutputChoice::Port("/dev/cu.usbserial-EN1".into())
+        );
     }
 
     fn harness(storage: Storage) -> Harness<'static, FolieApp> {

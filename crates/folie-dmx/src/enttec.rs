@@ -139,9 +139,44 @@ pub fn find_ports() -> Result<Vec<PortCandidate>, OutputError> {
     Ok(ports)
 }
 
+/// Débit de la liaison avec l'interface. Il n'est pas ignoré, contrairement à ce qu'on lit
+/// souvent : sur macOS, à 57 600 bauds, les petites requêtes passent mais les trames DMX
+/// n'allument rien (constaté sur un USB Pro, firmware 1.44, en 2026-10).
+const BAUD_RATE: u32 = 250_000;
+
+/// Octets par seconde envoyés au plus à l'interface. La liaison en passe environ 19 800 à
+/// `BAUD_RATE`, mais à 18 000 (35 trames/s) rien ne s'allumait encore, alors qu'un envoi
+/// à 25 trames/s fonctionnait : on reste à ce rythme éprouvé.
+const LINK_BYTES_PER_SECOND: f64 = 13_000.0;
+
+/// Limite le débit envoyé à ce que la liaison peut passer, moins que le moteur : au-delà, le pilote macOS met le surplus en
+/// file d'attente sans le dire (il annonce toujours 0 octet en attente). Le retard grandit
+/// alors sans fin (la lumière réagit des dizaines de secondes plus tard) et la fermeture du
+/// port attend qu'il soit vidé. Une trame sautée ne se voit pas : l'interface répète la
+/// dernière reçue.
+#[derive(Debug, Default)]
+struct Pacer {
+    /// Octets qu'on peut encore envoyer sans prendre de retard.
+    credit: f64,
+    last: Option<std::time::Instant>,
+}
+
+impl Pacer {
+    fn allow(&mut self, now: std::time::Instant, len: usize) -> bool {
+        let earned = self.last.map_or(len as f64, |last| now.duration_since(last).as_secs_f64() * LINK_BYTES_PER_SECOND);
+        self.last = Some(now);
+        // Pas de réserve au-delà de deux trames : un long silence ne doit pas permettre une rafale.
+        self.credit = (self.credit + earned).min(2.0 * len as f64);
+        if self.credit < len as f64 {
+            return false;
+        }
+        self.credit -= len as f64;
+        true
+    }
+}
+
 fn open_port(path: &str) -> Result<Box<dyn SerialPort>, OutputError> {
-    // Le débit est ignoré par l'interface (liaison USB native), mais le pilote en exige un.
-    Ok(serialport::new(path, 57_600).timeout(Duration::from_millis(500)).open()?)
+    Ok(serialport::new(path, BAUD_RATE).timeout(Duration::from_millis(500)).open()?)
 }
 
 /// Une interface Enttec DMX USB Pro ouverte. Débranchée, elle est rouverte toute seule
@@ -153,6 +188,7 @@ pub struct UsbPro {
     name: String,
     buf: Vec<u8>,
     retry: Retry,
+    pacer: Pacer,
 }
 
 impl UsbPro {
@@ -163,6 +199,7 @@ impl UsbPro {
             name: format!("Enttec USB Pro ({path})"),
             buf: Vec::with_capacity(MAX_PAYLOAD + 5),
             retry: Retry::default(),
+            pacer: Pacer::default(),
         })
     }
 
@@ -224,6 +261,16 @@ impl UsbPro {
     }
 }
 
+impl Drop for UsbPro {
+    fn drop(&mut self) {
+        // macOS attend, à la fermeture, que tout ce qui reste à envoyer soit parti : si
+        // l'interface n'avale plus rien, l'application reste figée en quittant.
+        if let Some(port) = &self.port {
+            let _ = port.clear(serialport::ClearBuffer::All);
+        }
+    }
+}
+
 impl DmxOutput for UsbPro {
     fn name(&self) -> &str {
         &self.name
@@ -246,6 +293,9 @@ impl DmxOutput for UsbPro {
         }
         encode_dmx(universe, &mut self.buf);
         let port = self.port.as_mut().expect("ouvert juste au-dessus");
+        if !self.pacer.allow(now, self.buf.len()) {
+            return Ok(());
+        }
         if let Err(err) = port.write_all(&self.buf) {
             log::warn!("{} perdue : {err}", self.name);
             self.port = None;
@@ -277,6 +327,19 @@ mod tests {
         assert_eq!(buf[5], 0xFF);
         assert_eq!(buf[516], 0x42);
         assert_eq!(buf[517], 0xE7);
+    }
+
+    #[test]
+    fn pacer_keeps_below_the_link_rate() {
+        let mut pacer = Pacer::default();
+        let start = std::time::Instant::now();
+        // Le moteur à 44 Hz pendant 10 s, trames complètes de 518 octets.
+        let sent = (0..440)
+            .filter(|i| pacer.allow(start + Duration::from_secs_f64(*i as f64 / 44.0), 518))
+            .count();
+        let rate = sent as f64 * 518.0 / 10.0;
+        assert!(rate <= LINK_BYTES_PER_SECOND + 518.0, "{rate} octets/s : la liaison prendrait du retard");
+        assert!(sent >= 200, "seulement {sent} trames en 10 s");
     }
 
     #[test]
