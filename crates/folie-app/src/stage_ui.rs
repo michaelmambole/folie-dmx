@@ -310,6 +310,60 @@ pub fn stage_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapsho
     action
 }
 
+/// Arêtes d'une boîte centrée sur `center`, de demi-côtés `half`.
+fn box_edges(center: Vec3, half: Vec3, stroke: Stroke, line: &impl Fn(Vec3, Vec3, Stroke)) {
+    let mut corners = Vec::with_capacity(8);
+    for dx in [-half.x, half.x] {
+        for dy in [-half.y, half.y] {
+            for dz in [-half.z, half.z] {
+                corners.push(center + v3(dx, dy, dz));
+            }
+        }
+    }
+    for (a, b) in [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3), (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)] {
+        line(corners[a], corners[b], stroke);
+    }
+}
+
+/// Longueur en mètres d'un appareil en barre (bien plus long que large et profond), lue dans
+/// les dimensions de sa fiche ; `None` pour un projecteur ordinaire. Gardée d'une image à l'autre.
+fn bar_length(ui: &egui::Ui, fixture: &PatchedFixture) -> Option<f32> {
+    let cache = egui::Id::unique("stage-bar-lengths");
+    let key = fixture.fixture_type.key.clone();
+    if let Some(known) = ui.data(|d| d.get_temp::<BTreeMap<String, Option<f32>>>(cache).and_then(|m| m.get(&key).copied())) {
+        return known;
+    }
+    let length = bar_length_of(&fixture.fixture_type.ofl_source);
+    ui.data_mut(|d| d.get_temp_mut_or_default::<BTreeMap<String, Option<f32>>>(cache).insert(key, length));
+    length
+}
+
+fn bar_length_of(ofl_source: &str) -> Option<f32> {
+    let ofl: serde_json::Value = serde_json::from_str(ofl_source).ok()?;
+    let size = |i: usize| ofl.pointer(&format!("/physical/dimensions/{i}")).and_then(serde_json::Value::as_f64);
+    let (width, height, depth) = (size(0)?, size(1).unwrap_or(0.0), size(2).unwrap_or(0.0));
+    (width > 3.0 * height.max(depth)).then_some(width as f32 / 1000.0)
+}
+
+/// Niveau (0 à 1) de chaque cellule d'une barre, dans l'ordre des cellules : son propre
+/// dimmer, multiplié par le dimmer général s'il y en a un. Sans cellules, une seule case.
+fn cell_levels(snapshot: &Snapshot, fixture: &PatchedFixture, whole: f32) -> Vec<(Option<usize>, f32)> {
+    let mode = fixture.mode();
+    let level = |head: Option<usize>| {
+        mode.parameters
+            .iter()
+            .filter(|p| p.attribute == Attribute::Dimmer && p.head == head)
+            .filter_map(|p| crate::fixtures::live_value(snapshot, fixture, p))
+            .map(|v| v as f32 / 65535.0)
+            .reduce(f32::max)
+    };
+    if mode.heads.is_empty() {
+        return vec![(None, whole)];
+    }
+    let master = level(None).unwrap_or(1.0);
+    (0..mode.heads.len()).map(|h| (Some(h), level(Some(h)).unwrap_or(1.0) * master)).collect()
+}
+
 /// Sol, plateau, perche, projecteurs et faisceaux ; clics et glissés sur les projecteurs.
 #[allow(clippy::too_many_arguments)]
 fn draw_scene(
@@ -354,57 +408,101 @@ fn draw_scene(
         let look = look(console, snapshot, fixture, position, place.floor);
         let selected = console.selection().iter().any(|t| t.fixture == fixture.id);
 
-        // Faisceau : un trait de la couleur du projecteur, plus pâle quand le dimmer baisse.
-        // Une couleur noire (une LED dont toutes les couleurs sont à 0) n'éclaire pas.
-        let [r, g, b, _] = look.color.to_array();
-        let light = look.intensity * r.max(g).max(b) as f32 / 255.0;
-        if light > 0.02 {
-            let (end, on_floor) = beam_end(look.position, look.direction);
-            let alpha = 0.25 + 0.7 * look.intensity;
-            line(look.position, end, Stroke::new(3.0, look.color.gamma_multiply(alpha)));
-            if on_floor && let Some((spot, depth)) = camera.project(end, rect) {
-                let radius = (rect.height() * 0.6 / depth).max(3.0);
-                painter.circle_filled(spot, radius, look.color.gamma_multiply(0.35 * look.intensity));
+        let stroke = Stroke::new(if selected { 2.0 } else { 1.5 }, if selected { theme::SELECTION } else { theme::TEXT });
+        // Cellules cliquables d'une barre, enregistrées après le projecteur pour passer dessus.
+        let mut cell_hits: Vec<(Rect, usize)> = Vec::new();
+        let (depth, hit) = if let Some(length) = bar_length(ui, fixture) {
+            // Appareil en barre (Sunstrip…) : ses cellules côte à côte, chacune à son dimmer.
+            let s = 0.12;
+            let half = length / 2.0;
+            box_edges(position, v3(half, s, s), stroke, &line);
+            let cells = cell_levels(snapshot, fixture, look.intensity);
+            let width = length / cells.len() as f32;
+            for (i, (head, level)) in cells.iter().enumerate() {
+                // Cellule 1 côté cour (à droite vu de la salle), vérifié sur un Sunstrip.
+                let x = half - width * (i as f32 + 0.5);
+                let quad: Option<Vec<Pos2>> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                    .iter()
+                    .map(|(dx, dy)| camera.project(position + v3(x + dx * width * 0.42, dy * s * 0.8, s), rect).map(|(p, _)| p))
+                    .collect();
+                let [r, g, b, _] = look.color.to_array();
+                let light = level * r.max(g).max(b) as f32 / 255.0;
+                let cell_selected = head.is_some_and(|h| console.selection().contains(&Target { fixture: fixture.id, head: Some(h) }));
+                if let Some(quad) = quad {
+                    let outline = if cell_selected { Stroke::new(1.5, theme::SELECTION) } else { Stroke::NONE };
+                    painter.add(egui::Shape::convex_polygon(quad.clone(), look.color.gamma_multiply(0.08 + 0.9 * level), outline));
+                    if let Some(h) = head {
+                        cell_hits.push((Rect::from_points(&quad).expand(2.0), *h));
+                    }
+                }
+                // Faisceau court et pâle : une barre éclaire large et proche.
+                if light > 0.02 {
+                    let origin = position + v3(x, -s, 0.0);
+                    let (end, on_floor) = beam_end(origin, look.direction);
+                    line(origin, end, Stroke::new(2.0, look.color.gamma_multiply(0.12 + 0.45 * level)));
+                    if on_floor && let Some((spot, depth)) = camera.project(end, rect) {
+                        let radius = (rect.height() * 0.25 / depth).max(2.0);
+                        painter.circle_filled(spot, radius, look.color.gamma_multiply(0.25 * level));
+                    }
+                }
             }
-        }
+            let (Some((a, _)), Some((b, depth))) = (camera.project(position + v3(-half, 0.0, 0.0), rect), camera.project(position + v3(half, 0.0, 0.0), rect))
+            else {
+                continue;
+            };
+            let size = rect.height() * 0.9 / depth;
+            (depth, Rect::from_two_pos(a, b).expand2(vec2(4.0, (size * 0.3).max(7.0))))
+        } else {
+            // Faisceau : un trait de la couleur du projecteur, plus pâle quand le dimmer baisse.
+            // Une couleur noire (une LED dont toutes les couleurs sont à 0) n'éclaire pas.
+            let [r, g, b, _] = look.color.to_array();
+            let light = look.intensity * r.max(g).max(b) as f32 / 255.0;
+            if light > 0.02 {
+                let (end, on_floor) = beam_end(look.position, look.direction);
+                let alpha = 0.25 + 0.7 * look.intensity;
+                line(look.position, end, Stroke::new(3.0, look.color.gamma_multiply(alpha)));
+                if on_floor && let Some((spot, depth)) = camera.project(end, rect) {
+                    let radius = (rect.height() * 0.6 / depth).max(3.0);
+                    painter.circle_filled(spot, radius, look.color.gamma_multiply(0.35 * look.intensity));
+                }
+            }
+            // Bloc du projecteur : un cube en fil de fer, rempli de sa couleur quand il éclaire.
+            box_edges(position, v3(0.3, 0.3, 0.3), stroke, &line);
+            let Some((center, depth)) = camera.project(position, rect) else { continue };
+            let size = rect.height() * 0.9 / depth;
+            painter.circle_filled(center, size * 0.5, look.color.gamma_multiply(0.15 + 0.6 * look.intensity));
+            (depth, Rect::from_center_size(center, vec2(size.max(14.0), size.max(14.0))))
+        };
         // En placement, un trait jusqu'au sol aide à voir où est le projecteur.
         if placing && place.y > 0.05 {
             line(position, v3(place.x, 0.0, place.z), Stroke::new(1.0, if selected { theme::SELECTION } else { theme::DEFAULT }));
         }
-
-        // Bloc du projecteur : un cube en fil de fer, rempli de sa couleur quand il éclaire.
-        let s = 0.3;
-        let mut corners = Vec::with_capacity(8);
-        for dx in [-s, s] {
-            for dy in [-s, s] {
-                for dz in [-s, s] {
-                    corners.push(position + v3(dx, dy, dz));
-                }
-            }
-        }
-        let stroke = Stroke::new(if selected { 2.0 } else { 1.5 }, if selected { theme::SELECTION } else { theme::TEXT });
-        for (a, b) in [(0, 1), (0, 2), (0, 4), (1, 3), (1, 5), (2, 3), (2, 6), (3, 7), (4, 5), (4, 6), (5, 7), (6, 7)] {
-            line(corners[a], corners[b], stroke);
-        }
-        let Some((center, depth)) = camera.project(position, rect) else { continue };
-        let size = rect.height() * 0.9 / depth;
-        painter.circle_filled(center, size * 0.5, look.color.gamma_multiply(0.15 + 0.6 * look.intensity));
         if let Some((label, _)) = camera.project(position + v3(0.0, 0.65, 0.0), rect) {
             let color = if selected { theme::SELECTION } else { theme::MUTED };
             painter.text(label, egui::Align2::CENTER_BOTTOM, fixture.id.to_string(), egui::FontId::proportional(12.0), color);
         }
 
         // Zone du projecteur : clic pour le sélectionner, glissé pour le placer.
-        let hit = Rect::from_center_size(center, vec2(size.max(14.0), size.max(14.0)));
         let id = ui.scope_id().with(("stage-fixture", fixture.id));
         let sense = if placing { Sense::click_and_drag() } else { Sense::click() };
         let area = ui.interact(hit.intersect(rect), id, sense);
         let name = format!("Projecteur {} · {}", fixture.id, fixture.name);
         area.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let area = area.on_hover_text(&name);
+        if !placing {
+            for (cell, h) in cell_hits {
+                let id = ui.scope_id().with(("stage-cell", fixture.id, h));
+                let name = format!("Projecteur {}.{}", fixture.id, h + 1);
+                let cell = ui.interact(cell.intersect(rect), id, Sense::click());
+                cell.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                if cell.on_hover_text(&name).clicked() {
+                    clicked = Some(Target { fixture: fixture.id, head: Some(h) });
+                }
+            }
+        }
 
-        if area.clicked() || (area.drag_started() && !selected) {
-            clicked = Some(fixture.id);
+        if clicked.is_none() && (area.clicked() || (area.drag_started() && !selected)) {
+            clicked = Some(Target::whole(fixture.id));
         }
         if placing && area.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -424,9 +522,9 @@ fn draw_scene(
             }
         }
     }
-    if let Some(id) = clicked {
+    if let Some(target) = clicked {
         let mode = if ui.input(|i| i.modifiers.command) { SelectMode::Toggle } else { SelectMode::Replace };
-        console.select([Target::whole(id)], mode);
+        console.select([target], mode);
     }
     action
 }
@@ -473,6 +571,16 @@ mod tests {
                 assert!(near, "{camera:?} {point:?} -> {back:?}");
             }
         }
+    }
+
+    #[test]
+    fn bars_are_recognised_from_their_dimensions() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library/");
+        let source = |path: &str| std::fs::read_to_string(format!("{root}{path}")).unwrap();
+        let sunstrip = bar_length_of(&source("showtec/sunstrip-active-mkii.json")).expect("une barre");
+        assert!((sunstrip - 1.08).abs() < 1e-3);
+        assert_eq!(bar_length_of(&source("martin/rush-mh-6-wash.json")), None, "une lyre n'est pas une barre");
+        assert_eq!(bar_length_of("{}"), None);
     }
 
     #[test]

@@ -2007,6 +2007,46 @@ mod tests {
     }
 
     #[test]
+    fn stage_draws_a_sunstrip_as_a_bar_of_cells() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Stage,
+            placement: Placement::at_size(egui::pos2(1520.0, 40.0), egui::vec2(900.0, 560.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2500.0, 1000.0));
+        harness.get_by_role_and_label(Role::ComboBox, "Type").click();
+        harness.run_steps(2);
+        harness.get_by_label("Showtec Sunstrip Active MKII").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::ComboBox, "Mode").click();
+        harness.run_steps(2);
+        harness.get_by_label("Individual (10 canaux)").click();
+        harness.run_steps(2);
+        harness.get_by_label("Patcher").click();
+        settle(&mut harness);
+        command(&mut harness, "Clear"); // le patch vient de sélectionner tout le Sunstrip
+        command(&mut harness, "Fixture 1.1 At 100");
+        command(&mut harness, "Fixture 1.4 At 40");
+        command(&mut harness, "Clear");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1); // ferme le Patch
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("Vue Face")).click();
+        settle(&mut harness);
+
+        let cell = |h: &Harness<'_, FolieApp>, n: u32| h.get_by_label(&format!("Projecteur 1.{n}")).rect().center().x;
+        assert!(cell(&harness, 1) > cell(&harness, 10), "cellule 1 à droite vue de la salle, comme sur l'appareil");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("stage-sunstrip.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Projecteur 1.3").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.selection(), [Target { fixture: FixtureId(1), head: Some(2) }], "un clic sur une cellule la sélectionne");
+    }
+
+    #[test]
     fn stage_view_shows_beams_and_selects() {
         let mut workspace = test_workspace();
         workspace.windows.retain(|w| w.kind == WindowKind::Patch);
