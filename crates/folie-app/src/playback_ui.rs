@@ -24,6 +24,8 @@ const MODE: Color32 = Color32::from_rgb(120, 170, 255);
 const DELAY: Color32 = crate::theme::EXECUTOR;
 const FADE: Color32 = crate::theme::INFO;
 const BAR_HEIGHT: f32 = 14.0;
+/// Ligne de la cue en cours, en grand.
+const NOW_HEIGHT: f32 = 24.0;
 
 /// Jauge de transition, toujours à la même place pour que rien ne bouge :
 /// ambre pendant le délai, bleue pendant le fondu, vide au repos.
@@ -54,24 +56,56 @@ fn transition_bar(ui: &mut egui::Ui, status: Option<&ExecutorStatus>, width: f32
     painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(11.0), Color32::WHITE);
 }
 
-/// Cadre d'un executor, de largeur fixe, contenu centré. Un executor fixé
-/// (présent sur toutes les pages) a un cadre en pointillés.
-fn card<R>(ui: &mut egui::Ui, width: f32, dim: bool, fixed: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let (fill, stroke) = if dim { (theme::BG, theme::SURFACE_2) } else { (theme::SURFACE_1, theme::LINE) };
-    let stroke = if fixed { Color32::TRANSPARENT } else { stroke };
+/// État d'un executor, pour que sa carte se lise de loin.
+#[derive(Clone, Copy, PartialEq)]
+enum State {
+    /// Rien d'assigné.
+    Empty,
+    /// Une séquence (ou une macro) assignée, mais éteinte.
+    Off,
+    /// La séquence tourne, ou la macro joue : la carte prend la couleur de sa source.
+    On(Color32),
+}
+
+impl State {
+    fn of(console: &Console, executor: u32, status: Option<&ExecutorStatus>) -> Self {
+        if let Some((number, _)) = console.executor_macro(executor) {
+            let playing = console.macros_in_progress().iter().any(|p| p.number == number);
+            if playing { Self::On(theme::GO) } else { Self::Off }
+        } else if console.executor(executor).is_none() {
+            Self::Empty
+        } else if status.is_some_and(|s| s.cue.is_some()) {
+            Self::On(theme::EXECUTOR)
+        } else {
+            Self::Off
+        }
+    }
+}
+
+/// Cadre d'un executor, de largeur fixe, contenu centré. Allumé, il prend un fond
+/// teinté et une bordure épaisse de sa couleur. Un executor fixé (présent sur
+/// toutes les pages) a un cadre en pointillés.
+fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let (fill, stroke) = match state {
+        State::Empty => (theme::BG, egui::Stroke::new(1.0, theme::SURFACE_2)),
+        State::Off => (theme::SURFACE_1, egui::Stroke::new(1.0, theme::LINE)),
+        State::On(color) => (theme::SURFACE_1.lerp_to_gamma(color, 0.14), egui::Stroke::new(2.0, color)),
+    };
     let frame = egui::Frame::new()
         .fill(fill)
-        .stroke(egui::Stroke::new(1.0, stroke))
+        .stroke(if fixed { egui::Stroke::new(stroke.width, Color32::TRANSPARENT) } else { stroke })
         .corner_radius(8)
-        .inner_margin(6)
+        // La bordure épaisse mange la marge : toutes les cartes gardent la même taille.
+        .inner_margin(7.0 - stroke.width)
         .show(ui, |ui| {
             ui.set_width(width);
             ui.vertical_centered(add).inner
         });
     if fixed {
-        let r = frame.response.rect.shrink(0.5);
+        let r = frame.response.rect.shrink(stroke.width / 2.0);
         let outline = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-        ui.painter().extend(egui::Shape::dashed_line(&outline, egui::Stroke::new(1.0, theme::MUTED), 5.0, 3.0));
+        let color = if let State::On(color) = state { color } else { theme::MUTED };
+        ui.painter().extend(egui::Shape::dashed_line(&outline, egui::Stroke::new(stroke.width, color), 5.0, 3.0));
     }
     frame.inner
 }
@@ -517,18 +551,27 @@ fn executor_header(
         };
         line(ui, &state, if progress.is_some() { theme::GO } else { theme::MUTED });
         line(ui, "", theme::MUTED);
+        ui.add_space(NOW_HEIGHT - 16.0);
         transition_bar(ui, status, width);
         return action;
     }
     line(ui, &mode_line, MODE);
     if info.is_some() {
         let (now, next) = cue_lines(console, executor, status);
+        // Cue en cours en grand : c'est ce qu'on cherche de loin.
         let active = status.is_some_and(|s| s.cue.is_some());
-        line(ui, &now, if active { theme::EXECUTOR } else { theme::MUTED });
+        let layout = egui::Layout::left_to_right(egui::Align::Center);
+        ui.allocate_ui_with_layout(egui::vec2(width, NOW_HEIGHT), layout, |ui| {
+            ui.set_min_size(egui::vec2(width, NOW_HEIGHT));
+            let text = RichText::new(&now).size(18.0).family(theme::medium());
+            let text = if active { text.color(theme::EXECUTOR) } else { text.color(theme::MUTED) };
+            ui.add(egui::Label::new(text).truncate());
+        });
         line(ui, &format!("› {next}"), theme::MUTED);
     } else {
         line(ui, "", theme::MUTED);
         line(ui, "", theme::MUTED);
+        ui.add_space(NOW_HEIGHT - 16.0);
         // Executor vide : la place de la jauge, sans la jauge.
         ui.allocate_exact_size(egui::vec2(width, BAR_HEIGHT), egui::Sense::hover());
         return action;
@@ -1077,9 +1120,9 @@ pub fn executors_window(
     const SCROLLBAR: f32 = 14.0;
     let count = FADER_SLOTS.clone().count() as f32;
     let inner = ((ui.available_width() - SCROLLBAR - GAP * (count - 1.0)) / count - CARD_CHROME).clamp(78.0, 150.0);
-    // Hauteur réservée hors fader : en-tête (~110), valeur et touches (~50), marges de carte,
-    // puis la rangée d'executors à boutons (~190 avec son titre).
-    const RESERVED: f32 = 110.0 + 50.0 + CARD_CHROME + 190.0 + 16.0;
+    // Hauteur réservée hors fader : en-tête (~118), valeur et touches (~50), marges de carte,
+    // puis la rangée d'executors à boutons (~198 avec son titre).
+    const RESERVED: f32 = 118.0 + 50.0 + CARD_CHROME + 198.0 + 16.0;
     // Cartes étroites : les touches passent sur deux rangées, dans les deux rangées d'executors.
     let two_rows = if inner < 120.0 { 2.0 * 27.0 } else { 0.0 };
     let fader_height = (ui.available_height() - RESERVED - two_rows).clamp(70.0, 320.0);
@@ -1092,9 +1135,10 @@ pub fn executors_window(
                 let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
                 let assigned = console.executor(executor).is_some();
-                let used = assigned || console.executor_macro(executor).is_some();
+                let state = State::of(console, executor, status);
+                let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, !used, fixed, |ui| {
+                card(ui, inner, state, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
@@ -1109,7 +1153,9 @@ pub fn executors_window(
                     }
                     let speed = console.executor(executor).is_some_and(|(x, _)| x.options.fader == FaderFunction::Speed);
                     let mut level = status.map_or(1.0, |s| s.level);
-                    let response = theme::fader(ui, &mut level, theme::EXECUTOR, assigned, egui::vec2(fader_width, fader_height))
+                    // Fader ambre quand l'executor est allumé, gris quand il est éteint.
+                    let color = if let State::On(_) = state { theme::EXECUTOR } else { theme::DEFAULT };
+                    let response = theme::fader(ui, &mut level, color, assigned, egui::vec2(fader_width, fader_height))
                         .on_hover_text(format!("Fader de l'executor {executor}", executor = executor_label(executor)));
                     if response.changed() {
                         keep(Some(console.set_fader(executor, level * 100.0)));
@@ -1127,10 +1173,10 @@ pub fn executors_window(
             for slot in BUTTON_SLOTS {
                 let executor = console.executor_at(slot);
                 let status = snapshot.executors.get(&executor);
-                let assigned = console.executor(executor).is_some();
-                let used = assigned || console.executor_macro(executor).is_some();
+                let state = State::of(console, executor, status);
+                let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, !used, fixed, |ui| {
+                card(ui, inner, state, fixed, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));

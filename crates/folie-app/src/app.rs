@@ -1358,6 +1358,45 @@ mod tests {
         assert!(executor_number(&harness, "1") && !executor_number(&harness, "2.3"));
     }
 
+    /// Actif, éteint, en fondu : l'état de chaque executor se lit de loin.
+    #[test]
+    fn executor_state_at_a_glance() {
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Executors,
+            placement: Placement::at_size(egui::pos2(900.0, 820.0), egui::vec2(1350.0, 700.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(2300.0, 1600.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, r#"Store Cue 1 Fade 0 "Face""#);
+        for (fixture, executor) in [(2, 2), (3, 3), (4, 11)] {
+            command(&mut harness, "ClearAll");
+            command(&mut harness, &format!("Fixture {fixture} At 100"));
+            command(&mut harness, &format!("Store Executor {executor}"));
+        }
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Go Executor 1");
+        command(&mut harness, "Go Executor 11");
+        // L'executor 3 part sur son fondu de 2 s : la capture le prend en route.
+        command(&mut harness, "Go Executor 3");
+
+        let executors = &harness.state().snapshot.executors;
+        assert!(executors[&1].cue.is_some() && executors[&11].cue.is_some());
+        assert!(executors[&3].in_transition(), "fondu en cours");
+        assert!(executors.get(&2).is_none_or(|s| s.cue.is_none()), "l'executor 2 reste éteint");
+        assert_eq!(harness.get_all_by_label("› fin de séquence").count(), 3, "executors 1, 3 et 11");
+        harness.get_by_label("› 1"); // l'executor 2, éteint
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let image = harness.render().expect("rendu");
+            let window = image::imageops::crop_imm(&image, 900, 820, 1350, 700).to_image();
+            window.save(std::path::Path::new(&dir).join("executors-state.png")).expect("écriture de l'image");
+        }
+    }
+
     #[test]
     fn executor_options_menu_chaser_and_release() {
         let mut workspace = test_workspace();
