@@ -73,6 +73,20 @@ impl RateMeter {
     }
 }
 
+/// Fiches de l'utilisateur (importées, modifiées), à côté de ses réglages.
+fn user_library_dir(storage: &Storage) -> Option<PathBuf> {
+    storage.dir().map(|dir| dir.join("library"))
+}
+
+/// Bibliothèque livrée, complétée et corrigée par celle de l'utilisateur.
+fn load_library(storage: &Storage) -> (Library, Vec<LoadError>) {
+    let (library, errors) = Library::load(&library_dir(), user_library_dir(storage).as_deref());
+    for err in &errors {
+        log::error!("{} : {}", err.path.display(), err.message);
+    }
+    (library, errors)
+}
+
 /// Dossier de la bibliothèque : `FOLIE_LIBRARY`, sinon celui de la version distribuée
 /// (`library/` à côté de l'exécutable sous Windows, `Contents/Resources/library` dans l'app
 /// macOS), sinon `library/` du dépôt.
@@ -163,10 +177,7 @@ impl FolieApp {
             EngineConfig::default(),
             vec![OutputBinding { universe: 0, output: Box::new(NullOutput) }],
         );
-        let (library, library_errors) = Library::load_dir(&library_dir());
-        for err in &library_errors {
-            log::error!("{} : {}", err.path.display(), err.message);
-        }
+        let (library, library_errors) = load_library(&storage);
         let console = Console::new(engine);
         let workspace = storage.workspace();
         let layouts = storage.layouts();
@@ -240,6 +251,16 @@ impl FolieApp {
 
     fn engine(&self) -> &EngineHandle {
         self.console.engine()
+    }
+
+    pub(crate) fn user_library_dir(&self) -> Option<PathBuf> {
+        user_library_dir(&self.file.storage)
+    }
+
+    /// Relit les bibliothèques, après un import. Les fixtures déjà patchées gardent
+    /// leur fiche : elle est dans le show.
+    pub(crate) fn reload_library(&mut self) {
+        (self.library, self.library_errors) = load_library(&self.file.storage);
     }
 
     fn patch_changed(&mut self) {
@@ -1099,6 +1120,65 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_label("Patcher").click();
         settle(harness);
+    }
+
+    /// Une fiche OFL téléchargée : constructeur à donner, fiche livrée de même nom à
+    /// remplacer explicitement, puis la fiche est rangée, rechargée et proposée au patch.
+    #[test]
+    fn import_an_ofl_fixture_into_the_user_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let downloads = dir.path().join("Téléchargements");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let builtin = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library/robe/robin-ledbeam-350.json");
+        let json = std::fs::read_to_string(builtin).unwrap().replacen("Robin LEDBeam 350", "Robin LEDBeam 350 corrigée", 1);
+        let file = downloads.join("robin-ledbeam-350.json");
+        std::fs::write(&file, json).unwrap();
+
+        let mut harness = harness(Storage::at(&data));
+        {
+            let app = harness.state_mut();
+            let library = app.library.clone();
+            app.fixtures_view.begin_import(&file, &library);
+        }
+        harness.run_steps(2);
+        harness.get_by_label("Importer une fiche");
+        harness.get_by_label("Robin LEDBeam 350 corrigée");
+        // Dossier Téléchargements : le constructeur n'est pas deviné.
+        harness.get_by_role_and_label(Role::TextInput, "Constructeur").click();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Constructeur").type_text("Robe");
+        harness.run_steps(2);
+        // Le modèle reprend le nom de la fiche ; on le ramène au nom d'origine.
+        harness.get_by_role_and_label(Role::TextInput, "Modèle").click();
+        harness.run_steps(1);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Modèle").type_text("Robin LEDBeam 350");
+        harness.run_steps(2);
+        harness.get_by_label("Rangée sous robe/robin-ledbeam-350");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("import-fixture.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        // Même clé que la fiche livrée : il faut cocher « Remplacer ».
+        harness.get_by_label("Importer").click();
+        harness.run_steps(2);
+        assert!(harness.state().fixtures_view.import.is_some(), "pas sans cocher Remplacer");
+        harness.get_by_label("Remplacer la fiche livrée avec Folie de même nom").click();
+        harness.run_steps(1);
+        harness.get_by_label("Importer").click();
+        harness.run_steps(3);
+
+        let app = harness.state();
+        assert!(app.fixtures_view.import.is_none());
+        assert!(data.join("library/robe/robin-ledbeam-350.json").exists());
+        let fixture = app.library.get("robe/robin-ledbeam-350").unwrap();
+        assert_eq!(fixture.name, "Robin LEDBeam 350 corrigée");
+        assert!(app.library.is_user("robe/robin-ledbeam-350"));
+        harness.get_by_label("Fiche robe/robin-ledbeam-350 rangée dans votre bibliothèque");
+        // Elle est le type proposé pour patcher.
+        assert_eq!(app.library.fixtures[app.fixtures_view.form.fixture_type].key, "robe/robin-ledbeam-350");
     }
 
     #[test]

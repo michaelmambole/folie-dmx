@@ -9,6 +9,7 @@ mod effects_ui;
 mod faders;
 mod fixture_sheet;
 mod fixtures;
+mod library_ui;
 mod monitor;
 mod network;
 mod playback_ui;

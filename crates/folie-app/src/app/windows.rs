@@ -474,9 +474,14 @@ impl FolieApp {
     fn window_contents(&mut self, ui: &mut egui::Ui, kind: WindowKind) {
         match kind {
             WindowKind::Patch => {
-                if self.fixtures_view.patch_panel(ui, &self.library, &mut self.console) {
+                let user_dir = self.user_library_dir();
+                if self.fixtures_view.patch_panel(ui, &self.library, user_dir.as_deref(), &mut self.console) {
                     self.patch_changed();
                     self.mark_dirty();
+                }
+                if let Some(key) = self.fixtures_view.take_imported() {
+                    self.reload_library();
+                    self.fixtures_view.select_type(&self.library, &key);
                 }
             }
             WindowKind::Fixtures => self.fixture_sheet.show(ui, &mut self.console, &self.snapshot, self.display),

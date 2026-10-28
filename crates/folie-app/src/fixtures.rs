@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, pos2, vec2};
@@ -10,13 +11,14 @@ use folie_fixture::{
 };
 
 use crate::app::DisplayMode;
+use crate::library_ui::{self, ImportDialog, ImportOutcome};
 use crate::theme::{self, Source};
 
 const NAME_WIDTH: f32 = 140.0;
 const MENU_WIDTH: f32 = 210.0;
 
 pub(crate) struct AddForm {
-    fixture_type: usize,
+    pub(crate) fixture_type: usize,
     mode: usize,
     pub(crate) quantity: u32,
     pub(crate) first_id: u32,
@@ -35,6 +37,10 @@ pub struct FixturesView {
     picker: [f32; 3],
     /// Cadres du Programmer repliés (Position, Couleur…), pour la session.
     collapsed: BTreeSet<FeatureGroup>,
+    /// Fiche en cours d'import.
+    pub(crate) import: Option<ImportDialog>,
+    /// Fiche tout juste importée : la bibliothèque est à recharger.
+    imported: Option<String>,
 }
 
 impl FixturesView {
@@ -53,13 +59,32 @@ impl FixturesView {
             message: None,
             picker: [0.0, 0.0, 1.0],
             collapsed: BTreeSet::new(),
+            import: None,
+            imported: None,
         }
     }
 
     /// Préparation du patch : ajout, tableau des fixtures, changement d'adresse et
     /// suppression. Renvoie `true` si le patch a changé.
-    pub fn patch_panel(&mut self, ui: &mut egui::Ui, library: &Library, console: &mut Console) -> bool {
+    pub fn patch_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        library: &Library,
+        user_dir: Option<&Path>,
+        console: &mut Console,
+    ) -> bool {
         let mut changed = false;
+        if let (Some(dialog), Some(dir)) = (self.import.as_mut(), user_dir) {
+            match dialog.show(ui.ctx(), library, dir) {
+                ImportOutcome::Open => {}
+                ImportOutcome::Cancelled => self.import = None,
+                ImportOutcome::Imported(key) => {
+                    self.import = None;
+                    self.message = Some((true, format!("Fiche {key} rangée dans votre bibliothèque")));
+                    self.imported = Some(key);
+                }
+            }
+        }
         theme::card(ui, |ui| {
             ui.set_width(ui.available_width());
             if theme::collapsible_section(ui, "Ajouter des fixtures", self.form_open) {
@@ -70,6 +95,18 @@ impl FixturesView {
             {
                 console.select(ids.into_iter().map(Target::whole), SelectMode::Replace);
                 changed = true;
+            }
+            if self.form_open {
+                ui.add_space(2.0);
+                let import = ui
+                    .add_enabled(user_dir.is_some(), egui::Button::new("Importer une fiche…"))
+                    .on_hover_text("Ajoute une fiche Open Fixture Library (.json) à votre bibliothèque")
+                    .on_disabled_hover_text("Bibliothèque personnelle indisponible");
+                if import.clicked()
+                    && let Some(path) = library_ui::pick_file()
+                {
+                    self.begin_import(&path, library);
+                }
             }
         });
         ui.add_space(6.0);
@@ -146,6 +183,28 @@ impl FixturesView {
         }
     }
 
+    /// Fiche tout juste importée, une seule fois : l'appelant recharge la bibliothèque
+    /// puis la sélectionne avec [`Self::select_type`].
+    pub fn take_imported(&mut self) -> Option<String> {
+        self.imported.take()
+    }
+
+    pub fn select_type(&mut self, library: &Library, key: &str) {
+        if let Some(index) = library.fixtures.iter().position(|f| f.key == key) {
+            self.form.fixture_type = index;
+            self.form.mode = 0;
+            self.form_open = true;
+        }
+    }
+
+    /// Ouvre la boîte d'import pour ce fichier (le bouton passe par le sélecteur de fichier).
+    pub fn begin_import(&mut self, path: &Path, library: &Library) {
+        match ImportDialog::from_file(path, library) {
+            Ok(dialog) => self.import = Some(dialog),
+            Err(e) => self.message = Some((false, e)),
+        }
+    }
+
     /// Renvoie les numéros des fixtures ajoutées, le cas échéant.
     fn add_form(&mut self, ui: &mut egui::Ui, library: &Library, patch: &mut Patch) -> Option<Vec<FixtureId>> {
         if library.fixtures.is_empty() {
@@ -166,10 +225,10 @@ impl FixturesView {
             let label = ui.label(RichText::new("Type").color(theme::MUTED));
             egui::ComboBox::from_id_salt("add_type")
                 .width(combo_width)
-                .selected_text(fixture_type.display_name())
+                .selected_text(type_label(library, &fixture_type))
                 .show_ui(ui, |ui| {
                     for (i, t) in library.fixtures.iter().enumerate() {
-                        if ui.selectable_value(&mut form.fixture_type, i, t.display_name()).changed() {
+                        if ui.selectable_value(&mut form.fixture_type, i, type_label(library, t)).changed() {
                             form.mode = 0;
                         }
                     }
@@ -925,4 +984,13 @@ fn preset_color(cap: &Capability) -> Option<[u8; 3]> {
 fn swatch(ui: &mut egui::Ui, [r, g, b]: [u8; 3]) {
     let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
     ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(r, g, b));
+}
+
+/// Nom d'un type dans la liste, avec la mention des fiches de l'utilisateur.
+fn type_label(library: &Library, fixture: &folie_fixture::FixtureType) -> String {
+    if library.is_user(&fixture.key) {
+        format!("{} (ma fiche)", fixture.display_name())
+    } else {
+        fixture.display_name()
+    }
 }

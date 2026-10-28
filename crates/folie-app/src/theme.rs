@@ -445,7 +445,7 @@ mod tests {
             pressed,
             modifiers,
         };
-        let mut glide = |h: &mut Harness<'_, State>, from: f32, to: f32, modifiers| {
+        let glide = |h: &mut Harness<'_, State>, from: f32, to: f32, modifiers| {
             for i in 1..=10 {
                 h.event_modifiers(egui::Event::PointerMoved(egui::pos2(from + (to - from) * i as f32 / 10.0, y)), modifiers);
                 h.run_steps(1);
