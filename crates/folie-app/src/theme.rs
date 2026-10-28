@@ -252,6 +252,39 @@ pub fn primary_button(text: &str) -> egui::Button<'_> {
     egui::Button::new(egui::RichText::new(text).family(medium()).color(Color32::from_rgb(10, 40, 30))).fill(GO)
 }
 
+/// Glisser relatif ancré : la valeur suit la distance parcourue depuis le début du geste,
+/// pas la valeur relue à chaque image. Celle-ci revient du moteur, qui tourne à son propre
+/// rythme : y ajouter le déplacement de l'image perdait les pas où il n'avait pas encore
+/// répondu (valeur saccadée, plus lente que la souris). Maj (fin) se prend ou se lâche
+/// en cours de geste sans saut. `along` donne la position utile du pointeur (x ou -y).
+fn anchored_drag(ui: &egui::Ui, response: &egui::Response, value: f32, length: f32, along: fn(egui::Pos2) -> f32) -> Option<f32> {
+    #[derive(Clone, Copy)]
+    struct Anchor {
+        value: f32,
+        pointer: f32,
+        fine: bool,
+        last: f32,
+    }
+    let id = response.id.with("anchored_drag");
+    if !response.dragged() {
+        ui.data_mut(|d| d.remove::<Anchor>(id));
+        return None;
+    }
+    let pointer = along(response.interact_pointer_pos()?);
+    let fine = ui.input(|i| i.modifiers.shift);
+    let anchor = match ui.data(|d| d.get_temp::<Anchor>(id)) {
+        // Début du geste : on part de la valeur affichée, déplacement déjà fait compris.
+        None => Anchor { value: value + along(response.drag_delta().to_pos2()) / length, pointer, fine, last: value },
+        // Maj change : on repart de la dernière valeur donnée, à l'endroit du pointeur.
+        Some(a) if a.fine != fine => Anchor { value: a.last, pointer, fine, last: a.last },
+        Some(a) => a,
+    };
+    let scale = if fine { 0.1 } else { 1.0 };
+    let next = (anchor.value + (pointer - anchor.pointer) / length * scale).clamp(0.0, 1.0);
+    ui.data_mut(|d| d.insert_temp(id, Anchor { last: next, ..anchor }));
+    Some(next)
+}
+
 /// Barre de valeur réglable, de 0 à 1 : le niveau est rempli dans la couleur de
 /// sa source et la valeur lisible est écrite dedans.
 /// Glisser : réglage relatif (Maj : fin) ; clic : valeur directe ; molette : ajustement.
@@ -268,9 +301,8 @@ pub fn value_bar(
     let before = *value;
     // Option-clic : réservé à l'appelant (relâcher la valeur), la barre ne bouge pas.
     let alt = ui.input(|i| i.modifiers.alt);
-    if !alt && response.dragged() {
-        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-        *value += response.drag_delta().x / rect.width() * fine;
+    if let Some(dragged) = anchored_drag(ui, &response, *value, rect.width(), |p| p.x).filter(|_| !alt) {
+        *value = dragged;
     } else if !alt
         && response.clicked()
         && let Some(pos) = response.interact_pointer_pos()
@@ -318,9 +350,8 @@ pub fn fader(ui: &mut egui::Ui, level: &mut f32, color: Color32, enabled: bool, 
     let (rect, mut response) = ui.allocate_exact_size(size, sense);
     let before = *level;
     if enabled {
-        if response.dragged() {
-            let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
-            *level -= response.drag_delta().y / rect.height() * fine;
+        if let Some(dragged) = anchored_drag(ui, &response, *level, rect.height(), |p| -p.y) {
+            *level = dragged;
         } else if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
@@ -377,5 +408,61 @@ pub fn led(painter: &egui::Painter, center: egui::Pos2, color: Option<Color32>) 
         None => {
             painter.circle_stroke(center, 3.5, Stroke::new(1.0, Color32::from_rgb(70, 75, 84)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// Un réglage dont la valeur relue ne suit pas (le moteur n'a pas encore répondu) :
+    /// le glisser va quand même exactement où va la souris, Maj compris.
+    #[test]
+    fn drag_follows_the_pointer_even_when_the_value_lags() {
+        struct State {
+            shown: f32,
+            sent: Vec<f32>,
+        }
+        let mut harness = Harness::builder().with_size(egui::vec2(300.0, 60.0)).build_ui_state(
+            |ui, state: &mut State| {
+                let mut value = state.shown;
+                if value_bar(ui, &mut value, PROGRAMMER, "Dimmer", 200.0, None).changed() {
+                    state.sent.push(value);
+                }
+                // La valeur relue n'est jamais mise à jour : le pire des retards.
+            },
+            State { shown: 0.25, sent: Vec::new() },
+        );
+        harness.run();
+        let bar = harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Dimmer").rect();
+        let y = bar.center().y;
+        let x = |v: f32| bar.left() + bar.width() * v;
+        let press = |x: f32, pressed: bool, modifiers| egui::Event::PointerButton {
+            pos: egui::pos2(x, y),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        let mut glide = |h: &mut Harness<'_, State>, from: f32, to: f32, modifiers| {
+            for i in 1..=10 {
+                h.event_modifiers(egui::Event::PointerMoved(egui::pos2(from + (to - from) * i as f32 / 10.0, y)), modifiers);
+                h.run_steps(1);
+            }
+        };
+        harness.hover_at(egui::pos2(x(0.25), y));
+        harness.run_steps(1);
+        harness.event(press(x(0.25), true, egui::Modifiers::NONE));
+        harness.run_steps(1);
+        glide(&mut harness, x(0.25), x(0.75), egui::Modifiers::NONE);
+        let last = *harness.state().sent.last().unwrap();
+        assert!((last - 0.75).abs() < 0.01, "la valeur suit la souris : {last}");
+        // Maj en cours de geste : dix fois plus fin, sans saut.
+        glide(&mut harness, x(0.75), x(0.95), egui::Modifiers::SHIFT);
+        let last = *harness.state().sent.last().unwrap();
+        assert!((last - 0.77).abs() < 0.01, "Maj : fin, à partir de la valeur atteinte : {last}");
+        harness.event(press(x(0.95), false, egui::Modifiers::SHIFT));
+        harness.run_steps(1);
     }
 }
