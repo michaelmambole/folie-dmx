@@ -28,6 +28,12 @@ eframe = "0.37"
 log.workspace = true
 env_logger.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# ⌘Q et « Quitter » du menu de l'application passent par la confirmation.
+raw-window-handle = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"] }
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
 tempfile = "3"

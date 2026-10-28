@@ -31,13 +31,15 @@ pub(super) struct FileState {
     pub(super) storage: Storage,
     pub(super) path: Option<PathBuf>,
     pub(super) dirty: bool,
+    /// Show tel qu'il est sur le disque ; `None` s'il est inconnu (modifications récupérées).
+    saved: Option<Show>,
     last_autosave: Instant,
-    pending: Option<Pending>,
+    pub(super) pending: Option<Pending>,
     pub(super) recovery: Option<Recovery>,
     /// Compte rendu à afficher : titre et lignes (avertissements, erreur).
     report: Option<(String, Vec<String>)>,
     /// Fermeture déjà confirmée : ne plus l'intercepter.
-    closing: bool,
+    pub(super) closing: bool,
     title: String,
     /// Dernier enregistrement sur disque, pour le confirmer quelques secondes.
     saved_at: Option<Instant>,
@@ -49,6 +51,7 @@ impl FileState {
             storage,
             path: None,
             dirty: false,
+            saved: Some(Show::default()),
             last_autosave: Instant::now(),
             pending: None,
             recovery: None,
@@ -56,6 +59,14 @@ impl FileState {
             closing: false,
             title: String::new(),
             saved_at: None,
+        }
+    }
+
+    /// Plus rien n'est à récupérer. Tant qu'on n'a pas répondu à la question de
+    /// récupération, la copie de secours reste : seul « Ignorer » l'efface.
+    fn clear_autosave(&self) {
+        if self.recovery.is_none() {
+            self.storage.clear_autosave();
         }
     }
 
@@ -82,6 +93,16 @@ impl FolieApp {
         self.channel_labels = super::channel_labels(&self.console.show.patch);
     }
 
+    /// Le show diffère-t-il de celui du disque ? Une modification défaite (ou un
+    /// `mark_dirty` de trop) ne compte pas : rien à enregistrer ni à recopier.
+    fn has_changes(&mut self) -> bool {
+        if self.file.dirty && self.file.saved.as_ref() == Some(&self.console.show) {
+            self.file.dirty = false;
+            self.file.clear_autosave();
+        }
+        self.file.dirty
+    }
+
     pub(super) fn mark_dirty(&mut self) {
         if !self.file.dirty {
             self.file.dirty = true;
@@ -103,11 +124,12 @@ impl FolieApp {
     pub(super) fn open_path(&mut self, path: &Path) -> bool {
         match folie_show::load(path, &self.library) {
             Ok(loaded) => {
+                self.file.saved = Some(loaded.show.clone());
                 self.apply_show(loaded.show);
                 self.file.path = Some(path.to_path_buf());
                 self.file.dirty = false;
                 self.file.storage.set_last_show(Some(path));
-                self.file.storage.clear_autosave();
+                self.file.clear_autosave();
                 if !loaded.warnings.is_empty() {
                     let title = format!("{} ouvert avec des avertissements", self.file.show_name());
                     self.file.report = Some((title, loaded.warnings));
@@ -127,10 +149,12 @@ impl FolieApp {
         if path.extension().is_none() {
             path.set_extension(folie_show::EXTENSION);
         }
-        match folie_show::save(&self.current_show(), &path) {
+        let show = self.current_show();
+        match folie_show::save(&show, &path) {
             Ok(()) => {
+                self.file.saved = Some(show);
                 self.file.storage.set_last_show(Some(&path));
-                self.file.storage.clear_autosave();
+                self.file.clear_autosave();
                 self.file.path = Some(path);
                 self.file.dirty = false;
                 self.file.saved_at = Some(Instant::now());
@@ -163,15 +187,16 @@ impl FolieApp {
 
     fn new_show(&mut self) {
         self.apply_show(Show::default());
+        self.file.saved = Some(Show::default());
         self.file.path = None;
         self.file.dirty = false;
         self.file.storage.set_last_show(None);
-        self.file.storage.clear_autosave();
+        self.file.clear_autosave();
     }
 
     /// Lance l'action, ou demande d'abord quoi faire des modifications en cours.
     pub(super) fn request(&mut self, ctx: &egui::Context, action: Pending) {
-        if self.file.dirty {
+        if self.has_changes() {
             self.file.pending = Some(action);
         } else {
             self.perform(ctx, action);
@@ -188,7 +213,7 @@ impl FolieApp {
             }
             Pending::Quit => {
                 // Rien n'est à récupérer : l'utilisateur a choisi.
-                self.file.storage.clear_autosave();
+                self.file.clear_autosave();
                 self.file.closing = true;
                 ctx.send_viewport_cmd(ViewportCommand::Close);
             }
@@ -222,6 +247,10 @@ impl FolieApp {
     }
 
     pub(super) fn file_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.file.recovery.is_some() {
+            // D'abord répondre à la question de récupération.
+            return;
+        }
         // Le plus spécifique d'abord : Cmd+Maj+S ne doit pas déclencher Cmd+S.
         if ctx.input_mut(|i| i.consume_shortcut(&SAVE_AS)) {
             self.save_as();
@@ -264,16 +293,21 @@ impl FolieApp {
 
     /// À appeler à chaque image : copie de secours, fermeture, titre de la fenêtre.
     pub(super) fn file_tick(&mut self, ctx: &egui::Context) {
-        if self.file.dirty && self.file.last_autosave.elapsed() >= AUTOSAVE_EVERY {
+        // Pas de copie pendant la question de récupération : elle écraserait celle à récupérer.
+        if self.file.dirty
+            && self.file.recovery.is_none()
+            && self.file.last_autosave.elapsed() >= AUTOSAVE_EVERY
+            && self.has_changes()
+        {
             self.autosave_now();
         }
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.file.closing {
-            if self.file.dirty {
+            if self.has_changes() {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 self.file.pending = Some(Pending::Quit);
             } else {
-                self.file.storage.clear_autosave();
+                self.file.clear_autosave();
             }
         }
 
@@ -296,6 +330,25 @@ impl FolieApp {
         }
     }
 
+    /// À l'arrêt du programme, quelle qu'en soit la cause. « Quitter » du Dock ou la
+    /// fermeture de session ne passent pas par la confirmation : les modifications
+    /// sont alors recopiées, pour être proposées au prochain lancement.
+    pub(super) fn file_exit(&mut self) {
+        if self.file.closing || self.file.recovery.is_some() {
+            return;
+        }
+        if self.has_changes() {
+            self.autosave_now();
+        } else {
+            self.file.clear_autosave();
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn autosave_due(&mut self) {
+        self.file.last_autosave = Instant::now() - AUTOSAVE_EVERY;
+    }
+
     pub(super) fn recover(&mut self) {
         let Some(recovery) = self.file.recovery.take() else { return };
         match folie_show::load(&recovery.path, &self.library) {
@@ -303,11 +356,15 @@ impl FolieApp {
                 self.apply_show(loaded.show);
                 // Les modifications récupérées restent à enregistrer, dans le show d'origine.
                 self.file.path = recovery.original;
+                self.file.saved = None;
                 self.file.dirty = true;
                 self.file.last_autosave = Instant::now();
             }
             Err(err) => {
                 self.file.report = Some(("Récupération impossible".into(), vec![err.to_string()]));
+                if let Some(path) = self.file.storage.last_show() {
+                    self.open_path(&path);
+                }
             }
         }
     }
@@ -320,11 +377,13 @@ impl FolieApp {
                 .and_then(Path::file_name)
                 .map_or_else(|| "un show sans titre".into(), |n| format!("« {} »", n.to_string_lossy()));
             let mut choice = None;
+            // Échap et un clic à côté ne font rien : il faut choisir, rien ne se perd par mégarde.
             egui::Modal::new(egui::Id::unique("recovery")).show(ctx, |ui| {
                 ui.heading("Session non enregistrée");
                 ui.label(format!(
                     "Folie-DMX s'est fermé sans enregistrer des modifications de {original}."
                 ));
+                ui.label(RichText::new("Ignorer les supprime définitivement.").color(theme::MUTED));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Récupérer").strong()).clicked() {
@@ -339,7 +398,7 @@ impl FolieApp {
                 Some(true) => self.recover(),
                 Some(false) => {
                     self.file.recovery = None;
-                    self.file.storage.clear_autosave();
+                    self.file.clear_autosave();
                     if let Some(path) = self.file.storage.last_show() {
                         self.open_path(&path);
                     }
@@ -397,6 +456,36 @@ impl FolieApp {
             });
             if close || response.should_close() {
                 self.file.report = None;
+            }
+        }
+    }
+}
+
+/// Sur macOS, ⌘Q et « Quitter Folie-DMX » appellent `terminate:` : l'application
+/// s'arrête sans `close_requested`, donc sans proposer d'enregistrer. Ils font
+/// plutôt comme le bouton rouge de la fenêtre principale, qui demande.
+#[cfg(all(target_os = "macos", not(test)))]
+pub(super) fn route_quit_to_main_window(cc: &eframe::CreationContext<'_>) {
+    use objc2::runtime::AnyObject;
+    use objc2::{MainThreadMarker, sel};
+    use objc2_app_kit::{NSApplication, NSView};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Ok(handle) = cc.window_handle() else { return };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
+    // SAFETY : winit donne la vue de la fenêtre principale, qui vit autant que l'application.
+    let view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
+    let Some(window) = view.window() else { return };
+    let Some(menu) = NSApplication::sharedApplication(mtm).mainMenu() else { return };
+    let target: &AnyObject = &window;
+    for submenu in menu.itemArray().iter().filter_map(|item| item.submenu()) {
+        for item in submenu.itemArray().iter().filter(|item| item.action() == Some(sel!(terminate:))) {
+            // SAFETY : la fenêtre répond à `performClose:` ; la cible d'un menu n'est pas retenue,
+            // mais winit garde la fenêtre principale jusqu'à la fin.
+            unsafe {
+                item.setTarget(Some(target));
+                item.setAction(Some(sel!(performClose:)));
             }
         }
     }

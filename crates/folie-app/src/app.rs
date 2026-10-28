@@ -217,6 +217,8 @@ impl FolieApp {
         if app.sound_settings.enabled {
             app.sound_changed();
         }
+        #[cfg(all(target_os = "macos", not(test)))]
+        file::route_quit_to_main_window(cc);
         app.startup();
         app
     }
@@ -538,6 +540,10 @@ impl eframe::App for FolieApp {
         self.layout_dialog(&ctx);
         self.about_dialog(&ctx);
         ctx.request_repaint_after(UI_REFRESH);
+    }
+
+    fn on_exit(&mut self) {
+        self.file_exit();
     }
 }
 
@@ -1148,6 +1154,276 @@ mod tests {
         assert_eq!(app.console.show.patch.fixtures().len(), 3);
         assert!(app.file.dirty, "les modifications récupérées restent à enregistrer");
         assert_eq!(app.snapshot.patch.fixtures().len(), 3, "le moteur a reçu le patch");
+    }
+
+    /// Bouton rouge de la fenêtre principale. Sur macOS, ⌘Q et « Quitter Folie-DMX »
+    /// y sont renvoyés (`route_quit_to_main_window`).
+    fn close_main_window(harness: &mut Harness<'_, FolieApp>) {
+        let root = harness.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+        root.events.push(egui::ViewportEvent::Close);
+        harness.run_steps(2);
+    }
+
+    fn has_autosave(data: &std::path::Path) -> bool {
+        Storage::at(data).recovery().is_some()
+    }
+
+    /// Un show enregistré dans `concert.folie`, deux Rush patchées.
+    fn saved_concert(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let data = dir.join("donnees");
+        let show_path = dir.join("concert.folie");
+        let mut harness = harness(Storage::at(&data));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        assert!(harness.state_mut().save_to(&show_path));
+        (data, show_path)
+    }
+
+    #[test]
+    fn closing_without_changes_leaves_nothing_to_recover() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, show_path) = saved_concert(dir.path());
+
+        let mut first = harness(Storage::at(&data));
+        assert!(!first.state().windows.workspace.windows.is_empty(), "des fenêtres secondaires sont ouvertes");
+        // Une modification recopiée, puis enregistrée : la copie de secours part avec.
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        first.state_mut().autosave_now();
+        assert!(has_autosave(&data));
+        first.get_by_label("Non enregistré").click();
+        first.run_steps(2);
+        assert!(!has_autosave(&data));
+
+        close_main_window(&mut first);
+        assert!(first.state().file.pending.is_none(), "rien à demander");
+        assert!(first.query_by_label("Modifications non enregistrées").is_none());
+        first.state_mut().file_exit();
+        drop(first);
+
+        let next = harness(Storage::at(&data));
+        assert!(next.state().file.recovery.is_none(), "aucune question après une fermeture normale");
+        assert_eq!(next.state().file.path.as_deref(), Some(show_path.as_path()));
+        assert!(next.state().console.show.groups.contains_key(&1));
+
+        // Un show neuf jamais touché se ferme aussi sans rien demander.
+        let mut fresh = harness(Storage::disabled());
+        close_main_window(&mut fresh);
+        assert!(fresh.state().file.pending.is_none());
+    }
+
+    #[test]
+    fn closing_with_changes_asks_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, show_path) = saved_concert(dir.path());
+
+        let mut first = harness(Storage::at(&data));
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        first.state_mut().autosave_now();
+
+        // Échap (comme un clic à côté) revient au show, sans rien perdre.
+        close_main_window(&mut first);
+        first.get_by_label("Modifications non enregistrées");
+        first.key_press(egui::Key::Escape);
+        first.run_steps(2);
+        assert!(first.query_by_label("Modifications non enregistrées").is_none());
+        assert!(first.state().file.dirty);
+        assert!(!first.state().file.closing);
+        assert!(has_autosave(&data), "la copie de secours reste tant qu'on n'a pas choisi");
+
+        // Ne pas enregistrer : la copie de secours est effacée, même si l'arrêt passe ensuite par on_exit.
+        close_main_window(&mut first);
+        first.get_by_label("Ne pas enregistrer").click();
+        first.run_steps(2);
+        assert!(first.state().file.closing);
+        first.state_mut().file_exit();
+        assert!(!has_autosave(&data));
+        drop(first);
+
+        let mut next = harness(Storage::at(&data));
+        assert!(next.state().file.recovery.is_none());
+        assert!(next.state().console.show.groups.is_empty(), "la modification abandonnée n'est pas là");
+
+        // Enregistrer : écrit dans concert.folie, puis ferme.
+        command(&mut next, "Fixture 1 Thru 2");
+        command(&mut next, r#"Store Group 2 "Face""#);
+        close_main_window(&mut next);
+        next.get_by_label("Enregistrer").click();
+        next.run_steps(2);
+        assert!(next.state().file.closing);
+        assert!(!has_autosave(&data));
+        drop(next);
+        let reopened = folie_show::load(&show_path, &harness(Storage::disabled()).state().library).unwrap();
+        assert!(reopened.show.groups.contains_key(&2));
+    }
+
+    #[test]
+    fn quitting_from_the_dock_keeps_changes_for_next_launch() {
+        // « Quitter » du Dock et la fermeture de session ne demandent rien : seul on_exit est appelé.
+        let dir = tempfile::tempdir().unwrap();
+        let (data, _) = saved_concert(dir.path());
+
+        let mut first = harness(Storage::at(&data));
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        assert!(!has_autosave(&data), "pas encore recopiée");
+        first.state_mut().file_exit();
+        assert!(has_autosave(&data), "recopiée à l'arrêt : rien ne se perd");
+        drop(first);
+
+        let mut next = harness(Storage::at(&data));
+        next.get_by_label("Récupérer").click();
+        settle(&mut next);
+        assert!(next.state().console.show.groups.contains_key(&1));
+    }
+
+    #[test]
+    fn recovered_show_is_complete_and_keeps_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, show_path) = saved_concert(dir.path());
+
+        let mut first = harness(Storage::at(&data));
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        command(&mut first, "ClearAll");
+        command(&mut first, "Fixture 1 At 100");
+        command(&mut first, r#"Store Cue 1 Fade 0 "Face""#);
+        command(&mut first, "ClearAll");
+        command(&mut first, "Fixture 2 At 30");
+        command(&mut first, r#"Store Preset 1.1 "Demi""#);
+        command(&mut first, "ClearAll");
+        let expected = first.state().console.show.clone();
+        assert!(!expected.groups.is_empty() && !expected.presets.is_empty());
+        assert!(!expected.sequences.is_empty() && !expected.executors.is_empty());
+        first.state_mut().autosave_now();
+        drop(first); // plantage
+
+        let mut second = harness(Storage::at(&data));
+        second.get_by_label("Session non enregistrée");
+        second.get_by_label("Folie-DMX s'est fermé sans enregistrer des modifications de « concert.folie ».");
+        second.get_by_label("Récupérer").click();
+        settle(&mut second);
+        assert!(second.query_by_label("Session non enregistrée").is_none());
+        let app = second.state();
+        assert_eq!(app.console.show, expected, "patch, groupes, presets, cues et executors");
+        assert_eq!(app.file.path.as_deref(), Some(show_path.as_path()), "le show d'origine");
+        assert!(app.file.dirty, "reste à enregistrer");
+        second.get_by_label("Non enregistré");
+
+        // Fermer sans choisir : on demande, la copie reste.
+        close_main_window(&mut second);
+        assert_eq!(second.state().file.pending, Some(file::Pending::Quit));
+        second.get_by_label("Enregistrer").click();
+        second.run_steps(2);
+        assert!(!has_autosave(&data));
+        drop(second);
+
+        let third = harness(Storage::at(&data));
+        assert!(third.state().file.recovery.is_none(), "la question ne revient plus");
+        assert_eq!(third.state().console.show, expected);
+    }
+
+    #[test]
+    fn ignoring_the_recovery_reopens_the_saved_show() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, show_path) = saved_concert(dir.path());
+
+        let mut first = harness(Storage::at(&data));
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        first.state_mut().autosave_now();
+        drop(first);
+
+        let mut second = harness(Storage::at(&data));
+        second.get_by_label("Ignorer les supprime définitivement.");
+        second.get_by_label("Ignorer").click();
+        settle(&mut second);
+        assert!(second.query_by_label("Session non enregistrée").is_none());
+        assert!(!has_autosave(&data), "la copie de secours est supprimée");
+        let app = second.state();
+        assert_eq!(app.file.path.as_deref(), Some(show_path.as_path()));
+        assert_eq!(app.console.show.patch.fixtures().len(), 2, "le dernier show enregistré");
+        assert!(app.console.show.groups.is_empty());
+        assert!(!app.file.dirty);
+        drop(second);
+
+        let third = harness(Storage::at(&data));
+        assert!(third.state().file.recovery.is_none());
+    }
+
+    #[test]
+    fn the_recovery_question_cannot_be_dismissed_by_accident() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, _) = saved_concert(dir.path());
+        let mut first = harness(Storage::at(&data));
+        command(&mut first, "Fixture 1 Thru 2");
+        command(&mut first, r#"Store Group 1 "Tout""#);
+        first.state_mut().autosave_now();
+        drop(first);
+        let recovered = std::fs::read(Storage::at(&data).recovery().unwrap().path).unwrap();
+
+        let mut second = harness(Storage::at(&data));
+        // Échap, un clic à côté, ⌘N : la question reste posée.
+        second.key_press(egui::Key::Escape);
+        second.run_steps(2);
+        let outside = egui::pos2(5.0, 600.0);
+        second.event(egui::Event::PointerMoved(outside));
+        for pressed in [true, false] {
+            let button = egui::PointerButton::Primary;
+            second.event(egui::Event::PointerButton { pos: outside, button, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        second.run_steps(2);
+        second.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::N);
+        second.run_steps(2);
+        second.get_by_label("Session non enregistrée");
+        assert!(second.state().file.recovery.is_some());
+
+        // Même 30 s plus tard, la copie à récupérer n'est pas écrasée par le show vide.
+        second.state_mut().mark_dirty();
+        second.state_mut().autosave_due();
+        second.run_steps(2);
+        assert_eq!(std::fs::read(Storage::at(&data).recovery().unwrap().path).unwrap(), recovered);
+
+        // Quitter sans répondre : la question reviendra.
+        second.state_mut().file.dirty = false;
+        close_main_window(&mut second);
+        second.state_mut().file_exit();
+        assert!(has_autosave(&data));
+        drop(second);
+        let third = harness(Storage::at(&data));
+        assert!(third.state().file.recovery.is_some());
+    }
+
+    #[test]
+    fn autosave_is_written_only_for_real_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, _) = saved_concert(dir.path());
+
+        let mut harness = harness(Storage::at(&data));
+        let written = |harness: &mut Harness<'_, FolieApp>| {
+            harness.state_mut().autosave_due();
+            harness.run_steps(2);
+            has_autosave(&data)
+        };
+        assert!(!harness.state().file.dirty, "ouvrir un show ne le modifie pas");
+        assert!(!written(&mut harness));
+
+        // Programmer et fenêtres ne font pas partie du show.
+        command(&mut harness, "Fixture 1 At 50");
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1);
+        harness.run_steps(2);
+        assert!(!harness.state().file.dirty);
+        assert!(!written(&mut harness));
+
+        // Marqué modifié sans l'être (ou modification défaite) : rien à recopier.
+        harness.state_mut().mark_dirty();
+        assert!(!written(&mut harness));
+        assert!(!harness.state().file.dirty, "plus rien à enregistrer");
+
+        // Une vraie modification, elle, est recopiée.
+        command(&mut harness, "Fixture 1 Thru 2");
+        command(&mut harness, r#"Store Group 1 "Tout""#);
+        assert!(written(&mut harness));
     }
 
     /// Tape une commande dans la ligne de commande et la valide.
