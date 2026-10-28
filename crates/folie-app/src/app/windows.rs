@@ -483,6 +483,24 @@ impl FolieApp {
                     self.reload_library();
                     self.fixtures_view.select_type(&self.library, &key);
                 }
+                if let Some(request) = self.fixtures_view.take_edit_request() {
+                    match request {
+                        Some(key) => {
+                            if let Err(e) = self.fixture_editor.open(&self.library, &key) {
+                                self.command_line.feedback = Some((false, e));
+                            }
+                        }
+                        None => self.fixture_editor.new_fixture(),
+                    }
+                    self.windows.open(WindowKind::FixtureEditor);
+                }
+            }
+            WindowKind::FixtureEditor => {
+                let user_dir = self.user_library_dir();
+                if let Some(key) = self.fixture_editor.show(ui, &self.library, user_dir.as_deref()) {
+                    self.reload_library();
+                    self.fixtures_view.select_type(&self.library, &key);
+                }
             }
             WindowKind::Fixtures => self.fixture_sheet.show(ui, &mut self.console, &self.snapshot, self.display),
             WindowKind::Groups => {

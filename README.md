@@ -94,6 +94,12 @@ Folie-DMX). Dans le Patch : **Rechercher en ligne…** trouve un appareil dans
 **Importer un fichier…** range une fiche OFL (`.json`) ou GDTF (`.gdtf`, convertie en
 OFL : modes, canaux fins, plages, roues, cellules répétées). Une fiche
 personnelle de même nom qu'une fiche livrée la remplace : c'est ainsi qu'on la corrige.
+
+**Patch → Modifier la fiche… / Nouvelle fiche…** ouvrent l'éditeur de fiches (aussi dans
+le menu Fenêtres) : canaux (nom, 8/16 bits, valeur par défaut, plages typées : couleur
+d'émetteur, couleur fixe, shutter, angles de pan/tilt, roue…), modes (ordre DMX, cases
+vides, duplication) et cellules (canaux modèles « $pixelKey » répétés par cellule). La
+fiche est vérifiée en direct et enregistrée dans la bibliothèque personnelle.
 Les shows embarquent leurs fiches et restent lisibles sur une autre machine.
 
 ## Réaction au son

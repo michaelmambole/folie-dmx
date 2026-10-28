@@ -46,6 +46,8 @@ pub struct FixturesView {
     pub(crate) online: Option<OnlineSearch>,
     /// Le site OFL (un faux site dans les tests).
     pub(crate) ofl_source: Arc<dyn ofl_online::Source>,
+    /// Ouvrir l'éditeur de fiches : sur une fiche (sa clé), ou sur une fiche nouvelle.
+    edit_request: Option<Option<String>>,
 }
 
 impl FixturesView {
@@ -68,6 +70,7 @@ impl FixturesView {
             imported: None,
             online: None,
             ofl_source: Arc::new(OflSite::new()),
+            edit_request: None,
         }
     }
 
@@ -135,6 +138,18 @@ impl FixturesView {
                         && let Some(path) = library_ui::pick_file()
                     {
                         self.begin_import(&path, library);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let current = library.fixtures.get(self.form.fixture_type).map(|f| f.key.clone());
+                    let edit = ui
+                        .add_enabled(current.is_some(), egui::Button::new("Modifier la fiche…"))
+                        .on_hover_text("Ouvre la fiche du type choisi dans l'éditeur de fiches");
+                    if edit.clicked() {
+                        self.edit_request = Some(current);
+                    }
+                    if ui.button("Nouvelle fiche…").on_hover_text("Crée une fiche dans l'éditeur de fiches").clicked() {
+                        self.edit_request = Some(None);
                     }
                 });
             }
@@ -217,6 +232,11 @@ impl FixturesView {
     /// puis la sélectionne avec [`Self::select_type`].
     pub fn take_imported(&mut self) -> Option<String> {
         self.imported.take()
+    }
+
+    /// Demande d'ouverture de l'éditeur de fiches, une seule fois.
+    pub fn take_edit_request(&mut self) -> Option<Option<String>> {
+        self.edit_request.take()
     }
 
     pub fn select_type(&mut self, library: &Library, key: &str) {

@@ -19,10 +19,11 @@ pub enum WindowKind {
     Stage,
     Macros,
     Sound,
+    FixtureEditor,
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 12] = [
+    pub const ALL: [WindowKind; 13] = [
         Self::Patch,
         Self::Fixtures,
         Self::Groups,
@@ -35,6 +36,7 @@ impl WindowKind {
         Self::Stage,
         Self::Macros,
         Self::Sound,
+        Self::FixtureEditor,
     ];
 
     pub fn title(self) -> &'static str {
@@ -51,11 +53,12 @@ impl WindowKind {
             Self::Stage => "Scène",
             Self::Macros => "Macros",
             Self::Sound => "Son",
+            Self::FixtureEditor => "Éditeur de fiches",
         }
     }
 
     /// ⌘1, ⌘2… dans l'ordre du menu Fenêtres ; les chiffres épuisés, Fixtures prend ⌘F
-    /// et la fenêtre Son n'en a pas.
+    /// ; Son et Éditeur de fiches n'en ont pas.
     pub fn key(self) -> Option<Key> {
         Some(match self {
             Self::Patch => Key::Num1,
@@ -69,7 +72,7 @@ impl WindowKind {
             Self::Tracking => Key::Num8,
             Self::Stage => Key::Num9,
             Self::Macros => Key::Num0,
-            Self::Sound => return None,
+            Self::Sound | Self::FixtureEditor => return None,
         })
     }
 
@@ -86,6 +89,7 @@ impl WindowKind {
             Self::Stage => egui::vec2(900.0, 560.0),
             Self::Macros => egui::vec2(560.0, 460.0),
             Self::Sound => egui::vec2(520.0, 560.0),
+            Self::FixtureEditor => egui::vec2(1040.0, 700.0),
         }
     }
 }

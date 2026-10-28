@@ -8,6 +8,7 @@ mod color_picker;
 mod effects_ui;
 mod faders;
 mod fixture_sheet;
+mod fixture_editor;
 mod fixtures;
 mod library_ui;
 mod monitor;

@@ -5,6 +5,7 @@
 //! que l'octet de poids fort. On peut ainsi passer d'un modèle 8 bits à un
 //! modèle 16 bits sans toucher au show.
 
+pub mod edit;
 pub mod gdtf;
 pub mod library;
 pub mod model;

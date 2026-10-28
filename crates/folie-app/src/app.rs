@@ -126,6 +126,7 @@ pub struct FolieApp {
     /// Show, sélection et programmer : tout passe par la console.
     library: Library,
     library_errors: Vec<LoadError>,
+    fixture_editor: crate::fixture_editor::FixtureEditor,
     console: Console,
     pools: PoolsView,
     /// Touche Store armée : le prochain clic sur un pool, un executor ou une cue enregistre.
@@ -195,6 +196,7 @@ impl FolieApp {
             command_line: CommandLine::new(),
             library,
             library_errors,
+            fixture_editor: Default::default(),
             channel_labels: vec![None; CHANNELS_PER_UNIVERSE],
             file: file::FileState::new(storage),
             windows: windows::WindowsState::new(workspace, layouts),
@@ -1270,6 +1272,109 @@ mod tests {
         let fixture = harness.state().library.get("blenderdmx/rysyparled").unwrap();
         assert_eq!(fixture.manufacturer, "BlenderDMX");
         assert!(data.join("library/blenderdmx/rysyparled.json").exists(), "rangée au format OFL");
+    }
+
+    /// Fiche livrée modifiée dans l'éditeur : un canal renommé, enregistrée comme fiche à soi
+    /// qui remplace l'originale, et le mode suit le nouveau nom.
+    #[test]
+    fn edit_a_builtin_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let mut harness = harness(Storage::at(&data));
+        harness.get_by_role_and_label(Role::ComboBox, "Type").click();
+        harness.run_steps(2);
+        harness.get_by_label("Starway SupraKolor HD").click();
+        harness.run_steps(2);
+        harness.get_by_label("Modifier la fiche…").click();
+        harness.run_steps(3);
+        assert!(harness.state().windows.workspace.is_open(WindowKind::FixtureEditor));
+        harness.get_by_label("starway/suprakolor-hd · remplacera la fiche livrée");
+        harness.get_by_label("White").click();
+        harness.run_steps(2);
+        let name = harness.get_by_role_and_label(Role::TextInput, "Nom du canal");
+        name.click();
+        harness.run_steps(1);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Nom du canal").type_text("Blanc");
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(3);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("fixture-editor.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Enregistrer").click();
+        harness.run_steps(3);
+        let app = harness.state();
+        assert!(app.library.is_user("starway/suprakolor-hd"));
+        let fixture = app.library.get("starway/suprakolor-hd").unwrap();
+        assert!(fixture.modes[0].parameters.iter().any(|p| p.name == "Blanc"), "le mode suit le nouveau nom");
+        assert!(data.join("library/starway/suprakolor-hd.json").exists());
+    }
+
+    /// Une fiche créée de zéro : un canal ajouté au mode, enregistrée sous son constructeur.
+    #[test]
+    fn create_a_fixture_in_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let mut harness = harness(Storage::at(&data));
+        harness.get_by_label("Nouvelle fiche…").click();
+        harness.run_steps(3);
+        let field = |h: &mut Harness<'_, FolieApp>, label: &str, text: &str| {
+            h.get_by_role_and_label(Role::TextInput, label).click();
+            h.run_steps(1);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run_steps(1);
+            h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+            h.run_steps(1);
+        };
+        field(&mut harness, "Constructeur", "Maison");
+        field(&mut harness, "Modèle (fichier)", "par-atelier");
+        field(&mut harness, "Nom", "Par atelier");
+        harness.get_by_label("Nouveau canal").click();
+        harness.run_steps(2);
+        harness.get_by_label("Modes").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::ComboBox, "Ajouter au mode").click();
+        harness.run_steps(2);
+        harness.get_by_label("Canal").click();
+        harness.run_steps(2);
+        harness.get_by_label("Enregistrer").click();
+        harness.run_steps(3);
+        let fixture = harness.state().library.get("maison/par-atelier").unwrap().clone();
+        assert_eq!((fixture.manufacturer.as_str(), fixture.name.as_str()), ("Maison", "Par atelier"));
+        assert_eq!(fixture.modes[0].footprint, 2, "Dimmer et le canal ajouté");
+    }
+
+    /// Une barre de 4 cellules : canal modèle, cellules ajoutées au mode, 4 têtes au patch.
+    #[test]
+    fn create_a_multi_cell_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let mut harness = harness(Storage::at(&data));
+        harness.get_by_label("Nouvelle fiche…").click();
+        harness.run_steps(3);
+        harness.get_by_role_and_label(Role::TextInput, "Constructeur").click();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Constructeur").type_text("Maison");
+        harness.get_by_label("Cellules").click();
+        harness.run_steps(2);
+        harness.get_by_label("Nouveau canal modèle").click();
+        harness.run_steps(2);
+        harness.state_mut().fixture_editor.session.as_mut().unwrap().doc.set_cell_count(4);
+        harness.get_by_label("Modes").click();
+        harness.run_steps(2);
+        harness.get_by_label("Ajouter les cellules (cellule par cellule)").click();
+        harness.run_steps(3);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("fixture-editor-modes.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Enregistrer").click();
+        harness.run_steps(3);
+        let fixture = harness.state().library.get("maison/nouvelle-fiche").unwrap().clone();
+        assert_eq!(fixture.modes[0].heads.len(), 4);
+        assert_eq!(fixture.modes[0].footprint, 5, "Dimmer général et 4 cellules");
     }
 
     #[test]
