@@ -12,6 +12,7 @@ use folie_fixture::{
 
 use crate::app::DisplayMode;
 use crate::library_ui::{self, ImportDialog, ImportOutcome};
+use crate::ofl_online::{self, OflSite, OnlineSearch, SearchOutcome};
 use crate::theme::{self, Source};
 
 const NAME_WIDTH: f32 = 140.0;
@@ -41,6 +42,10 @@ pub struct FixturesView {
     pub(crate) import: Option<ImportDialog>,
     /// Fiche tout juste importée : la bibliothèque est à recharger.
     imported: Option<String>,
+    /// Recherche dans Open Fixture Library en cours.
+    pub(crate) online: Option<OnlineSearch>,
+    /// Le site OFL (un faux site dans les tests).
+    pub(crate) ofl_source: Arc<dyn ofl_online::Source>,
 }
 
 impl FixturesView {
@@ -61,6 +66,8 @@ impl FixturesView {
             collapsed: BTreeSet::new(),
             import: None,
             imported: None,
+            online: None,
+            ofl_source: Arc::new(OflSite::new()),
         }
     }
 
@@ -74,6 +81,19 @@ impl FixturesView {
         console: &mut Console,
     ) -> bool {
         let mut changed = false;
+        if let Some(search) = self.online.as_mut() {
+            match search.show(ui.ctx()) {
+                SearchOutcome::Open => {}
+                SearchOutcome::Cancelled => self.online = None,
+                SearchOutcome::Chosen(json, manufacturer) => {
+                    self.online = None;
+                    match ImportDialog::from_json(json, None, library) {
+                        Ok(dialog) => self.import = Some(dialog.with_manufacturer(&manufacturer)),
+                        Err(e) => self.message = Some((false, e)),
+                    }
+                }
+            }
+        }
         if let (Some(dialog), Some(dir)) = (self.import.as_mut(), user_dir) {
             match dialog.show(ui.ctx(), library, dir) {
                 ImportOutcome::Open => {}
@@ -98,15 +118,25 @@ impl FixturesView {
             }
             if self.form_open {
                 ui.add_space(2.0);
-                let import = ui
-                    .add_enabled(user_dir.is_some(), egui::Button::new("Importer une fiche…"))
-                    .on_hover_text("Ajoute une fiche Open Fixture Library (.json) à votre bibliothèque")
-                    .on_disabled_hover_text("Bibliothèque personnelle indisponible");
-                if import.clicked()
-                    && let Some(path) = library_ui::pick_file()
-                {
-                    self.begin_import(&path, library);
-                }
+                ui.horizontal(|ui| {
+                    let unavailable = "Bibliothèque personnelle indisponible";
+                    let online = ui
+                        .add_enabled(user_dir.is_some(), egui::Button::new("Rechercher en ligne…"))
+                        .on_hover_text("Cherche un appareil dans Open Fixture Library et importe sa fiche")
+                        .on_disabled_hover_text(unavailable);
+                    if online.clicked() {
+                        self.online = Some(OnlineSearch::new(self.ofl_source.clone()));
+                    }
+                    let import = ui
+                        .add_enabled(user_dir.is_some(), egui::Button::new("Importer un fichier…"))
+                        .on_hover_text("Ajoute une fiche Open Fixture Library (.json) à votre bibliothèque")
+                        .on_disabled_hover_text(unavailable);
+                    if import.clicked()
+                        && let Some(path) = library_ui::pick_file()
+                    {
+                        self.begin_import(&path, library);
+                    }
+                });
             }
         });
         ui.add_space(6.0);

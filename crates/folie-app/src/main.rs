@@ -11,6 +11,7 @@ mod fixture_sheet;
 mod fixtures;
 mod library_ui;
 mod monitor;
+mod ofl_online;
 mod network;
 mod playback_ui;
 mod pools;

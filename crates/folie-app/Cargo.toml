@@ -28,6 +28,7 @@ if-addrs = "0.15"
 eframe = "0.37"
 log.workspace = true
 env_logger.workspace = true
+ureq = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # ⌘Q et « Quitter » du menu de l'application passent par la confirmation.

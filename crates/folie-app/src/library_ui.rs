@@ -46,6 +46,14 @@ impl ImportDialog {
         Ok(Self { json, preview, manufacturer, model, replace: false, error: None })
     }
 
+    /// Constructeur connu d'avance (fiche venue de la recherche en ligne).
+    pub fn with_manufacturer(mut self, name: &str) -> Self {
+        if !name.is_empty() {
+            self.manufacturer = name.to_string();
+        }
+        self
+    }
+
     pub fn key(&self) -> String {
         format!("{}/{}", slug(&self.manufacturer), slug(&self.model))
     }

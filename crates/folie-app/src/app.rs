@@ -341,43 +341,59 @@ impl FolieApp {
     /// centre, les états (sortie, Art-Net, télécommande) et l'affichage à droite.
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         const HEIGHT: f32 = 32.0;
-        // Trois touches de 78 points et leurs écarts.
-        let keys_width = 3.0 * 78.0 + 2.0 * ui.spacing().item_spacing.x;
+        const GAP: f32 = 12.0;
         let row = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), HEIGHT));
         let zone = |rect: egui::Rect, layout: egui::Layout| egui::UiBuilder::new().max_rect(rect).layout(layout);
         let centered = egui::Align::Center;
-        ui.scope_builder(zone(row, egui::Layout::left_to_right(centered)), |ui| {
-            let logo = crate::brand::mark_widget(ui, 24.0).interact(egui::Sense::click());
-            if logo.on_hover_text("À propos de Folie-DMX").clicked() {
-                self.about_open = true;
-            }
-            self.file_status(ui);
-            ui.add_space(4.0);
-            self.file_menu(ui);
-            self.windows_menu(ui);
-        });
-        let keys = egui::Rect::from_center_size(row.center(), egui::vec2(keys_width, HEIGHT));
-        ui.scope_builder(zone(keys, egui::Layout::left_to_right(centered)), |ui| self.play_keys(ui));
-        ui.scope_builder(zone(row, egui::Layout::right_to_left(centered)), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            self.display_switch(ui);
-            self.remote_button(ui);
-            // L'Art-Net part en plus de la sortie choisie ; il se règle dans la fenêtre Sortie DMX.
-            if self.artnet.enabled {
-                let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
-                if theme::status_chip(ui, "Art-Net", Some(theme::GO)).on_hover_text(help).clicked() {
-                    self.windows.open(crate::workspace::WindowKind::Output);
+        let left = ui
+            .scope_builder(zone(row, egui::Layout::left_to_right(centered)), |ui| {
+                let logo = crate::brand::mark_widget(ui, 24.0).interact(egui::Sense::click());
+                if logo.on_hover_text("À propos de Folie-DMX").clicked() {
+                    self.about_open = true;
                 }
-            }
-            if self.sacn.enabled {
-                let to = if self.sacn.destination.trim().is_empty() { "multicast".to_string() } else { self.sacn.destination.clone() };
-                let help = format!("sACN univers {} ({to}) : réglages dans la fenêtre Sortie DMX", self.sacn.universe);
-                if theme::status_chip(ui, "sACN", Some(theme::GO)).on_hover_text(help).clicked() {
-                    self.windows.open(crate::workspace::WindowKind::Output);
+                self.file_status(ui);
+                ui.add_space(4.0);
+                self.file_menu(ui);
+                self.windows_menu(ui);
+            })
+            .response
+            .rect;
+        let right = ui
+            .scope_builder(zone(row, egui::Layout::right_to_left(centered)), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                self.display_switch(ui);
+                self.remote_button(ui);
+                // L'Art-Net part en plus de la sortie choisie ; il se règle dans la fenêtre Sortie DMX.
+                if self.artnet.enabled {
+                    let help = format!("Art-Net vers {}, univers {} : réglages dans la fenêtre Sortie DMX", self.artnet.destination, self.artnet.universe);
+                    if theme::status_chip(ui, "Art-Net", Some(theme::GO)).on_hover_text(help).clicked() {
+                        self.windows.open(crate::workspace::WindowKind::Output);
+                    }
                 }
-            }
-            self.output_chip(ui);
-        });
+                if self.sacn.enabled {
+                    let to = if self.sacn.destination.trim().is_empty() { "multicast".to_string() } else { self.sacn.destination.clone() };
+                    let help = format!("sACN univers {} ({to}) : réglages dans la fenêtre Sortie DMX", self.sacn.universe);
+                    if theme::status_chip(ui, "sACN", Some(theme::GO)).on_hover_text(help).clicked() {
+                        self.windows.open(crate::workspace::WindowKind::Output);
+                    }
+                }
+                self.output_chip(ui);
+            })
+            .response
+            .rect;
+        // Les touches de jeu au centre de la fenêtre si elles y tiennent, sinon au milieu de
+        // la place libre, sinon sur une seconde ligne : jamais par-dessus menus et états.
+        let width_id = egui::Id::unique("play_keys_width");
+        let width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(4.0 * 92.0);
+        let (free_left, free_right) = (left.max.x + GAP, right.min.x - GAP);
+        let at = |x: f32, y: f32| egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(width, HEIGHT));
+        let keys = match at(row.center().x, row.center().y) {
+            k if k.min.x >= free_left && k.max.x <= free_right => k,
+            _ if free_right - free_left >= width => at((free_left + free_right) / 2.0, row.center().y),
+            _ => at(row.center().x, row.max.y + 4.0 + HEIGHT / 2.0),
+        };
+        let used = ui.scope_builder(zone(keys, egui::Layout::left_to_right(centered)), |ui| self.play_keys(ui)).response.rect;
+        ui.data_mut(|d| d.insert_temp(width_id, used.width()));
     }
 
     /// STORE, CLEAR, BLIND et BLACKOUT : les touches qu'on joue, au centre.
@@ -1122,6 +1138,28 @@ mod tests {
         settle(harness);
     }
 
+    /// Fenêtre étroite : les touches de jeu ne recouvrent ni les menus ni les états.
+    #[test]
+    fn top_bar_keys_never_overlap_in_a_narrow_window() {
+        for width in [1960.0, 1000.0, 760.0] {
+            let mut harness = harness_with(Storage::disabled(), Workspace::default(), egui::vec2(width, 700.0));
+            harness.run_steps(3);
+            let rect = |label: &str| harness.get_by_label(label).rect();
+            let keys = ["STORE", "CLEAR", "BLIND", "BLACKOUT"].map(rect);
+            for other in ["Fichier", "Fenêtres", "Télécommande", "Virtuelle"] {
+                let other = rect(other);
+                for key in keys {
+                    assert!(!key.intersects(other), "largeur {width} : {key:?} recouvre {other:?}");
+                }
+            }
+            if width == 760.0
+                && let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE")
+            {
+                harness.render().expect("rendu").save(std::path::Path::new(&dir).join("top-bar-narrow.png")).unwrap();
+            }
+        }
+    }
+
     /// Une fiche OFL téléchargée : constructeur à donner, fiche livrée de même nom à
     /// remplacer explicitement, puis la fiche est rangée, rechargée et proposée au patch.
     #[test]
@@ -1179,6 +1217,78 @@ mod tests {
         harness.get_by_label("Fiche robe/robin-ledbeam-350 rangée dans votre bibliothèque");
         // Elle est le type proposé pour patcher.
         assert_eq!(app.library.fixtures[app.fixtures_view.form.fixture_type].key, "robe/robin-ledbeam-350");
+    }
+
+    /// Un faux site OFL : une fiche, son constructeur.
+    struct FakeOfl;
+
+    impl crate::ofl_online::Source for FakeOfl {
+        fn search(&self, query: &str) -> Result<Vec<crate::ofl_online::Hit>, String> {
+            let hit = crate::ofl_online::Hit { key: "starway/suprakolor-essai".into(), name: "Starway SupraKolor Essai".into() };
+            Ok(if query.to_lowercase().contains("supra") { vec![hit] } else { Vec::new() })
+        }
+        fn fixture(&self, key: &str) -> Result<String, String> {
+            assert_eq!(key, "starway/suprakolor-essai");
+            let builtin = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library/starway/suprakolor-hd.json");
+            Ok(std::fs::read_to_string(builtin).unwrap().replacen("SupraKolor HD", "SupraKolor Essai", 1))
+        }
+        fn manufacturers(&self) -> Result<std::collections::BTreeMap<String, String>, String> {
+            Ok([("starway".to_string(), "Starway".to_string())].into())
+        }
+    }
+
+    /// Attend la réponse du fil de recherche.
+    fn until(harness: &mut Harness<'_, FolieApp>, done: impl Fn(&FolieApp) -> bool) {
+        for _ in 0..100 {
+            harness.run_steps(1);
+            if done(harness.state()) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("délai dépassé");
+    }
+
+    #[test]
+    fn search_ofl_online_and_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let mut harness = harness(Storage::at(&data));
+        harness.state_mut().fixtures_view.ofl_source = std::sync::Arc::new(FakeOfl);
+        harness.get_by_label("Rechercher en ligne…").click();
+        harness.run_steps(2);
+        assert!(harness.state().fixtures_view.online.is_some(), "boîte ouverte");
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            harness.render().expect("rendu").save(std::path::Path::new(&dir).join("ofl-search.png")).unwrap();
+        }
+        harness.get_by_role_and_label(Role::TextInput, "Appareil").click();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Appareil").type_text("supra");
+        harness.run_steps(1);
+        harness.get_by_label("Rechercher").click();
+        let mut found = false;
+        for _ in 0..100 {
+            harness.run_steps(1);
+            if harness.query_by_label("Starway SupraKolor Essai").is_some() {
+                found = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(found, "résultat affiché");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            harness.render().expect("rendu").save(std::path::Path::new(&dir).join("ofl-results.png")).unwrap();
+        }
+        harness.get_by_label("Starway SupraKolor Essai").click();
+        until(&mut harness, |app| app.fixtures_view.import.is_some());
+        harness.run_steps(2);
+        // Le constructeur vient du site : rangée sous sa clé OFL, rien à saisir.
+        harness.get_by_label("Rangée sous starway/suprakolor-essai");
+        harness.get_by_label("Importer").click();
+        harness.run_steps(3);
+        assert!(harness.state().library.is_user("starway/suprakolor-essai"));
+        assert_eq!(harness.state().library.get("starway/suprakolor-essai").unwrap().manufacturer, "Starway");
     }
 
     #[test]
