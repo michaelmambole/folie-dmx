@@ -126,26 +126,21 @@ fn phone_drives_the_console() {
         c.engine().snapshot().executors.get(&1).is_some_and(|s| s.cue == Some(0) && (s.level - 0.4).abs() < 1e-3)
     });
     assert_eq!(announced, ["Go executor 1"]);
-    // Un état périodique peut passer avant la réponse sur une machine lente.
-    let reply = rt.block_on(async {
-        loop {
+    // La réponse et l'état poussé (cue 1 en cours, fader à 40 %) arrivent dans un ordre
+    // qui dépend de la machine ; l'état n'est poussé qu'une fois, il ne faut pas le jeter.
+    let (reply, state) = rt.block_on(async {
+        let (mut reply, mut state) = (None, None);
+        while reply.is_none() || state.is_none() {
             let message = next_json(&mut ws).await;
-            if message["type"] != "state" {
-                break message;
+            if message["type"] == "reply" {
+                reply = Some(message);
+            } else if message["type"] == "state" && message["executors"][0]["now"] == "1" {
+                state = Some(message);
             }
         }
+        (reply.unwrap(), state.unwrap())
     });
-    assert_eq!((reply["type"].as_str(), reply["ok"].as_bool()), (Some("reply"), Some(true)), "{reply}");
-
-    // L'état poussé suit : cue 1 en cours, fader à 40 %.
-    let state = rt.block_on(async {
-        loop {
-            let message = next_json(&mut ws).await;
-            if message["type"] == "state" && message["executors"][0]["now"] == "1" {
-                break message;
-            }
-        }
-    });
+    assert_eq!(reply["ok"].as_bool(), Some(true), "{reply}");
     assert!((state["executors"][0]["level"].as_f64().unwrap() - 0.4).abs() < 1e-3);
 
     // Une commande erronée : l'erreur revient au téléphone et s'affiche sur la console.
