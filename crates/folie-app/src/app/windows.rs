@@ -126,6 +126,42 @@ impl WindowsState {
     }
 }
 
+/// « Rassembler les fenêtres » : en cascade depuis le coin de la fenêtre principale,
+/// sur son écran, et réduites si elles n'y tiennent pas. Pour retrouver une fenêtre
+/// partie sur un écran débranché ou hors de vue.
+fn gather(main: Rect, monitor: Vec2, sizes: &[Vec2]) -> Vec<(Pos2, Vec2)> {
+    const STEP: f32 = 30.0;
+    const TITLE: f32 = 28.0;
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(index, size)| {
+            let offset = 40.0 + STEP * index as f32;
+            // Le coin de la fenêtre principale est sur son écran : on part de là, et la
+            // fenêtre ne dépasse pas la taille de cet écran, cascade et barre de titre comprises.
+            let room = monitor - egui::vec2(offset + 40.0, offset + 40.0 + TITLE);
+            (main.min + egui::vec2(offset, offset), size.min(room).max(egui::vec2(280.0, 200.0)))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn gathered_windows_fit_on_the_main_screen() {
+    let monitor = egui::vec2(1920.0, 1080.0);
+    let main = Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(1100.0, 760.0));
+    let placed = gather(main, monitor, &[egui::vec2(640.0, 640.0), egui::vec2(1100.0, 1200.0)]);
+    assert_eq!(placed[0], (egui::pos2(140.0, 90.0), egui::vec2(640.0, 640.0)), "en cascade, taille gardée");
+    assert_eq!(placed[1].0, egui::pos2(170.0, 120.0));
+    assert!(placed[1].1.y + 28.0 <= 1080.0, "trop haute : réduite à la taille de l'écran");
+    // Fenêtre principale sur un écran du bas, plus petit : on part de son coin.
+    let laptop = egui::vec2(1536.0, 864.0);
+    let main = Rect::from_min_size(egui::pos2(200.0, 1080.0), egui::vec2(900.0, 700.0));
+    let placed = gather(main, laptop, &[egui::vec2(1800.0, 1000.0)]);
+    assert_eq!(placed[0].0, egui::pos2(240.0, 1120.0));
+    assert!(placed[0].1.x <= 1536.0 && placed[0].1.y + 28.0 <= 864.0);
+}
+
 /// Place les fenêtres sans position connue : en colonne à droite de la fenêtre
 /// principale si l'écran le permet, sinon en cascade par-dessus.
 struct AutoPlacer {
@@ -234,6 +270,23 @@ impl FolieApp {
         self.command_line.feedback = Some((true, message));
     }
 
+    fn gather_windows(&mut self, ctx: &egui::Context) {
+        let (main, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
+        let (Some(main), Some(monitor)) = (main, monitor) else { return };
+        let windows = &self.windows.workspace.windows;
+        let sizes: Vec<Vec2> =
+            windows.iter().map(|w| w.placement.size().unwrap_or_else(|| w.kind.default_size())).collect();
+        for (window, (position, size)) in windows.iter().zip(gather(main, monitor, &sizes)) {
+            let id = viewport_id(window.kind);
+            ctx.send_viewport_cmd_to(id, ViewportCommand::Fullscreen(false));
+            ctx.send_viewport_cmd_to(id, ViewportCommand::OuterPosition(position));
+            ctx.send_viewport_cmd_to(id, ViewportCommand::InnerSize(size));
+            ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
+        }
+        let count = windows.len();
+        self.command_line.feedback = Some((true, format!("{count} fenêtre(s) rassemblée(s) sur cet écran")));
+    }
+
     pub(super) fn windows_menu(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Fenêtres", |ui| {
             for kind in WindowKind::ALL {
@@ -243,6 +296,14 @@ impl FolieApp {
                 if ui.add(button).clicked() {
                     self.windows.toggle(kind);
                 }
+            }
+
+            if ui
+                .button("Rassembler les fenêtres")
+                .on_hover_text("Ramène toutes les fenêtres sur l'écran de la fenêtre principale")
+                .clicked()
+            {
+                self.gather_windows(ui.ctx());
             }
 
             ui.separator();
