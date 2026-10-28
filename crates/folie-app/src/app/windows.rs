@@ -555,6 +555,7 @@ impl FolieApp {
                 self.report(result);
             }
             WindowKind::Sound => self.sound_window(ui),
+            WindowKind::Midi => self.midi_window(ui),
         }
     }
 

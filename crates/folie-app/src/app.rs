@@ -20,6 +20,7 @@ use crate::theme;
 
 mod about;
 mod file;
+mod midi;
 mod remote;
 mod sound;
 mod welcome;
@@ -152,6 +153,10 @@ pub struct FolieApp {
     pub(crate) osc_settings: OscSettings,
     /// Serveur OSC, quand il est actif.
     pub(crate) osc: Option<folie_remote::osc::OscServer>,
+    pub(crate) midi_settings: folie_remote::midi::MidiSettings,
+    /// MIDI ouvert, quand il est actif.
+    pub(crate) midi: Option<folie_remote::midi::MidiServer>,
+    pub(crate) midi_view: midi::MidiView,
     /// Adresses de cet ordinateur, montrées pour la télécommande et l'OSC.
     addresses: crate::network::AddressCache,
     /// Fenêtre « À propos » ouverte.
@@ -186,6 +191,7 @@ impl FolieApp {
         let sacn = storage.sacn();
         let remote_settings = storage.remote();
         let osc_settings = storage.osc();
+        let midi_settings = storage.midi();
         let sound_settings = storage.sound();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
@@ -210,6 +216,9 @@ impl FolieApp {
             remote: None,
             osc_settings,
             osc: None,
+            midi_settings,
+            midi: None,
+            midi_view: Default::default(),
             addresses: Default::default(),
             about_open: false,
             sound_settings,
@@ -231,6 +240,9 @@ impl FolieApp {
         }
         if app.remote_settings.enabled {
             app.remote_changed(&cc.egui_ctx);
+        }
+        if app.midi_settings.enabled {
+            app.midi_changed();
         }
         if app.osc_settings.enabled {
             app.osc_changed(&cc.egui_ctx);
@@ -1375,6 +1387,47 @@ mod tests {
         let fixture = harness.state().library.get("maison/nouvelle-fiche").unwrap().clone();
         assert_eq!(fixture.modes[0].heads.len(), 4);
         assert_eq!(fixture.modes[0].footprint, 5, "Dimmer général et 4 cellules");
+    }
+
+    /// MIDI : apprentissage d'une note, associée au Go de l'executor 1, qui lance la cue.
+    #[test]
+    fn learn_a_midi_control() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let mut harness = harness(Storage::at(&data));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 50");
+        command(&mut harness, "Store Cue 1");
+        command(&mut harness, "ClearAll");
+        {
+            let app = harness.state_mut();
+            // Pas de vrai port dans les tests : les messages sont injectés.
+            app.midi_settings.inputs = vec!["(aucun port)".into()];
+            app.windows.open(WindowKind::Midi);
+        }
+        harness.run_steps(3);
+        harness.get_by_label("MIDI actif").click();
+        harness.run_steps(2);
+        assert!(harness.state().midi.is_some(), "MIDI ouvert");
+        harness.get_by_label("Nouvelle association").click();
+        harness.run_steps(2);
+        harness.state().midi.as_ref().unwrap().inject(&[0x90, 36, 100]);
+        harness.run_steps(3);
+        let mappings = harness.state().midi_settings.mappings.clone();
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].control, folie_remote::midi::Control::Note { channel: 0, number: 36 });
+        // Fader par défaut ; on choisit Go.
+        harness.state_mut().midi_settings.mappings[0].target = folie_remote::midi::Target::Go { slot: 1 };
+        harness.state_mut().midi_mappings_changed_for_tests();
+        harness.state().midi.as_ref().unwrap().inject(&[0x90, 36, 100]);
+        settle(&mut harness);
+        let executor = harness.state().console.executor_at(1);
+        assert_eq!(harness.state().snapshot.executors.get(&executor).and_then(|s| s.cue), Some(0), "Go par la note");
+        assert!(Storage::at(&data).midi().enabled, "gardé pour la prochaine fois");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("midi.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
     }
 
     #[test]

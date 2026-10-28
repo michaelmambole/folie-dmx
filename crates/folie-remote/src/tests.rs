@@ -294,3 +294,57 @@ fn osc_client_drives_the_console_and_gets_feedback() {
     server.publish(&console, &console.engine().snapshot());
     assert!(client.recv_from(&mut buffer).is_err());
 }
+
+/// Un contrôleur MIDI : CC 7 sur le fader 1, note 36 sur Go 1, apprentissage, retour d'état.
+#[test]
+fn midi_controller_drives_executors() {
+    use crate::midi::{Control, Mapping, MidiServer, MidiSettings, Target, feedback};
+    let mut console = console();
+    let fader = Control::Cc { channel: 0, number: 7 };
+    let go = Control::Note { channel: 0, number: 36 };
+    let settings = MidiSettings {
+        enabled: true,
+        // Aucun vrai port dans les tests : les messages sont injectés.
+        inputs: vec!["(aucun port)".into()],
+        mappings: vec![
+            Mapping { control: fader, target: Target::Fader { slot: 1 } },
+            Mapping { control: go, target: Target::Go { slot: 1 } },
+        ],
+        ..Default::default()
+    };
+    let midi = MidiServer::start(&settings).unwrap();
+    assert!(midi.opened.is_empty());
+
+    midi.inject(&[0xB0, 7, 51]); // 40 %
+    midi.inject(&[0x90, 36, 100]); // Go
+    midi.inject(&[0x80, 36, 0]); // relâché : rien
+    let handled = midi.handle(&mut console);
+    let announced: Vec<String> = handled.results.into_iter().map(|r| r.unwrap().message).collect();
+    assert_eq!(announced, ["Go executor 1"], "le fader ne s'annonce pas");
+    let start = Instant::now();
+    let status = loop {
+        let snapshot = console.engine().snapshot();
+        if let Some(s) = snapshot.executors.get(&1).filter(|s| s.cue == Some(0)) {
+            break s.clone();
+        }
+        assert!(start.elapsed() < Duration::from_secs(3), "Go jamais arrivé");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!((status.level - 51.0 / 127.0).abs() < 1e-3);
+
+    // Retour : fader à sa valeur, LED du Go allumée (l'executor joue).
+    let values = feedback(&settings.mappings, &console, &console.engine().snapshot());
+    assert_eq!(values, [(fader, 51), (go, 127)]);
+
+    // Apprentissage : le prochain appui est rendu au lieu d'agir.
+    midi.learn(true);
+    midi.inject(&[0x99, 40, 90]);
+    let handled = midi.handle(&mut console);
+    assert_eq!(handled.learned, Some(Control::Note { channel: 9, number: 40 }));
+    assert!(handled.results.is_empty());
+
+    // MSC : GO cue 2 de la liste 1.
+    midi.inject(&[0xF0, 0x7F, 0x7F, 0x02, 0x01, 0x01, b'2', 0x00, b'1', 0xF7]);
+    let handled = midi.handle(&mut console);
+    assert_eq!(handled.results.into_iter().map(|r| r.unwrap().message).collect::<Vec<_>>(), ["Goto cue 2"]);
+}

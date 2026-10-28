@@ -102,6 +102,18 @@ vides, duplication) et cellules (canaux modèles « $pixelKey » répétés par 
 fiche est vérifiée en direct et enregistrée dans la bibliothèque personnelle.
 Les shows embarquent leurs fiches et restent lisibles sur une autre machine.
 
+## MIDI
+
+Fenêtre **MIDI** (menu Fenêtres) : choisir les entrées (toutes par défaut) et un port de
+retour. **Nouvelle association**, puis toucher un bouton ou un fader du contrôleur :
+il est associé, et on choisit l'action (fader, touche, Go, Back, Off ou Flash d'un
+executor de la page affichée, Go/Back de l'executor sélectionné, page, blackout,
+groupe, ligne de commande). Le retour allume les LED des boutons quand l'executor joue
+et renvoie la position des faders (faders motorisés). Le **MIDI Show Control** est
+compris (GO avec ou sans numéro de cue, STOP, RESUME, ALL_OFF ; la liste de cues
+désigne l'executor) et le **timecode MTC** reçu est affiché. Un séquenceur pilote Folie
+par un port MIDI virtuel (gestionnaire IAC sur macOS, loopMIDI sous Windows).
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

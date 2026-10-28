@@ -39,6 +39,9 @@ struct Settings {
     /// Entrée audio pour la réaction au son.
     #[serde(default)]
     sound: SoundSettings,
+    /// Contrôleurs et messages MIDI.
+    #[serde(default)]
+    midi: folie_remote::midi::MidiSettings,
 }
 
 /// Réglages de la sortie Art-Net.
@@ -249,6 +252,14 @@ impl Storage {
 
     pub fn sound(&self) -> SoundSettings {
         self.settings().sound
+    }
+
+    pub fn midi(&self) -> folie_remote::midi::MidiSettings {
+        self.settings().midi
+    }
+
+    pub fn set_midi(&self, midi: &folie_remote::midi::MidiSettings) {
+        self.update_settings(|s| s.midi = midi.clone());
     }
 
     pub fn set_sound(&self, sound: &SoundSettings) {

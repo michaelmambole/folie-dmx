@@ -90,6 +90,7 @@ impl FolieApp {
             results.extend(osc.handle(&mut self.console));
             osc.publish(&self.console, &self.snapshot);
         }
+        results.extend(self.midi_tick());
         for result in results {
             if self.command_line.report(result) {
                 self.mark_dirty();

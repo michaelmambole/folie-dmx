@@ -10,6 +10,7 @@
 //! se trompe trop souvent est mise à l'écart une minute.
 
 mod access;
+pub mod midi;
 pub mod osc;
 pub mod state;
 
@@ -76,6 +77,11 @@ pub enum Action {
     Blackout {
         on: bool,
     },
+    /// Goto Cue sur un executor (`None` : le sélectionné) ; numéro tel qu'écrit (« 3 », « 2.5 »).
+    Goto {
+        executor: Option<u32>,
+        cue: String,
+    },
 }
 
 impl Action {
@@ -113,6 +119,10 @@ impl Action {
                 console.engine().send(EngineCommand::Blackout(on));
                 Ok(info(if on { "Blackout" } else { "Fin du blackout" }))
             }
+            Self::Goto { executor, cue } => match cue.parse() {
+                Ok(number) => console.goto_on(executor, number),
+                Err(_) => Err(CommandError::from(folie_control::command::SyntaxError(format!("numéro de cue illisible : {cue}")))),
+            },
         }
     }
 }

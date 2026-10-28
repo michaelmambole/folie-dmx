@@ -636,8 +636,13 @@ impl Console {
     }
 
     pub fn goto(&self, number: CueNumber) -> Result<Outcome, CommandError> {
-        let executor = self.executor_with_sequence(None)?;
-        let Some((_, sequence)) = self.selected_sequence() else { return invalid("aucune séquence") };
+        self.goto_on(None, number)
+    }
+
+    /// Goto Cue sur un executor donné (`None` : l'executor sélectionné).
+    pub fn goto_on(&self, executor: Option<u32>, number: CueNumber) -> Result<Outcome, CommandError> {
+        let executor = self.executor_with_sequence(executor)?;
+        let Some((_, sequence)) = self.executor(executor) else { return invalid("aucune séquence") };
         let Some(index) = sequence.cues.keys().position(|n| *n == number) else {
             return invalid(format!("la cue {number} n'existe pas"));
         };
