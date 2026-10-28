@@ -126,7 +126,15 @@ fn phone_drives_the_console() {
         c.engine().snapshot().executors.get(&1).is_some_and(|s| s.cue == Some(0) && (s.level - 0.4).abs() < 1e-3)
     });
     assert_eq!(announced, ["Go executor 1"]);
-    let reply = rt.block_on(next_json(&mut ws));
+    // Un état périodique peut passer avant la réponse sur une machine lente.
+    let reply = rt.block_on(async {
+        loop {
+            let message = next_json(&mut ws).await;
+            if message["type"] != "state" {
+                break message;
+            }
+        }
+    });
     assert_eq!((reply["type"].as_str(), reply["ok"].as_bool()), (Some("reply"), Some(true)), "{reply}");
 
     // L'état poussé suit : cue 1 en cours, fader à 40 %.
