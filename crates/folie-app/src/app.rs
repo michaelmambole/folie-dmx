@@ -2915,7 +2915,8 @@ mod tests {
             let path = std::path::Path::new(&dir).join("cue-command.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
-        harness.get_by_label("Valider").click();
+        // Le premier « Valider » est celui de la commande (le second, celui du timecode).
+        harness.get_all_by_label("Valider").next().unwrap().click();
         settle(&mut harness);
         let number = folie_show::CueNumber::whole(1);
         assert_eq!(harness.state().console.show.sequences[&1].cues[&number].command, r#"Osc "Reaper" "/marker" 1; Osc "Reaper" "/play""#);

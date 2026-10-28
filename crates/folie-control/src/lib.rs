@@ -13,6 +13,7 @@ pub mod effects;
 pub mod gels;
 pub mod macros;
 pub mod osc_out;
+pub mod timecode;
 pub mod tracking;
 
 use std::collections::{HashMap, HashSet};
@@ -202,6 +203,8 @@ pub struct Console {
     macro_ticking: bool,
     /// Cue en cours de chaque executor à l'image précédente : une cue qui part joue sa commande.
     cues_seen: HashMap<u32, Option<usize>>,
+    /// Dernier temps de timecode reçu, en secondes.
+    timecode: Option<f64>,
     /// Socket d'envoi OSC, ouverte au premier message.
     osc_socket: Option<std::net::UdpSocket>,
 }
@@ -225,6 +228,7 @@ impl Console {
             macro_runs: Vec::new(),
             macro_ticking: false,
             cues_seen: HashMap::new(),
+            timecode: None,
             osc_socket: None,
         }
     }

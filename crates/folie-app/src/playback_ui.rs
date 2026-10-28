@@ -710,6 +710,7 @@ fn forget_cue_menu(ctx: &egui::Context, number: CueNumber) {
         d.remove::<String>(egui::Id::unique(("rename-cue", number)));
         d.remove::<bool>(egui::Id::unique(("rename-cue-focused", number)));
         d.remove::<String>(egui::Id::unique(("cue-command", number)));
+        d.remove::<String>(egui::Id::unique(("cue-timecode", number)));
     });
 }
 
@@ -753,6 +754,38 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
         }
     });
     ui.data_mut(|d| d.insert_temp(command_id, command));
+    // Départ au timecode (MTC reçu dans la fenêtre MIDI).
+    let tc_id = egui::Id::unique(("cue-timecode", number));
+    let mut tc_text = ui
+        .data_mut(|d| d.get_temp::<String>(tc_id))
+        .unwrap_or_else(|| cue.timecode.map(folie_show::format_timecode).unwrap_or_default());
+    ui.horizontal(|ui| {
+        let label = ui.label("Timecode");
+        let edit = egui::TextEdit::singleline(&mut tc_text).hint_text("0:01:23.40").font(egui::TextStyle::Monospace).desired_width(110.0);
+        let help = "La cue part quand le timecode reçu (MTC) passe ce temps : h:mm:ss.cc, mm:ss ou secondes. Vide : pas de départ au timecode";
+        let edit = ui.add(edit).labelled_by(label.id).on_hover_text(help);
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if ui.button("Valider").on_hover_text(format!("Timecode de la cue {number}")).clicked() || enter {
+            let text = tc_text.trim();
+            action = Some(if text.is_empty() {
+                console.set_cue_timecode(number, None)
+            } else {
+                match folie_show::parse_timecode(text) {
+                    Some(t) => console.set_cue_timecode(number, Some(t)),
+                    None => Err(folie_control::CommandError::from(folie_control::command::SyntaxError(format!(
+                        "timecode « {text} » illisible : h:mm:ss.cc, mm:ss ou secondes"
+                    )))),
+                }
+            });
+        }
+        if let Some(now) = console.received_timecode()
+            && ui.button("Maintenant").on_hover_text("Prend le timecode reçu à l'instant").clicked()
+        {
+            tc_text = folie_show::format_timecode(now);
+            action = Some(console.set_cue_timecode(number, Some(now)));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(tc_id, tc_text));
     ui.horizontal(|ui| {
         let help = "Écrit en dur dans la cue les valeurs qu'elle suit : changer une cue précédente ne la modifie plus";
         if ui.button("Bloquer").on_hover_text(help).clicked() {
@@ -925,6 +958,12 @@ fn cue_row(
                                     let text = RichText::new("CMD").size(10.5).color(theme::SELECTION);
                                     let chip = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::SELECTION)).fill(Color32::TRANSPARENT).small();
                                     ui.add(chip).on_hover_text(format!("Au départ de la cue : {}", cue.command));
+                                }
+                                // Départ au timecode : « TC 0:01:23.40 ».
+                                if let Some(t) = cue.timecode {
+                                    let text = RichText::new(format!("TC {}", folie_show::format_timecode(t))).size(10.5).monospace().color(theme::INFO);
+                                    let chip = egui::Button::new(text).stroke(egui::Stroke::new(1.0, theme::INFO)).fill(Color32::TRANSPARENT).small();
+                                    ui.add(chip).on_hover_text("La cue part quand le timecode reçu passe ce temps");
                                 }
                                 // Temps propres par famille, en bleu : « Position 4 s ».
                                 if !cue.family_times.is_empty() {

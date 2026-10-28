@@ -24,6 +24,7 @@ use thiserror::Error;
 pub use cues::{
     ChaserDirection, ChaserSettings, Cue, CueNumber, CueValue, DEFAULT_FADE, Executor, ExecutorMode, ExecutorOptions, FaderFunction,
     MAX_PAGE, ParamTiming, Priority, RestartMode, SLOTS_PER_PAGE, Sequence, executor_id, executor_label, executor_place,
+    format_timecode, parse_timecode,
 };
 pub use effects::{Effect, EffectLine, EffectRate, Waveform};
 
@@ -227,6 +228,9 @@ struct CueEntry {
     /// Commande jouée au départ de la cue.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     command: String,
+    /// Départ au timecode, en secondes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timecode: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -479,6 +483,7 @@ pub fn to_json(show: &Show) -> String {
                         .map(|(origin, index)| StoppedEffectEntry { cue: origin.to_string(), index: *index })
                         .collect(),
                     command: cue.command.clone(),
+                    timecode: cue.timecode,
                 })
                 .collect(),
         })
@@ -615,6 +620,7 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
                     .filter_map(|s| Some((s.cue.parse::<CueNumber>().ok()?, s.index)))
                     .collect(),
                 command: cue_entry.command,
+                timecode: cue_entry.timecode.filter(|t| t.is_finite() && *t >= 0.0),
             };
             for (family, timing) in cue_entry.family_times {
                 match FeatureGroup::from_key(&family) {
@@ -870,6 +876,7 @@ mod tests {
             .or_default()
             .insert("Pan".into(), ParamTiming { fade: Some(6.0), delay: Some(1.0) });
         cue.command = r#"Osc "Reaper" "/marker/1"; Osc "Reaper" "/play""#.into();
+        cue.timecode = Some(83.4);
         let mut cues = BTreeMap::from([(CueNumber::whole(1), cue)]);
         let mut black = Cue::new("Noir".into());
         black.stopped_effects.insert((CueNumber::whole(1), 1)); // le cercle s'arrête, la vague continue

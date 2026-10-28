@@ -105,6 +105,33 @@ pub struct Cue {
     /// Commande jouée quand la cue part (la « CMD » de grandMA2) : `Osc "Reaper" "/play"`.
     /// Plusieurs commandes se séparent par « ; ».
     pub command: String,
+    /// Temps du timecode (MTC) où la cue part toute seule, en secondes.
+    pub timecode: Option<f64>,
+}
+
+/// « 1:02:03.45 », « 2:03 », « 83.5 » -> secondes. Heures et minutes facultatives.
+pub fn parse_timecode(text: &str) -> Option<f64> {
+    let parts: Vec<&str> = text.trim().split(':').collect();
+    if parts.is_empty() || parts.len() > 3 || parts.iter().any(|p| p.trim().is_empty()) {
+        return None;
+    }
+    let seconds: f64 = parts.last()?.trim().parse().ok()?;
+    let mut total = seconds;
+    let mut unit = 60.0;
+    for part in parts.iter().rev().skip(1) {
+        let value: u32 = part.trim().parse().ok()?;
+        total += value as f64 * unit;
+        unit *= 60.0;
+    }
+    (total >= 0.0 && (parts.len() == 1 || seconds < 60.0)).then_some(total)
+}
+
+/// Secondes -> « 0:01:23.40 ».
+pub fn format_timecode(seconds: f64) -> String {
+    let hundredths = (seconds.max(0.0) * 100.0).round() as u64;
+    let (h, rest) = (hundredths / 360_000, hundredths % 360_000);
+    let (m, rest) = (rest / 6_000, rest % 6_000);
+    format!("{h}:{m:02}:{:02}.{:02}", rest / 100, rest % 100)
 }
 
 impl Cue {
@@ -119,6 +146,7 @@ impl Cue {
             param_times: BTreeMap::new(),
             stopped_effects: BTreeSet::new(),
             command: String::new(),
+            timecode: None,
         }
     }
 

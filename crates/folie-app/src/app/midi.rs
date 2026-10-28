@@ -80,8 +80,12 @@ impl FolieApp {
     /// Messages arrivés depuis la dernière image, puis retour vers le contrôleur.
     pub(super) fn midi_tick(&mut self) -> Vec<Result<Outcome, CommandError>> {
         let Some(midi) = &self.midi else { return Vec::new() };
-        let handled = midi.handle(&mut self.console);
+        let mut handled = midi.handle(&mut self.console);
         midi.publish(&self.console, &self.snapshot);
+        // Cues au timecode : celles dont le temps vient d'être passé partent.
+        if let Some(tc) = midi.timecode() {
+            handled.results.extend(self.console.timecode_tick(tc.seconds()).into_iter().map(Ok));
+        }
         if let Some(control) = handled.learned
             && let Some(learning) = self.midi_view.learning.take()
         {

@@ -15,6 +15,10 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 out_dir=${OUT_DIR:-"$repo/dist"}
 bundle_id=com.michaelmambole.folie-dmx
+# macOS le plus ancien : 10.13 High Sierra (Metal, pour l'affichage), ce qui couvre les
+# Mac de 2012 (Catalina, ou Mojave pour le Mac Pro).
+MIN_MACOS=10.13
+export MACOSX_DEPLOYMENT_TARGET=$MIN_MACOS
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mÉchec : %s\033[0m\n' "$*" >&2; exit 1; }
@@ -68,7 +72,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version.$commit</string>
-    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>Michaël Mambole — GPL-3.0-or-later</string>

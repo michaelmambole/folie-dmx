@@ -111,7 +111,9 @@ executor de la page affichée, Go/Back de l'executor sélectionné, page, blacko
 groupe, ligne de commande). Le retour allume les LED des boutons quand l'executor joue
 et renvoie la position des faders (faders motorisés). Le **MIDI Show Control** est
 compris (GO avec ou sans numéro de cue, STOP, RESUME, ALL_OFF ; la liste de cues
-désigne l'executor) et le **timecode MTC** reçu est affiché. Un séquenceur pilote Folie
+désigne l'executor) et le **timecode MTC** reçu fait partir les cues : clic droit sur une
+cue → Timecode (h:mm:ss.cc, ou « Maintenant » pour le temps reçu). Quand la bande
+saute, la séquence se cale sur la dernière cue passée. Un séquenceur pilote Folie
 par un port MIDI virtuel (gestionnaire IAC sur macOS, loopMIDI sous Windows).
 
 ## Réaction au son
