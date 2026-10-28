@@ -73,16 +73,18 @@ impl RateMeter {
     }
 }
 
-/// Dossier de la bibliothèque : `FOLIE_LIBRARY`, sinon `library/` à côté de l'exécutable
-/// (version distribuée), sinon `library/` du dépôt.
+/// Dossier de la bibliothèque : `FOLIE_LIBRARY`, sinon celui de la version distribuée
+/// (`library/` à côté de l'exécutable sous Windows, `Contents/Resources/library` dans l'app
+/// macOS), sinon `library/` du dépôt.
 fn library_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("FOLIE_LIBRARY") {
         return PathBuf::from(dir);
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("library")))
-        .filter(|dir| dir.is_dir())
+    let beside_exe = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from));
+    beside_exe
+        .into_iter()
+        .flat_map(|dir| [dir.join("library"), dir.join("../Resources/library")])
+        .find(|dir| dir.is_dir())
         .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library")))
 }
 

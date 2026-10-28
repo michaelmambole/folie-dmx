@@ -149,6 +149,26 @@ mod tests {
         }
     }
 
+    /// FOLIE_ICONSET=<dossier>.iconset écrit les images de l'icône macOS (pour `iconutil`),
+    /// avec la marge des icônes d'application : le dessin occupe 824 points sur 1024.
+    #[test]
+    fn macos_iconset() {
+        let Some(dir) = std::env::var_os("FOLIE_ICONSET") else { return };
+        let dir = std::path::Path::new(&dir);
+        std::fs::create_dir_all(dir).expect("dossier de l'iconset");
+        for points in [16u32, 32, 128, 256, 512] {
+            for scale in [1u32, 2] {
+                let size = points * scale;
+                let inner = (size as f32 * 824.0 / 1024.0).round() as u32;
+                let mut canvas = image::RgbaImage::new(size, size);
+                let offset = ((size - inner) / 2) as i64;
+                image::imageops::overlay(&mut canvas, &image_of(&super::icon(inner)), offset, offset);
+                let suffix = if scale == 2 { "@2x" } else { "" };
+                canvas.save(dir.join(format!("icon_{points}x{points}{suffix}.png"))).expect("écriture de l'icône");
+            }
+        }
+    }
+
     /// Le logo en grand, pour en vérifier les proportions.
     #[test]
     fn wordmark_capture() {
