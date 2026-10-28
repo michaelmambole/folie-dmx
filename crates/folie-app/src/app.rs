@@ -1249,6 +1249,29 @@ mod tests {
         panic!("délai dépassé");
     }
 
+    /// Une fiche GDTF : convertie, constructeur repris de la fiche, rangée comme une fiche OFL.
+    #[test]
+    fn import_a_gdtf_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("donnees");
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../folie-fixture/testdata/gdtf/BlenderDMX@RysyParLED@version7.gdtf");
+        let mut harness = harness(Storage::at(&data));
+        {
+            let app = harness.state_mut();
+            let library = app.library.clone();
+            app.fixtures_view.begin_import(std::path::Path::new(file), &library);
+        }
+        harness.run_steps(3);
+        harness.get_by_label("Convertie depuis GDTF");
+        harness.get_by_label("RGBW : 6 canaux");
+        harness.get_by_label("Rangée sous blenderdmx/rysyparled");
+        harness.get_by_label("Importer").click();
+        harness.run_steps(3);
+        let fixture = harness.state().library.get("blenderdmx/rysyparled").unwrap();
+        assert_eq!(fixture.manufacturer, "BlenderDMX");
+        assert!(data.join("library/blenderdmx/rysyparled.json").exists(), "rangée au format OFL");
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();

@@ -89,8 +89,10 @@ un autre port (8001 par exemple), sinon l'un des deux ne démarre pas.
 
 Les fiches livrées sont dans `library/` (format Open Fixture Library). Les vôtres vont
 dans la bibliothèque personnelle, à côté des réglages (`library/` du dossier
-Folie-DMX) : **Patch → Importer une fiche…** y range une fiche OFL (`.json`, à
-télécharger sur [open-fixture-library.org](https://open-fixture-library.org)). Une fiche
+Folie-DMX). Dans le Patch : **Rechercher en ligne…** trouve un appareil dans
+[Open Fixture Library](https://open-fixture-library.org) et importe sa fiche ;
+**Importer un fichier…** range une fiche OFL (`.json`) ou GDTF (`.gdtf`, convertie en
+OFL : modes, canaux fins, plages, roues, cellules répétées). Une fiche
 personnelle de même nom qu'une fiche livrée la remplace : c'est ainsi qu'on la corrige.
 Les shows embarquent leurs fiches et restent lisibles sur une autre machine.
 

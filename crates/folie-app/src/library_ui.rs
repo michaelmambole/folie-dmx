@@ -5,7 +5,7 @@ use std::path::Path;
 
 use eframe::egui::{self, Key, RichText};
 use folie_fixture::library::{self, slug};
-use folie_fixture::{FixtureType, Library, ofl};
+use folie_fixture::{FixtureType, Library, gdtf, ofl};
 
 use crate::theme;
 
@@ -17,6 +17,8 @@ pub struct ImportDialog {
     model: String,
     replace: bool,
     error: Option<String>,
+    /// Remarques sur la conversion (GDTF).
+    notes: Vec<String>,
 }
 
 /// Ce que la boîte a donné à cette image.
@@ -28,7 +30,17 @@ pub enum ImportOutcome {
 }
 
 impl ImportDialog {
+    /// Fiche OFL (`.json`) ou GDTF (`.gdtf`, convertie au passage).
     pub fn from_file(path: &Path, library: &Library) -> Result<Self, String> {
+        let gdtf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gdtf"));
+        if gdtf {
+            let bytes = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+            let converted = gdtf::convert_archive(&bytes)?;
+            let mut dialog = Self::from_json(converted.ofl_json, None, library)?.with_manufacturer(&converted.manufacturer);
+            dialog.notes = converted.warnings;
+            dialog.notes.insert(0, "Convertie depuis GDTF".into());
+            return Ok(dialog);
+        }
         let json = std::fs::read_to_string(path).map_err(|e| format!("{} : {e}", path.display()))?;
         let folder = path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
         Self::from_json(json, folder.as_deref(), library)
@@ -43,7 +55,7 @@ impl ImportDialog {
             .map(|f| f.manufacturer.clone())
             .unwrap_or_default();
         let model = preview.name.clone();
-        Ok(Self { json, preview, manufacturer, model, replace: false, error: None })
+        Ok(Self { json, preview, manufacturer, model, replace: false, error: None, notes: Vec::new() })
     }
 
     /// Constructeur connu d'avance (fiche venue de la recherche en ligne).
@@ -87,6 +99,9 @@ impl ImportDialog {
                 ui.label(
                     RichText::new(format!("{} : {} canaux{heads}", mode.name, mode.footprint)).color(theme::MUTED),
                 );
+            }
+            if !self.notes.is_empty() {
+                ui.label(RichText::new(self.notes.join(" ; ")).size(11.5).color(theme::MUTED));
             }
             if !self.preview.warnings.is_empty() {
                 ui.label(
@@ -158,5 +173,9 @@ impl ImportDialog {
 
 /// Choix du fichier à importer.
 pub fn pick_file() -> Option<std::path::PathBuf> {
-    rfd::FileDialog::new().add_filter("Fiche Open Fixture Library", &["json"]).pick_file()
+    rfd::FileDialog::new()
+        .add_filter("Fiche de projecteur (OFL, GDTF)", &["json", "gdtf"])
+        .add_filter("Open Fixture Library", &["json"])
+        .add_filter("GDTF", &["gdtf"])
+        .pick_file()
 }

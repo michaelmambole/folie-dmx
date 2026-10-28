@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 folie-dmx.workspace = true
+roxmltree = "0.21"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate"] }

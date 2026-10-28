@@ -129,7 +129,7 @@ impl FixturesView {
                     }
                     let import = ui
                         .add_enabled(user_dir.is_some(), egui::Button::new("Importer un fichier…"))
-                        .on_hover_text("Ajoute une fiche Open Fixture Library (.json) à votre bibliothèque")
+                        .on_hover_text("Ajoute une fiche Open Fixture Library (.json) ou GDTF (.gdtf) à votre bibliothèque")
                         .on_disabled_hover_text(unavailable);
                     if import.clicked()
                         && let Some(path) = library_ui::pick_file()
