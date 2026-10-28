@@ -85,6 +85,8 @@ pub enum Target {
     OffAll,
     PageNext,
     PagePrev,
+    /// Encodeur sans fin (valeur relative autour de 64) : un cran à droite, page suivante.
+    PageEncoder,
     Blackout,
     Group { number: u32 },
     Command { line: String },
@@ -104,6 +106,7 @@ impl Target {
             Self::OffAll => "Tout éteindre".into(),
             Self::PageNext => "Page suivante".into(),
             Self::PagePrev => "Page précédente".into(),
+            Self::PageEncoder => "Page (encodeur)".into(),
             Self::Blackout => "Blackout (bascule)".into(),
             Self::Group { number } => format!("Groupe {number}"),
             Self::Command { line } => format!("Commande « {line} »"),
@@ -141,12 +144,109 @@ pub struct MidiSettings {
     pub msc: bool,
     /// Identifiant MSC de Folie (0 à 126) ; 127 : répond à tous.
     pub msc_device: u8,
+    /// Façon d'allumer les boutons du contrôleur.
+    pub leds: Leds,
+}
+
+/// Retour sur les boutons : une note ou un CC (le plus courant), ou le message propre à
+/// un contrôleur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Leds {
+    #[default]
+    Standard,
+    /// Pads RGB du MiniLab 3 : couleur par message système Arturia.
+    MiniLab3,
+}
+
+/// Couleur d'un pad du MiniLab 3 : ambre quand l'executor joue, veilleuse sinon.
+fn minilab3_pad(note: u8, on: bool) -> Option<Vec<u8>> {
+    let pad = match note {
+        36..=43 => 0x34 + (note - 36),
+        44..=51 => 0x44 + (note - 44),
+        _ => return None,
+    };
+    let [r, g, b] = if on { [127, 70, 0] } else { [6, 4, 0] };
+    Some(vec![0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42, 0x02, 0x01, 0x16, pad, r, g, b, 0xF7])
+}
+
+/// Message envoyé au contrôleur pour une valeur de retour.
+fn feedback_message(leds: Leds, control: Control, value: u8) -> Vec<u8> {
+    match (leds, control) {
+        (Leds::MiniLab3, Control::Note { channel: 9, number }) => {
+            if let Some(sysex) = minilab3_pad(number, value > 0) {
+                return sysex;
+            }
+            vec![0x99, number, value]
+        }
+        (_, Control::Note { channel, number }) => vec![0x90 | channel, number, value],
+        (_, Control::Cc { channel, number }) => vec![0xB0 | channel, number, value],
+    }
 }
 
 impl Default for MidiSettings {
     fn default() -> Self {
-        Self { enabled: false, inputs: Vec::new(), output: String::new(), mappings: Vec::new(), msc: true, msc_device: 127 }
+        Self {
+            enabled: false,
+            inputs: Vec::new(),
+            output: String::new(),
+            mappings: Vec::new(),
+            msc: true,
+            msc_device: 127,
+            leds: Leds::Standard,
+        }
     }
+}
+
+/// Profil d'un contrôleur : ses associations toutes prêtes.
+pub struct Profile {
+    pub name: &'static str,
+    /// Ce qu'il faut savoir (réglages du contrôleur, limites).
+    pub note: &'static str,
+    pub mappings: Vec<Mapping>,
+    pub leds: Leds,
+}
+
+/// Profils fournis. Les numéros sont ceux des réglages d'usine ; si un contrôleur a été
+/// reconfiguré, « Apprendre » corrige une ligne.
+pub fn profiles() -> Vec<Profile> {
+    let cc = |number| Control::Cc { channel: 0, number };
+    let pad = |number| Control::Note { channel: 9, number };
+    let mut minilab = Vec::new();
+    // Faders 1 à 4 : executors 1 à 4.
+    for (slot, number) in (1..).zip([82, 83, 85, 17]) {
+        minilab.push(Mapping { control: cc(number), target: Target::Fader { slot } });
+    }
+    // Encodeurs 1 à 6 : faders des executors 5 à 10 (les 7 et 8 restent libres).
+    for (slot, number) in (5..).zip([74, 71, 76, 77, 93, 18]) {
+        minilab.push(Mapping { control: cc(number), target: Target::Fader { slot } });
+    }
+    // Encodeur principal (tourné) : les pages d'executors.
+    minilab.push(Mapping { control: cc(114), target: Target::PageEncoder });
+    // Pads, banque A : touches des executors 1 à 8 ; banque B : leur Flash.
+    for slot in 1..=8u32 {
+        minilab.push(Mapping { control: pad(35 + slot as u8), target: Target::Press { slot } });
+    }
+    for slot in 1..=8u32 {
+        minilab.push(Mapping { control: pad(43 + slot as u8), target: Target::Flash { slot } });
+    }
+    // Clavier (canal 1), touches blanches de la première octave (Do 48 sans décalage
+    // d'octave) : executors à boutons 11 à 15, puis Go et Back de l'executor sélectionné.
+    let key = |number| Control::Note { channel: 0, number };
+    for (slot, number) in (11..).zip([48, 50, 52, 53, 55]) {
+        minilab.push(Mapping { control: key(number), target: Target::Press { slot } });
+    }
+    minilab.push(Mapping { control: key(57), target: Target::MainGo });
+    minilab.push(Mapping { control: key(59), target: Target::MainBack });
+    vec![Profile {
+        name: "Arturia MiniLab 3",
+        note: "Réglages d'usine, programme Arturia (celui par défaut) : faders 1-4 et encodeurs 1-6 \
+               sur les faders des executors 1 à 10, encodeur principal sur les pages, pads banque A \
+               sur leurs touches, banque B sur leur Flash ; clavier, touches blanches de la \
+               première octave (Do à Sol) sur les executors 11 à 15, La : Go, Si : Back. Les pads s'allument en ambre quand leur executor joue (port de retour : \
+               MiniLab 3).",
+        mappings: minilab,
+        leds: Leds::MiniLab3,
+    }]
 }
 
 /// La commande d'un message et son état : appuyée (ou valeur de 0 à 1).
@@ -163,6 +263,12 @@ fn control_of(event: &Event) -> Option<(Control, f32)> {
 fn action_for(target: &Target, value: f32, console: &Console) -> Option<Action> {
     let pressed = value >= 0.5;
     let exec = |slot: u32| console.resolve_executor(ExecutorRef { page: None, slot });
+    if *target == Target::PageEncoder {
+        // Valeur relative : 65 et plus, vers la droite ; 63 et moins, vers la gauche.
+        let step = (value * 127.0).round() as i32 - 64;
+        let page = console.page() as i32 + step.signum();
+        return (step != 0).then_some(Action::Page { page: page.max(1) as u32 });
+    }
     Some(match target {
         Target::Fader { slot } => Action::Fader { executor: exec(*slot), level: value },
         Target::Flash { slot } => Action::Flash { executor: exec(*slot), pressed },
@@ -175,6 +281,7 @@ fn action_for(target: &Target, value: f32, console: &Console) -> Option<Action> 
         Target::MainBack => Action::Back { executor: None },
         Target::OffAll => Action::OffAll,
         Target::PageNext => Action::Page { page: console.page().saturating_add(1) },
+        Target::PageEncoder => return None,
         Target::PagePrev => Action::Page { page: console.page().saturating_sub(1).max(1) },
         Target::Blackout => Action::Blackout { on: !console.engine().snapshot().blackout },
         Target::Group { number } => Action::Group { number: *number },
@@ -383,6 +490,7 @@ impl MidiServer {
         self.settings.mappings = settings.mappings.clone();
         self.settings.msc = settings.msc;
         self.settings.msc_device = settings.msc_device;
+        self.settings.leds = settings.leds;
         // Le contrôleur reçoit à nouveau tout l'état.
         self.sent.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
@@ -449,10 +557,7 @@ impl MidiServer {
             if sent.get(&control) == Some(&value) {
                 continue;
             }
-            let message = match control {
-                Control::Note { channel, number } => [0x90 | channel, number, value],
-                Control::Cc { channel, number } => [0xB0 | channel, number, value],
-            };
+            let message = feedback_message(self.settings.leds, control, value);
             if out.send(&message).is_ok() {
                 sent.insert(control, value);
             }
@@ -529,6 +634,41 @@ mod tests {
         let full = MtcReader::full_frame(&[0xF0, 0x7F, 0x7F, 0x01, 0x01, 0x61, 0, 1, 12, 0xF7]).unwrap();
         assert_eq!(full.label(), "01:00:01:12");
         assert!((full.seconds() - (3601.0 + 12.0 / 30.0)).abs() < 1e-6, "30 i/s");
+    }
+
+    #[test]
+    fn profiles_are_consistent() {
+        for profile in profiles() {
+            let mut controls: Vec<Control> = profile.mappings.iter().map(|m| m.control).collect();
+            let count = controls.len();
+            controls.sort_by_key(|c| format!("{c:?}"));
+            controls.dedup();
+            assert_eq!(controls.len(), count, "{} : une commande associée deux fois", profile.name);
+            for mapping in &profile.mappings {
+                if let Some(slot) = mapping.target.slot() {
+                    assert!((1..=folie_show::SLOTS_PER_PAGE).contains(&slot), "{}", profile.name);
+                }
+            }
+        }
+        let minilab = &profiles()[0];
+        assert_eq!(minilab.mappings.len(), 4 + 6 + 1 + 8 + 8 + 7);
+        assert_eq!(minilab.mappings[27], Mapping { control: Control::Note { channel: 0, number: 48 }, target: Target::Press { slot: 11 } });
+        assert_eq!(minilab.mappings[0], Mapping { control: Control::Cc { channel: 0, number: 82 }, target: Target::Fader { slot: 1 } });
+        assert_eq!(minilab.mappings[10], Mapping { control: Control::Cc { channel: 0, number: 114 }, target: Target::PageEncoder });
+        assert_eq!(minilab.mappings[11].control, Control::Note { channel: 9, number: 36 }, "pad 1, canal 10");
+    }
+
+    #[test]
+    fn minilab3_pads_light_by_sysex() {
+        let pad1 = Control::Note { channel: 9, number: 36 };
+        assert_eq!(
+            feedback_message(Leds::MiniLab3, pad1, 127),
+            [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42, 0x02, 0x01, 0x16, 0x34, 127, 70, 0, 0xF7]
+        );
+        let pad_b8 = Control::Note { channel: 9, number: 51 };
+        assert_eq!(feedback_message(Leds::MiniLab3, pad_b8, 0)[9], 0x4B, "pad 8 de la banque B");
+        assert_eq!(feedback_message(Leds::Standard, pad1, 127), [0x99, 36, 127]);
+        assert_eq!(feedback_message(Leds::MiniLab3, Control::Cc { channel: 0, number: 82 }, 64), [0xB0, 82, 64]);
     }
 
     #[test]

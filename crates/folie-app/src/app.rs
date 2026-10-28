@@ -1430,6 +1430,45 @@ mod tests {
         }
     }
 
+    /// Profil MiniLab 3 chargé depuis la fenêtre MIDI : son fader 1 (CC 82) mène l'executor 1.
+    #[test]
+    fn load_the_minilab_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 50");
+        command(&mut harness, "Store Cue 1");
+        command(&mut harness, "ClearAll");
+        {
+            let app = harness.state_mut();
+            app.midi_settings.inputs = vec!["(aucun port)".into()];
+            app.midi_settings.enabled = true;
+            app.midi_changed();
+            app.windows.open(WindowKind::Midi);
+        }
+        harness.run_steps(3);
+        harness.get_by_role_and_label(Role::ComboBox, "Profil").click();
+        harness.run_steps(2);
+        harness.get_by_label("Arturia MiniLab 3").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().midi_settings.mappings.len(), 34);
+        harness.state().midi.as_ref().unwrap().inject(&[0xB0, 82, 64]);
+        settle(&mut harness);
+        let executor = harness.state().console.executor_at(1);
+        let level = harness.state().snapshot.executors.get(&executor).map(|s| s.level).unwrap();
+        assert!((level - 64.0 / 127.0).abs() < 1e-3, "fader 1 du MiniLab : {level}");
+        // Encodeur principal : un cran à droite (65), page 2 ; deux à gauche (63), page 1.
+        let midi = harness.state().midi.as_ref().unwrap();
+        midi.inject(&[0xB0, 114, 65]);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.page(), 2);
+        let midi = harness.state().midi.as_ref().unwrap();
+        midi.inject(&[0xB0, 114, 63]);
+        midi.inject(&[0xB0, 114, 63]);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.page(), 1, "pas en dessous de la page 1");
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();

@@ -108,7 +108,11 @@ Fenêtre **MIDI** (menu Fenêtres) : choisir les entrées (toutes par défaut) e
 retour. **Nouvelle association**, puis toucher un bouton ou un fader du contrôleur :
 il est associé, et on choisit l'action (fader, touche, Go, Back, Off ou Flash d'un
 executor de la page affichée, Go/Back de l'executor sélectionné, page, blackout,
-groupe, ligne de commande). Le retour allume les LED des boutons quand l'executor joue
+groupe, ligne de commande). **Profil** remplit les associations d'un contrôleur connu
+(Arturia MiniLab 3 : faders et encodeurs sur les faders des executors 1 à 10, encodeur
+principal sur les pages, pads sur
+leurs touches et leur Flash, pads allumés en couleur, touches blanches du clavier sur les
+executors à boutons 11 à 15 et Go/Back). Le retour allume les LED des boutons quand l'executor joue
 et renvoie la position des faders (faders motorisés). Le **MIDI Show Control** est
 compris (GO avec ou sans numéro de cue, STOP, RESUME, ALL_OFF ; la liste de cues
 désigne l'executor) et le **timecode MTC** reçu fait partir les cues : clic droit sur une

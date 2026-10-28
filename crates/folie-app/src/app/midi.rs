@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText};
 use folie_control::{CommandError, Outcome};
-use folie_remote::midi::{Mapping, MidiServer, Target, ports};
+use folie_remote::midi::{Mapping, MidiServer, Target, ports, profiles};
 
 use super::FolieApp;
 use crate::theme;
@@ -33,6 +33,7 @@ fn target_kinds() -> Vec<(&'static str, Target)> {
         ("Tout éteindre", Target::OffAll),
         ("Page suivante", Target::PageNext),
         ("Page précédente", Target::PagePrev),
+        ("Page (encodeur)", Target::PageEncoder),
         ("Blackout", Target::Blackout),
         ("Groupe", Target::Group { number: 1 }),
         ("Ligne de commande", Target::Command { line: String::new() }),
@@ -243,6 +244,30 @@ impl FolieApp {
             self.midi_mappings_changed();
         }
         ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let label = ui.label("Profil");
+            let mut chosen = None;
+            egui::ComboBox::from_id_salt("midi_profile")
+                .width(200.0)
+                .selected_text("choisir un contrôleur…")
+                .show_ui(ui, |ui| {
+                    for (i, profile) in profiles().iter().enumerate() {
+                        if ui.selectable_label(false, profile.name).on_hover_text(profile.note).clicked() {
+                            chosen = Some(i);
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text("Remplace les associations par celles d'un contrôleur connu");
+            if let Some(profile) = chosen.and_then(|i| profiles().into_iter().nth(i)) {
+                self.midi_settings.mappings = profile.mappings;
+                self.midi_settings.leds = profile.leds;
+                self.midi_view.learning = None;
+                self.midi_mappings_changed();
+                self.command_line.feedback = Some((true, format!("Profil MIDI {} chargé", profile.name)));
+            }
+        });
         ui.horizontal(|ui| {
             match self.midi_view.learning {
                 Some(_) => {
