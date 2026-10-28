@@ -4,6 +4,7 @@ description = "Réaction au son : entrée audio, niveaux par bande, beat et temp
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 folie-engine.workspace = true

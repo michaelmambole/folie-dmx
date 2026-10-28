@@ -99,3 +99,9 @@ Tests : `cargo test`. Pour enregistrer une image de l'interface pendant le test
 d'interface : `FOLIE_UI_CAPTURE=<dossier> cargo test -p folie-app`.
 
 Voir [ROADMAP.md](ROADMAP.md) pour la suite.
+
+## Licence
+
+Folie-DMX est un logiciel libre, sous licence [GNU GPL v3](LICENSE) ou ultérieure.
+Les polices embarquées (Inter, JetBrains Mono) sont sous licence SIL OFL ; les fiches de
+projecteurs de `library/` viennent en partie d'Open Fixture Library (MIT, voir `library/README.md`).

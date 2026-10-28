@@ -4,6 +4,7 @@ description = "Modèle de fixtures, import Open Fixture Library et patch"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 folie-dmx.workspace = true

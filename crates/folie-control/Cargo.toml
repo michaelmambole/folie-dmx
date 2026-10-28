@@ -4,6 +4,7 @@ description = "Couche de contrôle : sélection, groupes, presets et ligne de co
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 folie-dmx.workspace = true

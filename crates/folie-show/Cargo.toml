@@ -4,6 +4,7 @@ description = "Fichier de show Folie-DMX : lecture, écriture, sauvegarde automa
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 folie-fixture.workspace = true
