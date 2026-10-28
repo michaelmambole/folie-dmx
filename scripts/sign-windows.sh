@@ -93,7 +93,7 @@ else
         read -r -p "Continuer quand même ? [o/N] " answer
         [ "$answer" = o ] || exit 1
     fi
-    gh run download "$run" --name Folie-DMX-windows --dir "$work/Folie-DMX"
+    gh run download "$run" --name Folie-DMX-windows-NON-SIGNE --dir "$work/Folie-DMX"
     package="$work/Folie-DMX"
     version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)-${commit:0:7}"
 fi

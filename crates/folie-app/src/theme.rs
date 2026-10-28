@@ -104,6 +104,9 @@ fn widget(fill: Color32, stroke: Color32, text: Color32) -> egui::style::WidgetV
 /// Applique l'identité visuelle à toute l'application.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
+    // Barre de titre sombre elle aussi, même quand le système est en mode clair :
+    // sinon Windows l'affiche en blanc au-dessus d'une fenêtre sombre.
+    ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
     ctx.set_fonts(fonts());
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         style.text_styles = [

@@ -1,5 +1,6 @@
 # Compile Folie-DMX pour Windows à chaque push : l'exécutable se télécharge
-# depuis l'onglet Actions du dépôt (section « Artifacts » du passage).
+# depuis l'onglet Actions (section « Artifacts »). Non signé : Windows peut le bloquer ;
+# les versions signées sont celles des releases (scripts/sign-windows.sh).
 name: Windows
 
 on:
@@ -30,5 +31,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Folie-DMX-windows
+          name: Folie-DMX-windows-NON-SIGNE
           path: Folie-DMX

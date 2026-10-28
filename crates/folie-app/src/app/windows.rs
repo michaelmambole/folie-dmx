@@ -441,6 +441,7 @@ impl FolieApp {
                 window.show(ctx, |ui| self.window_contents(ui, kind));
             } else {
                 if self.windows.created.insert(kind) {
+                    ctx.send_viewport_cmd_to(id, ViewportCommand::SetTheme(egui::SystemTheme::Dark));
                     ctx.send_viewport_cmd_to(id, ViewportCommand::Focus);
                 }
                 ctx.show_viewport_immediate(id, builder(kind, &spawn), |ui, _| {
