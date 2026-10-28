@@ -349,12 +349,27 @@ impl FolieApp {
         });
     }
 
-    /// STORE, CLEAR et BLACKOUT : les touches qu'on joue, au centre.
+    /// STORE, CLEAR, BLIND et BLACKOUT : les touches qu'on joue, au centre.
     fn play_keys(&mut self, ui: &mut egui::Ui) {
         crate::pools::store_key(ui, &mut self.store_armed);
         let clear_help = "Vide le programmer : fixtures à leurs valeurs par défaut, canaux forcés relâchés";
         if ui.add(theme::key_button("CLEAR", theme::LINE, theme::SURFACE_2, theme::TEXT)).on_hover_text(clear_help).clicked() {
             let result = self.console.execute("ClearAll");
+            self.command_line.report(result);
+        }
+        let blind = self.console.blind();
+        let button = if blind {
+            theme::key_button("BLIND", theme::INFO, theme::INFO, Color32::WHITE)
+        } else {
+            theme::key_button("BLIND", theme::INFO, theme::INFO.gamma_multiply(0.14), Color32::from_rgb(140, 185, 245))
+        };
+        let help = if blind {
+            "Blind actif : le programmer ne sort pas. Cliquer pour revenir au programmer live (commande Blind)"
+        } else {
+            "Programmer à part, qui ne sort pas : préparer sans toucher à la scène (commande Blind)"
+        };
+        if ui.add(button).on_hover_text(help).clicked() {
+            let result = self.console.execute("Blind");
             self.command_line.report(result);
         }
         let blackout = self.snapshot.blackout;
@@ -895,6 +910,45 @@ mod tests {
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
         harness.run_steps(2);
         sheet_row(&harness, "1");
+    }
+
+    #[test]
+    fn blind_key_shows_the_blind_programmer_without_output() {
+        use crate::fixture_sheet::{animated, live_row};
+        use crate::theme::Source;
+        const BANNER: &str =
+            "Programmer blind : rien de ce que vous réglez ne sort, Store l'enregistre. La scène garde le programmer live.";
+        let mut harness = harness(Storage::disabled());
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Fixture 1 At 100");
+        assert!(harness.query_by_label(BANNER).is_none());
+
+        harness.get(By::new().role(Role::Button).label("BLIND")).click(); // la touche, pas le bandeau
+        settle(&mut harness);
+        assert!(harness.state().console.blind());
+        assert_eq!(harness.get_all_by_label(BANNER).count(), 2, "au-dessus du Programmer et dans la fenêtre Fixtures");
+        command(&mut harness, "Fixture 2 At 50");
+        assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 0), "rien ne sort du blind");
+        // La feuille montre le programmer blind là où il a des valeurs, la sortie ailleurs.
+        let app = harness.state();
+        let effects = animated(&app.console, &app.snapshot);
+        let intensity =
+            |id| live_row(&app.console, &app.snapshot, Target::whole(FixtureId(id)), &effects, DisplayMode::Percent).intensity.unwrap();
+        let two = intensity(2);
+        assert!((two.value - 0.5).abs() < 0.01 && two.source == Source::Programmer, "{two:?}");
+        assert_eq!(intensity(1).value, 1.0, "le live, toujours sur scène");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("blind.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        harness.get(By::new().role(Role::Button).label("BLIND")).click(); // la touche, pas le bandeau
+        settle(&mut harness);
+        assert!(!harness.state().console.blind());
+        assert!(harness.query_by_label(BANNER).is_none());
+        harness.get_by_label("Blind coupé : retour au programmer live (1 élément repris)");
+        assert_eq!((output(&harness, 2), output(&harness, 16)), (255, 0));
     }
 
     /// Remplace le texte du champ « Adresse » du menu ouvert, puis valide par Entrée.

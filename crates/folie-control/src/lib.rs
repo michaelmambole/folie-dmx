@@ -143,6 +143,29 @@ pub fn preset_color(preset: &Preset, patch: &Patch) -> Option<[u8; 3]> {
     Some([channel(0), channel(1), channel(2)])
 }
 
+/// Contenu d'un programmer : valeurs, liens aux presets, relâchés et effets.
+#[derive(Debug, Clone, Default)]
+struct ProgrammerState {
+    values: HashMap<ParamKey, u16>,
+    origins: HashMap<ParamKey, (FeatureGroup, u32)>,
+    released: HashSet<ParamKey>,
+    effects: Vec<Effect>,
+}
+
+impl ProgrammerState {
+    /// Retire ce qui n'est plus patché.
+    fn retain_patched(&mut self, patch: &Patch) {
+        let exists = |key: &ParamKey| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len());
+        self.values.retain(|key, _| exists(key));
+        self.origins.retain(|key, _| exists(key));
+        self.released.retain(exists);
+        for effect in &mut self.effects {
+            effect.targets.retain(|t| patch.contains(*t));
+        }
+        self.effects.retain(|e| !e.targets.is_empty());
+    }
+}
+
 pub struct Console {
     pub show: Show,
     /// Sélection dans l'ordre où elle a été faite.
@@ -167,6 +190,11 @@ pub struct Console {
     released: HashSet<ParamKey>,
     /// Effets qui tournent dans le programmer.
     effects: Vec<Effect>,
+    /// Blind : le programmer en cours est le programmer blind, qui ne sort pas ;
+    /// le moteur garde le programmer live, et `stash` le tient pour la console.
+    blind: bool,
+    /// Le programmer qui n'est pas en cours : le blind hors du blind, le live pendant.
+    stash: ProgrammerState,
     taps: effects::TapTempo,
     /// Macros en cours de lecture.
     macro_runs: Vec<macros::MacroRun>,
@@ -191,6 +219,8 @@ impl Console {
             origins: HashMap::new(),
             released: HashSet::new(),
             effects: Vec::new(),
+            blind: false,
+            stash: ProgrammerState::default(),
             taps: effects::TapTempo::default(),
             macro_runs: Vec::new(),
             macro_ticking: false,
@@ -246,6 +276,8 @@ impl Console {
     pub fn load_show(&mut self, show: Show) {
         self.show = show;
         self.selection.clear();
+        self.blind = false;
+        self.stash = ProgrammerState::default();
         self.clear_programmer();
         self.engine.send(EngineCommand::SetTempo(self.show.tempo));
         self.patch_changed();
@@ -270,16 +302,12 @@ impl Console {
                 }
             }
         }
-        for effect in &mut self.effects {
-            effect.targets.retain(|t| patch.contains(*t));
-        }
-        self.effects.retain(|e| !e.targets.is_empty());
+        let mut current = self.take_programmer();
+        current.retain_patched(&self.show.patch);
+        self.put_programmer(current);
+        self.stash.retain_patched(&self.show.patch);
         self.effects_changed();
-        self.origins.retain(|key, _| patch.get(key.fixture).is_some());
-        self.released.retain(|key| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
-        self.programmer
-            .retain(|key, _| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
-        self.engine.send(EngineCommand::SetPatch(Arc::new(patch.clone())));
+        self.engine.send(EngineCommand::SetPatch(Arc::new(self.show.patch.clone())));
         self.sync_playback();
     }
 
@@ -305,16 +333,66 @@ impl Console {
         self.released.clear();
         self.effects.clear();
         self.effects_changed();
-        self.engine.send(EngineCommand::ClearProgrammer);
+        self.send_programmer(EngineCommand::ClearProgrammer);
     }
 
-    /// Valeur saisie à la main : elle n'est plus liée à un preset.
+    /// Envoie au moteur une commande du programmer, sauf en blind : le programmer
+    /// blind ne sort pas, le moteur garde le programmer live.
+    fn send_programmer(&self, command: EngineCommand) {
+        if !self.blind {
+            self.engine.send(command);
+        }
+    }
+
+    fn take_programmer(&mut self) -> ProgrammerState {
+        ProgrammerState {
+            values: std::mem::take(&mut self.programmer),
+            origins: std::mem::take(&mut self.origins),
+            released: std::mem::take(&mut self.released),
+            effects: std::mem::take(&mut self.effects),
+        }
+    }
+
+    fn put_programmer(&mut self, state: ProgrammerState) {
+        self.programmer = state.values;
+        self.origins = state.origins;
+        self.released = state.released;
+        self.effects = state.effects;
+    }
+
+    /// En blind, le programmer en cours est le programmer blind.
+    pub fn blind(&self) -> bool {
+        self.blind
+    }
+
+    /// Entre en blind ou en sort. Le programmer blind est gardé pour la fois suivante,
+    /// et le live retrouve sa place, tel qu'il est resté sur scène.
+    pub fn set_blind(&mut self, on: bool) -> Outcome {
+        if on != self.blind {
+            let current = self.take_programmer();
+            let other = std::mem::replace(&mut self.stash, current);
+            self.put_programmer(other);
+            self.blind = on;
+            if !on {
+                // Les effets live ont pu perdre des cibles (patch changé en blind) : on les redonne.
+                self.effects_changed();
+            }
+        }
+        let count = self.programmer.len() + self.effects.len();
+        let kept = if count > 0 { format!(" ({} repris)", plural(count, "élément")) } else { String::new() };
+        if on {
+            Outcome::info(format!("Blind : le programmer ne sort plus, la scène ne bouge pas{kept}"))
+        } else {
+            Outcome::info(format!("Blind coupé : retour au programmer live{kept}"))
+        }
+    }
+
     fn send_value(&mut self, target: Target, parameter: usize, value: u16) {
         let key = ParamKey { fixture: target.fixture, parameter };
         self.origins.remove(&key);
         self.released.remove(&key);
         self.programmer.insert(key, value);
-        self.engine.send(EngineCommand::SetAttribute { key, value });
+        self.send_programmer(EngineCommand::SetAttribute { key, value });
         self.turn_off_companions(target, parameter, value);
     }
 
@@ -354,7 +432,7 @@ impl Console {
                 self.origins.remove(&key);
                 self.released.remove(&key);
                 self.programmer.remove(&key);
-                self.engine.send(EngineCommand::ReleaseAttribute(key));
+                self.send_programmer(EngineCommand::ReleaseAttribute(key));
             }
         }
     }
@@ -390,7 +468,7 @@ impl Console {
                 self.origins.remove(&key);
                 self.released.remove(&key);
                 self.programmer.remove(&key);
-                self.engine.send(EngineCommand::ReleaseAttribute(key));
+                self.send_programmer(EngineCommand::ReleaseAttribute(key));
             }
         }
     }
@@ -407,7 +485,7 @@ impl Console {
                 let key = ParamKey { fixture: target.fixture, parameter };
                 self.origins.remove(&key);
                 self.programmer.remove(&key);
-                self.engine.send(EngineCommand::ReleaseAttribute(key));
+                self.send_programmer(EngineCommand::ReleaseAttribute(key));
                 count += usize::from(self.released.insert(key));
             }
         }
@@ -479,6 +557,7 @@ impl Console {
                     Ok(Outcome::info("Sélection vidée (Clear à nouveau pour vider le programmer)"))
                 }
             }
+            Command::Blind(on) => Ok(self.set_blind(on.unwrap_or(!self.blind))),
             Command::ClearAll => {
                 self.selection.clear();
                 self.clear_programmer();
@@ -734,7 +813,7 @@ impl Console {
             for (index, parameter) in self.show.patch.parameters_of(target) {
                 if let Some(value) = values.get(&parameter.name) {
                     let key = ParamKey { fixture: target.fixture, parameter: index };
-                    self.engine.send(EngineCommand::SetAttribute { key, value: *value });
+                    self.send_programmer(EngineCommand::SetAttribute { key, value: *value });
                     self.programmer.insert(key, *value);
                     self.origins.insert(key, (family, number));
                     any = true;
@@ -886,6 +965,47 @@ mod tests {
         c.patch_changed();
         assert_eq!(c.show.groups[&7].targets.len(), 2, "la fixture dépatchée quitte le groupe");
         assert!(c.execute("Group 99").is_err());
+    }
+
+    /// Blind : un programmer à part, qui ne sort pas ; le live reste sur scène et revient.
+    #[test]
+    fn blind_has_its_own_programmer() {
+        let mut c = console();
+        run(&mut c, "Fixture 1 At 100");
+        assert_eq!(dmx(&c, 2), 255);
+
+        run(&mut c, "Blind");
+        assert!(c.blind() && c.programmer().is_empty(), "programmer blind vide");
+        run(&mut c, "Fixture 2 At 50");
+        run(&mut c, "Effect 3");
+        assert_eq!((dmx(&c, 2), dmx(&c, 16)), (255, 0), "la scène ne bouge pas");
+        assert_eq!(settled(&c).running_effects, 0, "l'effet blind ne tourne pas");
+        // Clear ne vide que le blind… après avoir enregistré : Store prend le programmer blind.
+        run(&mut c, "Store Cue 1 Fade 0");
+        let cue = &c.show.sequences[&1].cues[&CueNumber::whole(1)];
+        assert!(cue.values.contains_key(&FixtureId(2)) && !cue.values.contains_key(&FixtureId(1)));
+        run(&mut c, "Fixture 3 At 30");
+        assert_eq!(dmx(&c, 2), 255, "le live reste allumé");
+
+        // Sortie du blind : le live revient tel quel, le blind est gardé pour la fois suivante.
+        assert!(run(&mut c, "Blind Off").message.contains("live"));
+        assert!(!c.blind());
+        assert_eq!(c.programmer().len(), 1, "le live : le dimmer de la fixture 1");
+        assert_eq!((dmx(&c, 2), dmx(&c, 30)), (255, 0));
+        run(&mut c, "Blind");
+        assert!(c.programmer().len() >= 2 && c.programmer_effects().len() == 1, "le blind retrouvé");
+        run(&mut c, "ClearAll");
+        run(&mut c, "Blind");
+        assert_eq!(dmx(&c, 2), 255, "ClearAll en blind n'a pas touché au live");
+        assert!(!c.blind());
+
+        // Charger un show sort du blind et oublie les deux programmers.
+        run(&mut c, "Blind");
+        run(&mut c, "Fixture 4 At 100");
+        c.load_show(c.show.clone());
+        assert!(!c.blind() && c.programmer().is_empty());
+        run(&mut c, "Blind");
+        assert!(c.programmer().is_empty());
     }
 
     /// Réadresser garde le numéro : groupe, preset, cue et programmer suivent la fixture.

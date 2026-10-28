@@ -106,7 +106,7 @@ impl Console {
             .enumerate()
             .map(|(i, e)| instance(e, PROGRAMMER_IDS + i as u64, &self.show.patch))
             .collect();
-        self.engine.send(EngineCommand::SetProgrammerEffects(instances));
+        self.send_programmer(EngineCommand::SetProgrammerEffects(instances));
     }
 
     /// Lance l'effet modèle n° `number` (à partir de 1) sur la sélection.

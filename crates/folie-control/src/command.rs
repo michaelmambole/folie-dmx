@@ -13,6 +13,7 @@
 //! Macro 2                        Store Macro 3 "Ballet"  Wait 2 (dans une macro)
 //! Fixture 2 Release             Assert Executor 3
 //! Osc "Reaper" "/play"           Osc "Reaper" "/marker" 3
+//! Blind   Blind Off
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
@@ -59,6 +60,7 @@ pub enum Keyword {
     Macro,
     Wait,
     Osc,
+    Blind,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
@@ -74,7 +76,7 @@ pub(crate) const ALIASES: [(&str, Keyword); 8] = [
     ("o", Keyword::Off),
 ];
 
-pub(crate) const KEYWORDS: [(&str, Keyword); 31] = [
+pub(crate) const KEYWORDS: [(&str, Keyword); 32] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -106,6 +108,7 @@ pub(crate) const KEYWORDS: [(&str, Keyword); 31] = [
     ("macro", Keyword::Macro),
     ("wait", Keyword::Wait),
     ("osc", Keyword::Osc),
+    ("blind", Keyword::Blind),
 ];
 
 impl Keyword {
@@ -142,6 +145,7 @@ impl Keyword {
             Self::Macro => "Macro",
             Self::Wait => "Wait",
             Self::Osc => "Osc",
+            Self::Blind => "Blind",
         }
     }
 
@@ -282,6 +286,8 @@ pub enum Command {
     Delete(Object),
     Clear,
     ClearAll,
+    /// `Blind` bascule, `Blind Off` en sort.
+    Blind(Option<bool>),
     /// `None` : l'executor sélectionné.
     Go(Option<ExecutorRef>),
     Back(Option<ExecutorRef>),
@@ -511,6 +517,15 @@ impl Parser {
             Some(Token::Keyword(Keyword::ClearAll)) => {
                 self.position += 1;
                 Command::ClearAll
+            }
+            Some(Token::Keyword(Keyword::Blind)) => {
+                self.position += 1;
+                if self.peek() == Some(&Token::Keyword(Keyword::Off)) {
+                    self.position += 1;
+                    Command::Blind(Some(false))
+                } else {
+                    Command::Blind(None)
+                }
             }
             Some(Token::Keyword(Keyword::Store)) if self.tokens.get(self.position + 1) == Some(&Token::Keyword(Keyword::Executor)) => {
                 self.position += 2;

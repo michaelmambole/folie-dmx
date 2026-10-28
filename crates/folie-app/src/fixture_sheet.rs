@@ -9,7 +9,7 @@ use folie_engine::Snapshot;
 use folie_fixture::{Attribute, CapabilityKind, FixtureId, ParamKey, Parameter, PatchedFixture, Target};
 
 use crate::app::DisplayMode;
-use crate::fixtures::{click_select, live_value, source_of, value_text};
+use crate::fixtures::{click_select, shown_value, source_of, value_text};
 use crate::theme::{self, Source};
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -104,12 +104,13 @@ pub fn live_row(
     let parameters = console.show.patch.parameters_of(target);
     let key = |index: usize| ParamKey { fixture: target.fixture, parameter: index };
     let source = |index: usize| source_of(console, snapshot, key(index), animated.contains_key(&key(index)));
-    let value = |p: &Parameter| live_value(snapshot, fixture, p).unwrap_or(p.default);
+    // Ce qui sort ; en blind, le programmer blind par-dessus.
+    let value = |i: usize, p: &Parameter| shown_value(console, snapshot, fixture, i, p).unwrap_or(p.default);
     let of = |attribute: Attribute| parameters.iter().find(|(_, p)| p.attribute == attribute);
 
     let dimmers: Vec<&(usize, &Parameter)> = parameters.iter().filter(|(_, p)| p.attribute == Attribute::Dimmer).collect();
     let intensity = (!dimmers.is_empty()).then(|| Shown {
-        value: dimmers.iter().map(|(_, p)| value(p) as f32 / u16::MAX as f32).fold(0.0, f32::max),
+        value: dimmers.iter().map(|(i, p)| value(*i, p) as f32 / u16::MAX as f32).fold(0.0, f32::max),
         source: strongest(dimmers.iter().map(|(i, _)| source(*i))),
     });
 
@@ -118,7 +119,7 @@ pub fn live_row(
         .filter(|(_, p)| matches!(p.attribute, Attribute::ColorMix(_) | Attribute::ColorMacro))
         .map(|(i, _)| *i)
         .collect();
-    let values: BTreeMap<String, u16> = parameters.iter().map(|(_, p)| (p.name.clone(), value(p))).collect();
+    let values: BTreeMap<String, u16> = parameters.iter().map(|(i, p)| (p.name.clone(), value(*i, p))).collect();
     let color = if color_params.is_empty() {
         None
     } else {
@@ -126,11 +127,11 @@ pub fn live_row(
     };
 
     let angle = |attribute: Attribute| {
-        of(attribute).map(|(i, p)| Shown { value: format!("{:.0}°", crate::stage_ui::angle_of(p, value(p))), source: source(*i) })
+        of(attribute).map(|(i, p)| Shown { value: format!("{:.0}°", crate::stage_ui::angle_of(p, value(*i, p))), source: source(*i) })
     };
-    let zoom = of(Attribute::Zoom).map(|(i, p)| Shown { value: value_text(p, value(p), display), source: source(*i) });
+    let zoom = of(Attribute::Zoom).map(|(i, p)| Shown { value: value_text(p, value(*i, p), display), source: source(*i) });
     let strobe = of(Attribute::Shutter).and_then(|(i, p)| {
-        let strobing = p.capability_at(value(p)).is_some_and(|c| match &c.kind {
+        let strobing = p.capability_at(value(*i, p)).is_some_and(|c| match &c.kind {
             CapabilityKind::Shutter { effect, .. } => effect != "Open" && effect != "Closed",
             _ => false,
         });
@@ -145,6 +146,7 @@ pub fn live_row(
 
 impl FixtureSheet {
     pub fn show(&mut self, ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot, display: DisplayMode) {
+        crate::fixtures::blind_banner(ui, console);
         self.toolbar(ui, console);
         ui.add_space(4.0);
         if console.show.patch.fixtures().is_empty() {

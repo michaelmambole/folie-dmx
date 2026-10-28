@@ -342,6 +342,7 @@ impl FixturesView {
             return;
         };
         let Some(fixture) = console.show.patch.get(reference.fixture).cloned() else { return };
+        blind_banner(ui, console);
 
         theme::card(ui, |ui| {
             ui.horizontal(|ui| {
@@ -429,6 +430,27 @@ impl FixturesView {
     }
 }
 
+/// En blind, un bandeau bleu sur toute la largeur : ce qu'on règle ne sort pas.
+pub(crate) fn blind_banner(ui: &mut egui::Ui, console: &Console) {
+    if !console.blind() {
+        return;
+    }
+    egui::Frame::new()
+        .fill(theme::INFO.gamma_multiply(0.22))
+        .stroke(egui::Stroke::new(1.0, theme::INFO))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("BLIND").family(theme::medium()).extra_letter_spacing(0.6).color(Color32::WHITE));
+                let text = "Programmer blind : rien de ce que vous réglez ne sort, Store l'enregistre. La scène garde le programmer live.";
+                ui.add(egui::Label::new(RichText::new(text).size(12.0).color(theme::TEXT)).wrap());
+            });
+        });
+    ui.add_space(6.0);
+}
+
 /// Effets du programmer en pastilles violettes ; un clic arrête l'effet.
 fn effect_chips(ui: &mut egui::Ui, console: &mut Console) {
     if console.programmer_effects().is_empty() {
@@ -482,9 +504,25 @@ fn current_color(console: &Console, snapshot: &Snapshot, fixture: &PatchedFixtur
         .patch
         .parameters_of(target)
         .into_iter()
-        .filter_map(|(_, p)| live_value(snapshot, fixture, p).map(|v| (p.name.clone(), v)))
+        .filter_map(|(i, p)| shown_value(console, snapshot, fixture, i, p).map(|v| (p.name.clone(), v)))
         .collect();
     console.target_color(target, &values)
+}
+
+/// Valeur à montrer pour un paramètre : en blind, celle du programmer blind, qui ne
+/// sort pas ; sinon ce qui sort vraiment.
+pub(crate) fn shown_value(
+    console: &Console,
+    snapshot: &Snapshot,
+    fixture: &PatchedFixture,
+    index: usize,
+    parameter: &Parameter,
+) -> Option<u16> {
+    let key = ParamKey { fixture: fixture.id, parameter: index };
+    match console.programmer().get(&key) {
+        Some(value) if console.blind() => Some(*value),
+        _ => live_value(snapshot, fixture, parameter),
+    }
 }
 
 /// Valeur réellement envoyée pour un paramètre, relue dans la sortie DMX.
@@ -779,7 +817,7 @@ impl Row<'_> {
         let effect = animated.get(&key);
         let source = source_of(console, self.snapshot, key, effect.is_some());
         // Ce qui sort vraiment (effets compris) ; à défaut, la valeur du programmer.
-        let value = live_value(self.snapshot, self.fixture, parameter)
+        let value = shown_value(console, self.snapshot, self.fixture, self.index, parameter)
             .or_else(|| console.programmer().get(&key).copied())
             .unwrap_or(parameter.default);
 
