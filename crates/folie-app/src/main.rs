@@ -1,3 +1,6 @@
+// Sous Windows, pas de console noire derrière l'application (en version compilée pour de bon).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod brand;
 mod cmdline;
