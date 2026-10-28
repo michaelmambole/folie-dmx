@@ -114,7 +114,7 @@ fn beam_end(origin: Vec3, direction: Vec3) -> (Vec3, bool) {
 
 /// Angle en degrés d'un paramètre de position, rapporté au milieu de sa course
 /// (0° = projecteur au repos, faisceau vers le bas).
-fn angle_of(parameter: &Parameter, value: u16) -> f32 {
+pub(crate) fn angle_of(parameter: &Parameter, value: u16) -> f32 {
     match parameter.capability_at(value).and_then(|c| c.angle.map(|a| (c, a))) {
         Some((cap, (start, end))) => {
             let span = (*cap.range.end() - *cap.range.start()).max(1) as f32;

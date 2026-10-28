@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum WindowKind {
     Patch,
+    Fixtures,
     Groups,
     Presets,
     Output,
@@ -21,8 +22,9 @@ pub enum WindowKind {
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 11] = [
+    pub const ALL: [WindowKind; 12] = [
         Self::Patch,
+        Self::Fixtures,
         Self::Groups,
         Self::Presets,
         Self::Output,
@@ -38,6 +40,7 @@ impl WindowKind {
     pub fn title(self) -> &'static str {
         match self {
             Self::Patch => "Patch",
+            Self::Fixtures => "Fixtures",
             Self::Groups => "Groupes",
             Self::Presets => "Presets",
             Self::Output => "Sortie DMX",
@@ -51,10 +54,12 @@ impl WindowKind {
         }
     }
 
-    /// ⌘1, ⌘2… dans l'ordre du menu Fenêtres ; les chiffres épuisés, la fenêtre Son n'en a pas.
+    /// ⌘1, ⌘2… dans l'ordre du menu Fenêtres ; les chiffres épuisés, Fixtures prend ⌘F
+    /// et la fenêtre Son n'en a pas.
     pub fn key(self) -> Option<Key> {
         Some(match self {
             Self::Patch => Key::Num1,
+            Self::Fixtures => Key::F,
             Self::Groups => Key::Num2,
             Self::Presets => Key::Num3,
             Self::Output => Key::Num4,
@@ -70,7 +75,8 @@ impl WindowKind {
 
     pub fn default_size(self) -> Vec2 {
         match self {
-            Self::Patch => egui::vec2(470.0, 640.0),
+            Self::Patch => egui::vec2(640.0, 640.0),
+            Self::Fixtures => egui::vec2(780.0, 560.0),
             Self::Groups | Self::Presets => egui::vec2(340.0, 380.0),
             Self::Output => egui::vec2(1100.0, 720.0),
             Self::Cues => egui::vec2(560.0, 420.0),
@@ -82,6 +88,17 @@ impl WindowKind {
             Self::Sound => egui::vec2(520.0, 560.0),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn window_shortcuts_are_all_different() {
+    let keys: Vec<Key> = WindowKind::ALL.iter().filter_map(|k| k.key()).collect();
+    let unique: std::collections::BTreeSet<String> = keys.iter().map(|k| format!("{k:?}")).collect();
+    assert_eq!(unique.len(), keys.len(), "deux fenêtres sur le même raccourci : {keys:?}");
+    // ⌥⌘1 à ⌥⌘9 sont aux dispositions, ⌘S, ⌘O, ⌘N au fichier.
+    assert!(!keys.iter().any(|k| matches!(k, Key::S | Key::O | Key::N)));
+    assert_eq!(WindowKind::Fixtures.key(), Some(Key::F));
 }
 
 /// Position et taille d'une fenêtre, en points, dans l'espace des écrans.
@@ -152,9 +169,9 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Premier lancement : le patch et les pools sont ouverts, l'OS les place.
+    /// Premier lancement : le patch, les fixtures et les pools sont ouverts, l'OS les place.
     pub fn first_launch() -> Self {
-        let windows = [WindowKind::Patch, WindowKind::Groups, WindowKind::Presets]
+        let windows = [WindowKind::Patch, WindowKind::Fixtures, WindowKind::Groups, WindowKind::Presets]
             .into_iter()
             .map(WindowState::new)
             .collect();
@@ -204,7 +221,7 @@ mod tests {
         let mut workspace = Workspace::first_launch();
         assert!(workspace.is_open(WindowKind::Patch));
         workspace.open(WindowKind::Patch);
-        assert_eq!(workspace.windows.len(), 3, "pas de doublon");
+        assert_eq!(workspace.windows.len(), 4, "pas de doublon");
         workspace.open(WindowKind::Output);
         workspace.close(WindowKind::Groups);
         workspace.window_mut(WindowKind::Presets).unwrap().preset_family = Some("position".into());
@@ -212,7 +229,7 @@ mod tests {
         let json = serde_json::to_string(&workspace).unwrap();
         let back: Workspace = serde_json::from_str(&json).unwrap();
         assert_eq!(back, workspace);
-        assert_eq!(back.windows[1].family(), FeatureGroup::Position);
+        assert_eq!(back.windows[2].family(), FeatureGroup::Position);
         // Un fichier ancien ou incomplet reste lisible.
         assert_eq!(serde_json::from_str::<Workspace>("{}").unwrap(), Workspace::default());
     }

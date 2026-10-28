@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, RichText, Sense, vec2};
+use eframe::egui::{self, Color32, Rect, RichText, Sense, pos2, vec2};
 use folie_control::{Console, SelectMode};
 use folie_engine::Snapshot;
 use folie_fixture::{
@@ -20,15 +20,15 @@ pub(crate) struct AddForm {
     mode: usize,
     pub(crate) quantity: u32,
     pub(crate) first_id: u32,
-    auto_address: bool,
-    address: u16,
+    pub(crate) auto_address: bool,
+    pub(crate) address: u16,
 }
 
 pub struct FixturesView {
     last_clicked: Option<Target>,
-    /// Fixtures multi-instance dont les sous-fixtures sont affichées dans le patch.
-    expanded: BTreeSet<FixtureId>,
     pub(crate) form: AddForm,
+    /// Formulaire d'ajout déplié.
+    form_open: bool,
     /// Dernier résultat d'une opération de patch : (succès, message).
     message: Option<(bool, String)>,
     /// Couleur visée dans le sélecteur (teinte, saturation, luminosité).
@@ -41,7 +41,6 @@ impl FixturesView {
     pub fn new() -> Self {
         Self {
             last_clicked: None,
-            expanded: BTreeSet::new(),
             form: AddForm {
                 fixture_type: 0,
                 mode: 0,
@@ -50,24 +49,27 @@ impl FixturesView {
                 auto_address: true,
                 address: 1,
             },
+            form_open: true,
             message: None,
             picker: [0.0, 0.0, 1.0],
             collapsed: BTreeSet::new(),
         }
     }
 
-    /// Liste du patch et formulaire d'ajout. Renvoie `true` si le patch a changé.
+    /// Préparation du patch : ajout, tableau des fixtures, changement d'adresse et
+    /// suppression. Renvoie `true` si le patch a changé.
     pub fn patch_panel(&mut self, ui: &mut egui::Ui, library: &Library, console: &mut Console) -> bool {
         let mut changed = false;
         theme::card(ui, |ui| {
             ui.set_width(ui.available_width());
-            theme::section(ui, "Ajouter des fixtures");
-            if let Some(ids) = self.add_form(ui, library, &mut console.show.patch) {
+            if theme::collapsible_section(ui, "Ajouter des fixtures", self.form_open) {
+                self.form_open = !self.form_open;
+            }
+            if self.form_open
+                && let Some(ids) = self.add_form(ui, library, &mut console.show.patch)
+            {
                 console.select(ids.into_iter().map(Target::whole), SelectMode::Replace);
                 changed = true;
-            }
-            if let Some((ok, text)) = &self.message {
-                ui.colored_label(if *ok { theme::GO } else { theme::DANGER }, text);
             }
         });
         ui.add_space(6.0);
@@ -77,10 +79,17 @@ impl FixturesView {
         });
         ui.add_space(6.0);
 
+        // Fixtures entières sélectionnées, dans l'ordre de sélection.
+        let mut selected: Vec<FixtureId> = Vec::new();
+        for target in console.selection() {
+            if !selected.contains(&target.fixture) {
+                selected.push(target.fixture);
+            }
+        }
+        let mut readdress = None;
         ui.horizontal(|ui| {
             theme::section(ui, "Patch");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let selected: BTreeSet<FixtureId> = console.selection().iter().map(|t| t.fixture).collect();
                 let delete = if selected.is_empty() {
                     egui::Button::new("Supprimer")
                 } else {
@@ -89,24 +98,52 @@ impl FixturesView {
                 };
                 let help = "Retire les fixtures sélectionnées du patch";
                 if ui.add_enabled(!selected.is_empty(), delete).on_hover_text(help).clicked() {
-                    for id in selected {
-                        console.show.patch.remove(id);
+                    for id in &selected {
+                        console.show.patch.remove(*id);
                     }
                     self.message = None;
                     changed = true;
                 }
-                if ui.button("Aucune").clicked() {
-                    console.clear_selection();
-                }
-                if ui.button("Tout sélectionner").clicked() {
-                    let all: Vec<Target> = console.show.patch.fixtures().iter().map(|f| Target::whole(f.id)).collect();
-                    console.select(all, SelectMode::Replace);
+                let help = "Nouvelle adresse de départ pour la sélection (aussi : clic droit sur une ligne)";
+                let button = ui.add_enabled(!selected.is_empty(), egui::Button::new("Changer l'adresse…")).on_hover_text(help);
+                if let Some(&first) = selected.first()
+                    && let Some(fixture) = console.show.patch.get(first)
+                {
+                    let popup = egui::Popup::menu(&button);
+                    readdress = address_menu(ui, popup, None, selected.clone(), fixture);
                 }
             });
         });
+        if let Some((ok, text)) = &self.message {
+            ui.colored_label(if *ok { theme::GO } else { theme::DANGER }, text);
+        }
         ui.add_space(2.0);
-        self.patch_list(ui, console);
+        readdress = readdress.or(self.patch_table(ui, console, &selected));
+        if let Some(request) = readdress {
+            changed |= self.readdress(ui, console, request);
+        }
         changed
+    }
+
+    /// Applique un changement d'adresse validé dans un menu. Renvoie `true` s'il a eu lieu.
+    fn readdress(&mut self, ui: &egui::Ui, console: &mut Console, (menu_id, ids, universe, address): Readdress) -> bool {
+        match console.readdress(&ids, universe, address) {
+            Ok(()) => {
+                let at = format!("{}.{address:03}", universe + 1);
+                let text = match ids.as_slice() {
+                    [id] => format!("Fixture {id} déplacée en {at}"),
+                    _ => format!("{} fixtures déplacées à la suite à partir de {at}", ids.len()),
+                };
+                self.message = Some((true, text));
+                ui.data_mut(|d| d.remove::<AddressField>(menu_id));
+                egui::Popup::close_all(ui.ctx());
+                true
+            }
+            Err(e) => {
+                ui.data_mut(|d| d.get_temp_mut_or_default::<AddressField>(menu_id).error = Some(format!("Impossible : {e}")));
+                false
+            }
+        }
     }
 
     /// Renvoie les numéros des fixtures ajoutées, le cas échéant.
@@ -158,7 +195,6 @@ impl FixturesView {
         ui.add_space(4.0);
 
         let footprint = fixture_type.modes[form.mode].footprint;
-        let mut patch_clicked = false;
         ui.horizontal(|ui| {
             let muted = |text: &str| RichText::new(text).color(theme::MUTED);
             let label = ui.label(muted("Quantité"));
@@ -185,31 +221,40 @@ impl FixturesView {
                 ui.add(egui::DragValue::new(&mut form.address).range(1..=512)).labelled_by(address_label.id);
             }
         });
+        // Conflit signalé avant de patcher : numéro déjà pris, adresses occupées.
+        let mut candidate = patch.clone();
+        let preview = self.add_fixtures(&fixture_type, &mut candidate);
+        let mut patch_clicked = false;
         ui.horizontal(|ui| {
-            let total = footprint as u32 * form.quantity;
-            let text = format!("{} × {footprint} = {total} canaux", form.quantity);
-            ui.label(RichText::new(text).size(11.5).color(theme::MUTED));
+            let total = footprint as u32 * self.form.quantity;
+            match &preview {
+                Ok(_) => {
+                    let text = format!("{} × {footprint} = {total} canaux", self.form.quantity);
+                    ui.label(RichText::new(text).size(11.5).color(theme::MUTED));
+                }
+                Err(e) => {
+                    ui.label(RichText::new(format!("Conflit : {e}")).size(11.5).color(theme::DANGER));
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let button = theme::primary_button("Patcher").min_size(egui::vec2(110.0, 28.0));
-                patch_clicked = ui.add(button).on_hover_text("Ajouter ces fixtures au patch").clicked();
+                let help = match &preview {
+                    Ok(_) => "Ajouter ces fixtures au patch",
+                    Err(_) => "Conflit : changez le numéro, l'adresse ou la quantité",
+                };
+                patch_clicked = ui.add_enabled(preview.is_ok(), button).on_hover_text(help).clicked();
             });
         });
 
         if !patch_clicked {
             return None;
         }
-        match self.add_fixtures(&fixture_type, patch) {
-            Ok(ids) => {
-                let plural = if ids.len() > 1 { "s" } else { "" };
-                self.message = Some((true, format!("{} fixture{plural} patchée{plural}", ids.len())));
-                self.form.first_id = patch.next_free_id().0;
-                Some(ids)
-            }
-            Err(text) => {
-                self.message = Some((false, text));
-                None
-            }
-        }
+        let ids = preview.ok()?;
+        *patch = candidate;
+        let plural = if ids.len() > 1 { "s" } else { "" };
+        self.message = Some((true, format!("{} fixture{plural} patchée{plural}", ids.len())));
+        self.form.first_id = patch.next_free_id().0;
+        Some(ids)
     }
 
     /// Ajoute toutes les fixtures du formulaire, ou aucune en cas d'erreur.
@@ -240,110 +285,42 @@ impl FixturesView {
         Ok(ids)
     }
 
-    fn patch_list(&mut self, ui: &mut egui::Ui, console: &mut Console) {
+    /// Tableau du patch : une ligne par fixture. Clic, Maj-clic, ⌘-clic : sélection ;
+    /// clic droit : changer l'adresse. Renvoie le changement d'adresse validé, le cas échéant.
+    fn patch_table(&mut self, ui: &mut egui::Ui, console: &mut Console, selected: &[FixtureId]) -> Option<Readdress> {
         let mut clicked = None;
-        // Lignes dans l'ordre d'affichage, pour la sélection Maj-clic.
+        let mut readdress = None;
         let mut rows: Vec<Target> = Vec::new();
-        let selection = console.selection();
         let patch = &console.show.patch;
-        // Fixtures (et cellules) qui ont des valeurs dans le programmer.
-        let in_programmer: BTreeSet<Target> = console
-            .programmer()
-            .keys()
-            .filter_map(|key| {
-                let fixture = patch.get(key.fixture)?;
-                let head = fixture.mode().parameters.get(key.parameter)?.head;
-                Some([Target::whole(key.fixture), Target { fixture: key.fixture, head }])
-            })
-            .flatten()
-            .collect();
-        let range = |universe: usize, first: u16, count: u16| {
-            let last = first + count.max(1) - 1;
-            format!("{}.{first:03}–{last:03}", universe + 1)
-        };
+        // Le nom passe avant le type, qui se coupe le premier.
+        let free = ui.available_width() - PATCH_FIXED;
+        let name = (free * 0.5).max(130.0);
+        let columns = (name, (free - name).max(80.0));
+        patch_header(ui, columns);
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = 0.0;
             if patch.fixtures().is_empty() {
+                ui.add_space(6.0);
                 ui.label(RichText::new("Aucune fixture patchée.").color(theme::MUTED));
             }
             for f in patch.fixtures() {
-                let heads = &f.mode().heads;
-                let expanded = self.expanded.contains(&f.id);
-                let target = Target::whole(f.id);
-                let line = PatchLine {
-                    target,
-                    name: &f.name,
-                    detail: if heads.is_empty() {
-                        f.fixture_type.manufacturer.clone()
-                    } else {
-                        format!("{} · {} cellules", f.fixture_type.manufacturer, heads.len())
-                    },
-                    mode: Some(format!("{} ch", f.mode().footprint)),
-                    address: range(f.universe, f.address, f.mode().footprint),
-                    selected: selection.contains(&target),
-                    programmer: in_programmer.contains(&target),
-                    expander: (!heads.is_empty()).then_some(expanded),
-                };
-                match line.show(ui) {
-                    LineClick::Row => clicked = Some(target),
-                    LineClick::Expander => {
-                        if !self.expanded.remove(&f.id) {
-                            self.expanded.insert(f.id);
-                        }
-                    }
-                    LineClick::None => {}
+                let response = patch_row(ui, f, selected.contains(&f.id), columns);
+                // Clic droit sur une fixture sélectionnée : toute la sélection, sinon elle seule.
+                let ids = if selected.contains(&f.id) { selected.to_vec() } else { vec![f.id] };
+                let popup = egui::Popup::context_menu(&response);
+                if let Some(request) = address_menu(ui, popup, Some(f.id), ids, f) {
+                    readdress = Some(request);
                 }
-                rows.push(target);
-                if !expanded {
-                    continue;
+                if response.clicked() {
+                    clicked = Some(Target::whole(f.id));
                 }
-                for (head, key) in heads.iter().enumerate() {
-                    let target = Target { fixture: f.id, head: Some(head) };
-                    let offsets: Vec<u16> = f
-                        .mode()
-                        .parameters
-                        .iter()
-                        .filter(|p| p.head == Some(head))
-                        .flat_map(|p| p.offsets.iter().copied())
-                        .collect();
-                    let first = offsets.iter().copied().min().unwrap_or(0);
-                    let last = offsets.iter().copied().max().unwrap_or(0);
-                    let line = PatchLine {
-                        target,
-                        name: &format!("cellule {key}"),
-                        detail: String::new(),
-                        mode: None,
-                        address: range(f.universe, f.address + first, last - first + 1),
-                        selected: selection.contains(&target),
-                        programmer: in_programmer.contains(&target),
-                        expander: None,
-                    };
-                    if line.show(ui) == LineClick::Row {
-                        clicked = Some(target);
-                    }
-                    rows.push(target);
-                }
+                rows.push(Target::whole(f.id));
             }
         });
-
         if let Some(target) = clicked {
-            let modifiers = ui.input(|i| i.modifiers);
-            let position = |t: Target| rows.iter().position(|r| *r == t);
-            if modifiers.shift
-                && let Some(a) = self.last_clicked.and_then(position)
-                && let Some(b) = position(target)
-            {
-                // Dans le sens du clic : Maj-clic vers le haut sélectionne à l'envers.
-                let range: Vec<Target> =
-                    if a <= b { rows[a..=b].to_vec() } else { rows[b..=a].iter().rev().copied().collect() };
-                console.select(range, SelectMode::Add);
-            } else if modifiers.command {
-                console.select([target], SelectMode::Toggle);
-            } else {
-                console.select([target], SelectMode::Replace);
-            }
-            self.last_clicked = Some(target);
+            click_select(console, &rows, &mut self.last_clicked, target, ui.input(|i| i.modifiers));
         }
+        readdress
     }
 
     /// Le Programmer : réglage des attributs de la sélection.
@@ -359,7 +336,7 @@ impl FixturesView {
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("Aucune sélection").size(18.0).family(theme::medium()));
                 ui.add_space(4.0);
-                ui.label(RichText::new("Cliquez des fixtures dans la fenêtre Patch, ou tapez une commande :").color(theme::MUTED));
+                ui.label(RichText::new("Cliquez des fixtures dans la fenêtre Fixtures, ou tapez une commande :").color(theme::MUTED));
                 ui.monospace("Fixture 1 Thru 4 At 50");
             });
             return;
@@ -476,7 +453,7 @@ fn effect_chips(ui: &mut egui::Ui, console: &mut Console) {
 }
 
 /// Numéros des cibles sélectionnées, en pastilles jaunes ; au-delà de 16, un compteur.
-fn selection_chips(ui: &mut egui::Ui, selection: &[Target]) {
+pub(crate) fn selection_chips(ui: &mut egui::Ui, selection: &[Target]) {
     const SHOWN: usize = 16;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
@@ -521,96 +498,205 @@ pub(crate) fn live_value(snapshot: &Snapshot, fixture: &PatchedFixture, paramete
     }
 }
 
-/// Ligne sélectionnable du patch (numéro et nom). Renvoie `true` si elle a été cliquée.
-#[derive(PartialEq)]
-enum LineClick {
-    None,
-    Row,
-    Expander,
-}
-
-/// Une ligne de la liste du patch : chevron des cellules, numéro, nom et marque,
-/// mode, plage d'adresses, point rouge si le programmer tient des valeurs.
-struct PatchLine<'a> {
+/// Sélection au clic dans une liste de lignes : Maj-clic prend la plage depuis le
+/// dernier clic (dans le sens du geste), ⌘-clic ajoute ou retire, sinon remplace.
+pub(crate) fn click_select(
+    console: &mut Console,
+    rows: &[Target],
+    last_clicked: &mut Option<Target>,
     target: Target,
-    name: &'a str,
-    detail: String,
-    mode: Option<String>,
-    address: String,
-    selected: bool,
-    programmer: bool,
-    /// `Some(déplié)` pour une fixture à cellules.
-    expander: Option<bool>,
+    modifiers: egui::Modifiers,
+) {
+    let position = |t: Target| rows.iter().position(|r| *r == t);
+    if modifiers.shift
+        && let Some(a) = last_clicked.and_then(position)
+        && let Some(b) = position(target)
+    {
+        // Dans le sens du clic : Maj-clic vers le haut sélectionne à l'envers.
+        let range: Vec<Target> = if a <= b { rows[a..=b].to_vec() } else { rows[b..=a].iter().rev().copied().collect() };
+        console.select(range, SelectMode::Add);
+    } else if modifiers.command {
+        console.select([target], SelectMode::Toggle);
+    } else {
+        console.select([target], SelectMode::Replace);
+    }
+    *last_clicked = Some(target);
 }
 
-impl PatchLine<'_> {
-    fn show(&self, ui: &mut egui::Ui) -> LineClick {
-        let mut result = LineClick::None;
-        let fill = if self.selected { theme::SELECTION.gamma_multiply(0.10) } else { Color32::TRANSPARENT };
-        // Le fond de la ligne est enregistré avant son contenu : le chevron garde ses clics.
-        let row = ui.scope_builder(egui::UiBuilder::new().id_salt(("patch-line", self.target)).sense(Sense::click()), |ui| {
-            egui::Frame::new().fill(fill).corner_radius(theme::RADIUS).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let (rect, response) = ui.allocate_exact_size(vec2(14.0, 18.0), Sense::click());
-                    if let Some(open) = self.expander {
-                        let color = if response.hovered() { theme::TEXT } else { theme::MUTED };
-                        let c = rect.center();
-                        let points = if open {
-                            vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
-                        } else {
-                            vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
-                        };
-                        ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
-                        let help = if open { "Masquer les sous-fixtures" } else { "Afficher les sous-fixtures" };
-                        let response = response.on_hover_text(help);
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, help));
-                        if response.clicked() {
-                            result = LineClick::Expander;
-                        }
-                    }
-                    let (stroke, color) =
-                        if self.selected { (theme::SELECTION, theme::SELECTION) } else { (theme::LINE, theme::TEXT) };
-                    egui::Frame::new()
-                        .fill(theme::SURFACE_2)
-                        .stroke(egui::Stroke::new(1.0, stroke))
-                        .corner_radius(5)
-                        .inner_margin(egui::Margin::symmetric(4, 0))
-                        .show(ui, |ui| {
-                            let number = RichText::new(self.target.to_string()).monospace().color(color);
-                            ui.add_sized([36.0, 18.0], egui::Label::new(number).selectable(false));
-                        });
-                    let name = RichText::new(self.name).color(if self.selected { theme::SELECTION } else { theme::TEXT });
-                    ui.add(egui::Label::new(name).selectable(false).truncate());
-                    if !self.detail.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(&self.detail).size(11.0).color(theme::MUTED)).selectable(false));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                        if self.programmer {
-                            ui.painter().circle_filled(dot.center(), 3.5, theme::PROGRAMMER);
-                        }
-                        let address = RichText::new(&self.address).monospace().size(12.0).color(theme::MUTED);
-                        ui.add_sized([92.0, 18.0], egui::Label::new(address).selectable(false));
-                        if let Some(mode) = &self.mode {
-                            egui::Frame::new()
-                                .stroke(egui::Stroke::new(1.0, theme::LINE))
-                                .corner_radius(4)
-                                .inner_margin(egui::Margin::symmetric(5, 0))
-                                .show(ui, |ui| {
-                                    ui.add(egui::Label::new(RichText::new(mode).size(11.0).color(theme::MUTED)).selectable(false));
-                                });
-                        }
-                    });
-                });
-            });
-        });
-        if row.response.clicked() && result == LineClick::None {
-            result = LineClick::Row;
-        }
-        result
+/// D'où vient la valeur d'un paramètre : effet, programmer (ou relâché), executor, défaut.
+pub(crate) fn source_of(console: &Console, snapshot: &Snapshot, key: ParamKey, animated: bool) -> Source {
+    if animated {
+        Source::Effect
+    } else if console.programmer().contains_key(&key) || console.released().contains(&key) {
+        Source::Programmer
+    } else if snapshot.stage.contains_key(&key) {
+        Source::Executor
+    } else {
+        Source::Default
     }
+}
+
+/// Valeur lisible : degrés pour un angle, sinon % ou DMX selon l'affichage choisi.
+pub(crate) fn value_text(parameter: &Parameter, value: u16, display: DisplayMode) -> String {
+    if let Some(cap) = parameter.capability_at(value)
+        && let Some((start, end)) = cap.angle
+    {
+        let t = (value - cap.range.start()) as f32 / (cap.range.end() - cap.range.start()).max(1) as f32;
+        return format!("{:.0}°", start + (end - start) * t);
+    }
+    match display {
+        DisplayMode::Percent => format!("{:.1} %", value as f32 / u16::MAX as f32 * 100.0),
+        DisplayMode::Dmx if parameter.resolution_bits() > 8 => format!("{}/{}", value >> 8, value & 0xFF),
+        DisplayMode::Dmx => (value >> 8).to_string(),
+    }
+}
+
+/// Changement d'adresse validé dans un menu : (menu, fixtures, univers, adresse).
+type Readdress = (egui::Id, Vec<FixtureId>, usize, u16);
+
+/// Saisie en cours dans un menu « Adresse ».
+#[derive(Clone, Default)]
+struct AddressField {
+    text: Option<String>,
+    error: Option<String>,
+}
+
+/// Menu de changement d'adresse (clic droit sur une ligne, ou touche « Changer l'adresse… ») :
+/// nouvelle adresse de départ, les fixtures à la suite dans l'ordre donné.
+/// `fixture` est la première : son adresse actuelle est proposée. `salt` : la ligne du
+/// clic droit, ou `None` pour la touche.
+fn address_menu(
+    ui: &mut egui::Ui,
+    popup: egui::Popup<'_>,
+    salt: Option<FixtureId>,
+    ids: Vec<FixtureId>,
+    fixture: &PatchedFixture,
+) -> Option<Readdress> {
+    let id = egui::Id::unique(("patch-address", salt));
+    let mut result = None;
+    // Le menu reste ouvert pendant la saisie, et en cas de conflit pour corriger.
+    let open = popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        theme::menu_fields(ui);
+        let mut field = ui.data_mut(|d| d.get_temp::<AddressField>(id)).unwrap_or_default();
+        let current = format!("{}.{:03}", fixture.universe + 1, fixture.address);
+        let first_time = field.text.is_none();
+        let text = field.text.get_or_insert(current);
+        let title = match ids.as_slice() {
+            [one] => format!("Fixture {one}"),
+            _ => format!("{} fixtures sélectionnées, à la suite", ids.len()),
+        };
+        ui.label(RichText::new(title).family(theme::medium()));
+        ui.horizontal(|ui| {
+            let label = ui.label("Adresse");
+            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(70.0)).labelled_by(label.id);
+            if first_time {
+                edit.request_focus();
+            }
+            if edit.changed() {
+                field.error = None;
+            }
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Changer l'adresse").clicked() || enter {
+                match parse_address(text) {
+                    Ok((universe, address)) => result = Some((id, ids.clone(), universe, address)),
+                    Err(e) => field.error = Some(e),
+                }
+            }
+        });
+        ui.label(RichText::new("101 ou 1.101 (univers.adresse)").size(11.0).color(theme::MUTED));
+        if let Some(error) = &field.error {
+            ui.colored_label(theme::DANGER, error);
+        }
+        ui.data_mut(|d| d.insert_temp(id, field));
+    });
+    if open.is_none() {
+        ui.data_mut(|d| d.remove::<AddressField>(id));
+    }
+    result
+}
+
+/// « 101 » ou « 1.101 » : univers en base 0 et adresse de départ.
+fn parse_address(text: &str) -> Result<(usize, u16), String> {
+    let invalid = || format!("Adresse invalide : « {} » (exemple : 101 ou 1.101)", text.trim());
+    let (universe, address) = match text.trim().split_once('.') {
+        Some((universe, address)) => (universe.trim().parse::<usize>().map_err(|_| invalid())?, address),
+        None => (1, text),
+    };
+    let address = address.trim().parse::<u16>().ok().filter(|a| (1..=512).contains(a)).ok_or_else(invalid)?;
+    if universe != 1 {
+        return Err("Un seul univers pour l'instant : 1.xxx".into());
+    }
+    Ok((0, address))
+}
+
+/// Colonnes du tableau du patch ; le nom et le type se partagent ce qui reste.
+const PATCH_NUMBER: f32 = 52.0;
+const PATCH_MODE: f32 = 104.0;
+const PATCH_UNIVERSE: f32 = 44.0;
+const PATCH_ADDRESS: f32 = 84.0;
+const PATCH_CHANNELS: f32 = 40.0;
+const PATCH_FIXED: f32 = PATCH_NUMBER + PATCH_MODE + PATCH_UNIVERSE + PATCH_ADDRESS + PATCH_CHANNELS + 16.0;
+
+/// `(name, type)` : largeurs du nom et du type.
+fn patch_header(ui: &mut egui::Ui, (name, type_width): (f32, f32)) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+    let painter = ui.painter();
+    let columns = [
+        ("N°", PATCH_NUMBER),
+        ("Nom", name),
+        ("Type", type_width),
+        ("Mode", PATCH_MODE),
+        ("Univ.", PATCH_UNIVERSE),
+        ("Adresse", PATCH_ADDRESS),
+        ("Ch", PATCH_CHANNELS),
+    ];
+    let mut x = rect.left() + 6.0;
+    for (title, width) in columns {
+        painter.text(pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(11.0), theme::MUTED);
+        x += width;
+    }
+    painter.hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, theme::LINE));
+}
+
+/// Une ligne du tableau du patch, dessinée d'un bloc et cliquable en entier.
+fn patch_row(ui: &mut egui::Ui, f: &PatchedFixture, selected: bool, (name, type_width): (f32, f32)) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+    let last = f.address + f.mode().footprint.max(1) - 1;
+    let label = format!("{} · {} · {}.{:03}–{last:03}", f.id, f.name, f.universe + 1, f.address);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::accesskit::Role::Row, true, selected, &label));
+    let painter = ui.painter_at(rect);
+    let fill = if selected {
+        theme::SELECTION.gamma_multiply(0.10)
+    } else if response.hovered() {
+        theme::SURFACE_1
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect.shrink2(vec2(0.0, 1.0)), 4.0, fill);
+    painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, theme::SURFACE_2));
+    let y = rect.center().y;
+    let mono = egui::FontId::monospace(12.0);
+    let body = egui::FontId::proportional(13.0);
+    let small = egui::FontId::proportional(12.0);
+    let (stroke, color) = if selected { (theme::SELECTION, theme::SELECTION) } else { (theme::LINE, theme::TEXT) };
+
+    let mut x = rect.left() + 6.0;
+    let number = Rect::from_min_size(pos2(x, y - 9.0), vec2(PATCH_NUMBER - 14.0, 18.0));
+    painter.rect(number, 5.0, theme::SURFACE_2, egui::Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+    painter.text(number.center(), egui::Align2::CENTER_CENTER, f.id.to_string(), mono.clone(), color);
+    x += PATCH_NUMBER;
+    let mut cell = |text: String, width: f32, font: egui::FontId, color: Color32| {
+        let clip = Rect::from_min_size(pos2(x, rect.top()), vec2(width - 8.0, rect.height()));
+        painter.with_clip_rect(clip).text(pos2(x, y), egui::Align2::LEFT_CENTER, text, font, color);
+        x += width;
+    };
+    cell(f.name.clone(), name, body, if selected { theme::SELECTION } else { theme::TEXT });
+    cell(f.fixture_type.display_name(), type_width, small.clone(), theme::MUTED);
+    cell(f.mode().name.clone(), PATCH_MODE, small, theme::MUTED);
+    cell((f.universe + 1).to_string(), PATCH_UNIVERSE, mono.clone(), theme::TEXT);
+    cell(format!("{:03}–{last:03}", f.address), PATCH_ADDRESS, mono.clone(), theme::TEXT);
+    cell(f.mode().footprint.to_string(), PATCH_CHANNELS, mono, theme::MUTED);
+    response.on_hover_text("Clic : sélectionner · clic droit : changer l'adresse")
 }
 
 /// Carte de l'univers 1 : chaque fixture occupe sa plage d'adresses, la sélection
@@ -691,15 +777,7 @@ impl Row<'_> {
         let parameter = self.parameter;
         let key = ParamKey { fixture: self.reference.fixture, parameter: self.index };
         let effect = animated.get(&key);
-        let source = if effect.is_some() {
-            Source::Effect
-        } else if console.programmer().contains_key(&key) || console.released().contains(&key) {
-            Source::Programmer
-        } else if self.snapshot.stage.contains_key(&key) {
-            Source::Executor
-        } else {
-            Source::Default
-        };
+        let source = source_of(console, self.snapshot, key, effect.is_some());
         // Ce qui sort vraiment (effets compris) ; à défaut, la valeur du programmer.
         let value = live_value(self.snapshot, self.fixture, parameter)
             .or_else(|| console.programmer().get(&key).copied())
@@ -747,20 +825,8 @@ impl Row<'_> {
         self.capability_menu(ui, console, value, name_label.id);
     }
 
-    /// Valeur lisible : degrés pour un angle, sinon % ou DMX selon l'affichage choisi.
     fn value_text(&self, value: u16) -> String {
-        let parameter = self.parameter;
-        if let Some(cap) = parameter.capability_at(value)
-            && let Some((start, end)) = cap.angle
-        {
-            let t = (value - cap.range.start()) as f32 / (cap.range.end() - cap.range.start()).max(1) as f32;
-            return format!("{:.0}°", start + (end - start) * t);
-        }
-        match self.display {
-            DisplayMode::Percent => format!("{:.1} %", value as f32 / u16::MAX as f32 * 100.0),
-            DisplayMode::Dmx if parameter.resolution_bits() > 8 => format!("{}/{}", value >> 8, value & 0xFF),
-            DisplayMode::Dmx => (value >> 8).to_string(),
-        }
+        value_text(self.parameter, value, self.display)
     }
 
     fn capability_menu(&self, ui: &mut egui::Ui, console: &mut Console, value: u16, label: egui::Id) {

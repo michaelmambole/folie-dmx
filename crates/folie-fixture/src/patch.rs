@@ -106,6 +106,8 @@ pub enum PatchError {
     OutOfRange { start: u16, end: u16 },
     #[error("chevauche la fixture {0}")]
     Overlap(FixtureId),
+    #[error("la fixture {0} n'est pas patchée")]
+    NotPatched(FixtureId),
 }
 
 /// Liste des fixtures patchées, triée par numéro.
@@ -159,6 +161,28 @@ impl Patch {
             (Some(_), None) => true,
             (Some(f), Some(head)) => head < f.mode().heads.len(),
         }
+    }
+
+    /// Change l'adresse d'une fixture patchée, sans toucher à son numéro :
+    /// ses valeurs (programmer, cues, presets, groupes) la suivent.
+    pub fn readdress(&mut self, id: FixtureId, universe: usize, address: u16) -> Result<(), PatchError> {
+        self.readdress_many(&[(id, universe, address)])
+    }
+
+    /// Réadresse plusieurs fixtures d'un coup, ou aucune en cas d'erreur.
+    /// Elles peuvent échanger leurs places : seules comptent les nouvelles adresses.
+    pub fn readdress_many(&mut self, moves: &[(FixtureId, usize, u16)]) -> Result<(), PatchError> {
+        let mut candidate = self.clone();
+        let mut moved = Vec::new();
+        for &(id, universe, address) in moves {
+            let fixture = candidate.remove(id).ok_or(PatchError::NotPatched(id))?;
+            moved.push(PatchedFixture { universe, address, ..fixture });
+        }
+        for fixture in moved {
+            candidate.add(fixture)?;
+        }
+        *self = candidate;
+        Ok(())
     }
 
     pub fn remove(&mut self, id: FixtureId) -> Option<PatchedFixture> {
@@ -261,6 +285,42 @@ mod tests {
         assert_eq!(patch.add(patched(1, 100, &t)), Err(PatchError::DuplicateId(FixtureId(1))));
         assert!(matches!(patch.add(patched(3, 500, &t)), Err(PatchError::OutOfRange { .. })));
         patch.add(patched(2, 15, &t)).unwrap();
+    }
+
+    #[test]
+    fn readdresses_ignoring_itself() {
+        let t = fixture_type(10);
+        let mut patch = Patch::default();
+        patch.add(patched(1, 1, &t)).unwrap();
+        patch.add(patched(2, 21, &t)).unwrap();
+        // Recouvrir sa propre ancienne plage est permis.
+        patch.readdress(FixtureId(1), 0, 5).unwrap();
+        assert_eq!(patch.get(FixtureId(1)).unwrap().address, 5);
+        assert_eq!(patch.readdress(FixtureId(1), 0, 15), Err(PatchError::Overlap(FixtureId(2))));
+        assert!(matches!(patch.readdress(FixtureId(1), 0, 510), Err(PatchError::OutOfRange { .. })));
+        assert!(matches!(patch.readdress(FixtureId(1), 0, 0), Err(PatchError::OutOfRange { .. })));
+        assert_eq!(patch.readdress(FixtureId(9), 0, 100), Err(PatchError::NotPatched(FixtureId(9))));
+        assert_eq!(patch.get(FixtureId(1)).unwrap().address, 5, "erreur : rien ne bouge");
+        // Un autre univers est libre.
+        patch.readdress(FixtureId(1), 1, 21).unwrap();
+        assert_eq!(patch.get(FixtureId(1)).unwrap().universe, 1);
+    }
+
+    #[test]
+    fn readdress_many_is_all_or_nothing_and_allows_swaps() {
+        let t = fixture_type(10);
+        let mut patch = Patch::default();
+        patch.add(patched(1, 1, &t)).unwrap();
+        patch.add(patched(2, 11, &t)).unwrap();
+        patch.add(patched(3, 41, &t)).unwrap();
+        patch.readdress_many(&[(FixtureId(1), 0, 11), (FixtureId(2), 0, 1)]).unwrap();
+        assert_eq!((patch.get(FixtureId(1)).unwrap().address, patch.get(FixtureId(2)).unwrap().address), (11, 1));
+        let before = patch.clone();
+        assert_eq!(
+            patch.readdress_many(&[(FixtureId(1), 0, 21), (FixtureId(2), 0, 31), (FixtureId(3), 0, 36)]),
+            Err(PatchError::Overlap(FixtureId(2)))
+        );
+        assert_eq!(patch, before);
     }
 
     #[test]

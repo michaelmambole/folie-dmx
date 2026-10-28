@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use folie_engine::{Command as EngineCommand, EngineHandle};
-use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, FixtureId, ParamKey, Parameter, Patch, Target};
+use folie_fixture::{Attribute, Capability, CapabilityKind, FeatureGroup, FixtureId, ParamKey, Parameter, Patch, PatchError, Target};
 use folie_show::{Effect, Group, Preset, Show};
 use thiserror::Error;
 
@@ -281,6 +281,22 @@ impl Console {
             .retain(|key, _| patch.get(key.fixture).is_some_and(|f| key.parameter < f.mode().parameters.len()));
         self.engine.send(EngineCommand::SetPatch(Arc::new(patch.clone())));
         self.sync_playback();
+    }
+
+    /// Réadresse des fixtures à la suite à partir de `first` (univers en base 0),
+    /// dans l'ordre donné. Leurs numéros ne changent pas : programmer, cues,
+    /// presets et groupes les suivent. Tout ou rien en cas de conflit.
+    pub fn readdress(&mut self, ids: &[FixtureId], universe: usize, first: u16) -> Result<(), PatchError> {
+        let mut moves = Vec::new();
+        let mut address = first as u32;
+        for &id in ids {
+            let fixture = self.show.patch.get(id).ok_or(PatchError::NotPatched(id))?;
+            moves.push((id, universe, address.min(u16::MAX as u32) as u16));
+            address += fixture.mode().footprint as u32;
+        }
+        self.show.patch.readdress_many(&moves)?;
+        self.patch_changed();
+        Ok(())
     }
 
     fn clear_programmer(&mut self) {
@@ -870,6 +886,38 @@ mod tests {
         c.patch_changed();
         assert_eq!(c.show.groups[&7].targets.len(), 2, "la fixture dépatchée quitte le groupe");
         assert!(c.execute("Group 99").is_err());
+    }
+
+    /// Réadresser garde le numéro : groupe, preset, cue et programmer suivent la fixture.
+    #[test]
+    fn readdress_keeps_values_everywhere() {
+        let mut c = console();
+        run(&mut c, "Fixture 3 + 1");
+        run(&mut c, r#"Store Group 7 "Cour""#);
+        let red = c.show.patch.get(FixtureId(1)).unwrap().mode().parameters[2].clone();
+        c.set_like(&red, 0);
+        run(&mut c, "Store Preset 4.1");
+        run(&mut c, "At 100");
+        run(&mut c, "Store Cue 1 Fade 0");
+        let (groups, presets, sequences) = (c.show.groups.clone(), c.show.presets.clone(), c.show.sequences.clone());
+        let programmer = c.programmer().clone();
+
+        // Fixture 1 (1–14) sur 201, puis 3 et 1 à la suite à partir de 301.
+        c.readdress(&[FixtureId(1)], 0, 201).unwrap();
+        assert_eq!(c.show.patch.get(FixtureId(1)).unwrap().address, 201);
+        assert_eq!(dmx(&c, 202), 255, "le dimmer sort à la nouvelle adresse");
+        assert_eq!(dmx(&c, 2), 0, "plus rien à l'ancienne");
+        c.readdress(&[FixtureId(3), FixtureId(1)], 0, 301).unwrap();
+        assert_eq!(c.show.patch.get(FixtureId(1)).unwrap().address, 315);
+        assert_eq!(c.show.groups, groups);
+        assert_eq!(c.show.presets, presets);
+        assert_eq!(c.show.sequences, sequences);
+        assert_eq!(c.programmer(), &programmer);
+        assert_eq!(c.selection(), [fixture(3), fixture(1)]);
+
+        // Conflit avec la fixture 2 (15–28) : rien ne bouge.
+        assert_eq!(c.readdress(&[FixtureId(1)], 0, 20), Err(PatchError::Overlap(FixtureId(2))));
+        assert_eq!(c.show.patch.get(FixtureId(1)).unwrap().address, 315);
     }
 
     #[test]

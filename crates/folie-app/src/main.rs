@@ -4,6 +4,7 @@ mod cmdline;
 mod color_picker;
 mod effects_ui;
 mod faders;
+mod fixture_sheet;
 mod fixtures;
 mod monitor;
 mod network;

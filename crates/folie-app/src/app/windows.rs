@@ -102,8 +102,8 @@ impl WindowsState {
         let share = (height - open.len() as f32 * (TITLE + MARGIN)) / open.len().max(1) as f32;
         let mut y = TOP;
         for kind in open {
-            // Le patch prend plus de place que les pools.
-            let h = if kind == WindowKind::Patch { share * 1.4 } else { share * 0.8 };
+            // Le patch et les fixtures prennent plus de place que les pools.
+            let h = if matches!(kind, WindowKind::Patch | WindowKind::Fixtures) { share * 1.3 } else { share * 0.7 };
             self.spawn.insert(kind, Placement::at_size(egui::pos2(x, y), egui::vec2(column, h)));
             y += h + TITLE + MARGIN;
         }
@@ -418,6 +418,7 @@ impl FolieApp {
                     self.mark_dirty();
                 }
             }
+            WindowKind::Fixtures => self.fixture_sheet.show(ui, &mut self.console, &self.snapshot, self.display),
             WindowKind::Groups => {
                 let result = egui::ScrollArea::vertical()
                     .show(ui, |ui| self.pools.groups(ui, &mut self.console, &mut self.store_armed))
@@ -614,7 +615,7 @@ mod tests {
         let laptop = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0));
         state.recall(1, &[laptop]).unwrap();
         let open: Vec<WindowKind> = state.workspace.windows.iter().map(|w| w.kind).collect();
-        assert_eq!(open, [WindowKind::Patch, WindowKind::Groups, WindowKind::Presets]);
+        assert_eq!(open, [WindowKind::Patch, WindowKind::Fixtures, WindowKind::Groups, WindowKind::Presets]);
         assert_eq!(state.current_layout, Some(1));
 
         // Vidéoprojecteur débranché : la fenêtre revient sur le portable.

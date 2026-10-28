@@ -115,6 +115,7 @@ pub struct FolieApp {
     file: file::FileState,
     windows: windows::WindowsState,
     fixtures_view: FixturesView,
+    fixture_sheet: crate::fixture_sheet::FixtureSheet,
     snapshot: Snapshot,
     ports: Vec<PortCandidate>,
     output: OutputChoice,
@@ -179,6 +180,7 @@ impl FolieApp {
             file: file::FileState::new(storage),
             windows: windows::WindowsState::new(workspace, layouts),
             fixtures_view: FixturesView::new(),
+            fixture_sheet: Default::default(),
             ports: Vec::new(),
             output: OutputChoice::Virtual,
             artnet,
@@ -543,7 +545,8 @@ mod tests {
         Workspace {
             main: Placement::default(),
             windows: vec![
-                window(WindowKind::Patch, 1000.0, 40.0, 480.0, 760.0),
+                window(WindowKind::Patch, 1000.0, 40.0, 500.0, 560.0),
+                window(WindowKind::Fixtures, 1000.0, 650.0, 500.0, 500.0),
                 window(WindowKind::Groups, 1520.0, 40.0, 340.0, 360.0),
                 window(WindowKind::Presets, 1520.0, 430.0, 340.0, 420.0),
             ],
@@ -562,7 +565,7 @@ mod tests {
     }
 
     fn harness(storage: Storage) -> Harness<'static, FolieApp> {
-        harness_with(storage, test_workspace(), egui::vec2(1900.0, 1200.0))
+        harness_with(storage, test_workspace(), egui::vec2(1960.0, 1200.0))
     }
 
     fn harness_with(storage: Storage, workspace: Workspace, size: egui::Vec2) -> Harness<'static, FolieApp> {
@@ -729,6 +732,295 @@ mod tests {
         assert_eq!(out.get(1), Ok(0));
     }
 
+
+    /// Une ligne de la fenêtre Fixtures, par son numéro (« 2 », « 10.3 »).
+    fn sheet_row<'h>(harness: &'h Harness<'_, FolieApp>, number: &'h str) -> egui_kittest::Node<'h> {
+        harness.get(By::new().role(Role::Row).label(number))
+    }
+
+    fn selection(harness: &Harness<'_, FolieApp>) -> Vec<String> {
+        harness.state().console.selection().iter().map(|t| t.to_string()).collect()
+    }
+
+    /// Patche des Sunstrip en mode Individual (10 cellules) à partir du numéro donné.
+    fn patch_sunstrips(harness: &mut Harness<'_, FolieApp>, quantity: u32, first_id: u32) {
+        harness.get_by_role_and_label(Role::ComboBox, "Type").click();
+        harness.run_steps(2);
+        harness.get_by_label("Showtec Sunstrip Active MKII").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::ComboBox, "Mode").click();
+        harness.run_steps(2);
+        harness.get_by_label("Individual (10 canaux)").click();
+        let form = &mut harness.state_mut().fixtures_view.form;
+        form.quantity = quantity;
+        form.first_id = first_id;
+        harness.run_steps(2);
+        harness.get_by_label("Patcher").click();
+        settle(harness);
+    }
+
+    #[test]
+    fn fixture_sheet_shows_live_values_and_selects() {
+        use crate::fixture_sheet::{animated, live_row};
+        use crate::theme::Source;
+        let mut workspace = test_workspace();
+        workspace.windows.retain(|w| w.kind == WindowKind::Patch);
+        workspace.windows.push(WindowState {
+            kind: WindowKind::Fixtures,
+            placement: Placement::at_size(egui::pos2(1000.0, 620.0), egui::vec2(900.0, 560.0)),
+            preset_family: None,
+        });
+        let mut harness = harness_with(Storage::disabled(), workspace, egui::vec2(1960.0, 1200.0));
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+        patch_sunstrips(&mut harness, 1, 10);
+        command(&mut harness, "ClearAll");
+
+        // 1 : tenue par l'executor ; 2 : dans le programmer ; 3 : un cercle ; 4 : strobe.
+        command(&mut harness, "Fixture 1 At 100");
+        command(&mut harness, "Store Cue 1 Fade 0");
+        command(&mut harness, "ClearAll");
+        command(&mut harness, "Go Executor 1");
+        command(&mut harness, "Fixture 2 At 50");
+        command(&mut harness, "Fixture 3");
+        command(&mut harness, "Effect 4");
+        command(&mut harness, "Fixture 4");
+        {
+            let console = &mut harness.state_mut().console;
+            let fixture = console.show.patch.get(FixtureId(4)).unwrap().clone();
+            let shutter = fixture.mode().parameters.iter().find(|p| p.attribute == folie_fixture::Attribute::Shutter).unwrap().clone();
+            let strobe = shutter
+                .capabilities
+                .iter()
+                .find(|c| matches!(&c.kind, folie_fixture::CapabilityKind::Shutter { effect, .. } if effect == "Strobe"))
+                .expect("plage de strobe")
+                .select_value();
+            console.set_like(&shutter, strobe);
+        }
+        command(&mut harness, "Fixture 10.3 At 100");
+        settle(&mut harness);
+
+        let app = harness.state();
+        let effects = animated(&app.console, &app.snapshot);
+        let row = |target| live_row(&app.console, &app.snapshot, target, &effects, DisplayMode::Percent);
+        let one = row(Target::whole(FixtureId(1)));
+        let intensity = one.intensity.clone().unwrap();
+        assert_eq!((intensity.value, intensity.source), (1.0, Source::Executor));
+        assert_eq!(one.color.as_ref().map(|c| (c.value, c.source)), Some(([255, 255, 255], Source::Default)), "blanc par défaut");
+        assert_eq!(one.pan.as_ref().map(|p| (p.value.as_str(), p.source)), Some(("0°", Source::Default)));
+        assert!(one.zoom.is_some() && one.strobe.is_none() && one.effects.is_empty());
+        let two = row(Target::whole(FixtureId(2))).intensity.unwrap();
+        assert!((two.value - 0.5).abs() < 0.01 && two.source == Source::Programmer, "{two:?}");
+        let three = row(Target::whole(FixtureId(3)));
+        assert_eq!((three.pan.unwrap().source, three.tilt.unwrap().source), (Source::Effect, Source::Effect));
+        assert_eq!(three.effects.len(), 1, "le nom du cercle");
+        assert_eq!(row(Target::whole(FixtureId(4))).strobe, Some(Source::Programmer));
+        // Sunstrip : la fixture entière montre sa lampe la plus haute, la cellule la sienne, sans couleur.
+        let strip = row(Target::whole(FixtureId(10)));
+        assert_eq!(strip.intensity.map(|i| (i.value, i.source)), Some((1.0, Source::Programmer)));
+        assert!(strip.color.is_none() && strip.pan.is_none());
+        let cell = |head| row(Target { fixture: FixtureId(10), head: Some(head) }).intensity.unwrap().value;
+        assert_eq!((cell(2), cell(3)), (1.0, 0.0));
+
+        // Sélection : clic, Maj-clic (plage), Cmd-clic (retire).
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+        sheet_row(&harness, "2").click();
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["2"]);
+        sheet_row(&harness, "4").click_modifiers(egui::Modifiers::SHIFT);
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["2", "3", "4"]);
+        sheet_row(&harness, "3").click_modifiers(egui::Modifiers::COMMAND);
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["2", "4"]);
+
+        // Glisser de la 3 vers la 1 : sélection dans le sens du geste.
+        let (from, to) = (sheet_row(&harness, "3").rect().center(), sheet_row(&harness, "1").rect().center());
+        harness.hover_at(from);
+        harness.run_steps(1);
+        harness.drag_at(from);
+        harness.run_steps(1);
+        for step in 1..=4 {
+            harness.hover_at(from + (to - from) * step as f32 / 4.0);
+            harness.run_steps(1);
+        }
+        assert_eq!(selection(&harness), ["3", "2", "1"]);
+        harness.drop_at(to);
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["3", "2", "1"], "le relâcher garde la sélection");
+
+        // Sous-fixtures dépliées, puis une seule cellule sélectionnée.
+        harness.get_by_label("Afficher les sous-fixtures").click();
+        harness.run_steps(2);
+        sheet_row(&harness, "10.3").click();
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["10.3"]);
+        harness.get(By::new().role(Role::Row).label("10.10"));
+        sheet_row(&harness, "1").click_modifiers(egui::Modifiers::COMMAND);
+        sheet_row(&harness, "2").click_modifiers(egui::Modifiers::COMMAND);
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let image = harness.render().expect("rendu");
+            let window = image::imageops::crop_imm(&image, 990, 600, 920, 600).to_image();
+            window.save(std::path::Path::new(&dir).join("fixture-sheet.png")).expect("écriture de l'image");
+        }
+
+        // Filtres : par type, puis par groupe.
+        let shown = |h: &Harness<'_, FolieApp>| {
+            ["1", "2", "3", "4", "10"].into_iter().filter(|n| h.query(By::new().role(Role::Row).label(n)).is_some()).collect::<Vec<_>>()
+        };
+        harness.get(By::new().role(Role::Button).label("Showtec Sunstrip Active MKII")).click();
+        harness.run_steps(2);
+        assert_eq!(shown(&harness), ["10"]);
+        harness.get_by_label("Tous").click();
+        harness.run_steps(2);
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+        command(&mut harness, "Fixture 3 + 1");
+        command(&mut harness, r#"Store Group 1 "Cour""#);
+        harness.get_by_role_and_label(Role::ComboBox, "Groupe").click();
+        harness.run_steps(2);
+        harness.get_by_label("1 Cour").click();
+        harness.run_steps(2);
+        assert_eq!(shown(&harness), ["1", "3"]);
+        harness.get_by_label("Tout sélectionner").click();
+        harness.run_steps(2);
+        assert_eq!(selection(&harness), ["1", "3"], "seulement les fixtures affichées");
+
+        // Cmd-F ferme la fenêtre, puis la rouvre.
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+        harness.run_steps(2);
+        assert!(!harness.state().windows.workspace.is_open(WindowKind::Fixtures));
+        assert!(harness.query(By::new().role(Role::Row).label("1")).is_none());
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+        harness.run_steps(2);
+        sheet_row(&harness, "1");
+    }
+
+    /// Remplace le texte du champ « Adresse » du menu ouvert, puis valide par Entrée.
+    fn type_address(harness: &mut Harness<'_, FolieApp>, text: &str) {
+        harness.get_by_role_and_label(Role::TextInput, "Adresse").focus();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.get_by_role_and_label(Role::TextInput, "Adresse").type_text(text);
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        settle(harness);
+    }
+
+    /// Le Patch en grand, et la fenêtre Fixtures dessous, sans les pools.
+    fn patch_harness() -> Harness<'static, FolieApp> {
+        let window = |kind, y: f32, h: f32| WindowState {
+            kind,
+            placement: Placement::at_size(egui::pos2(1000.0, y), egui::vec2(700.0, h)),
+            preset_family: None,
+        };
+        let workspace = Workspace {
+            main: Placement::default(),
+            windows: vec![window(WindowKind::Patch, 40.0, 580.0), window(WindowKind::Fixtures, 680.0, 480.0)],
+        };
+        harness_with(Storage::disabled(), workspace, egui::vec2(1960.0, 1200.0))
+    }
+
+    #[test]
+    fn readdress_from_the_patch_table() {
+        let mut harness = patch_harness();
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 4);
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+        command(&mut harness, "Fixture 2 At 50");
+        harness.state_mut().file.dirty = false;
+
+        // Clic droit sur la ligne de la fixture 2 : son adresse actuelle est dans le champ.
+        harness.get_by_label("2 · Rush MH 6 Wash 2 · 1.015–028").click_secondary();
+        harness.run_steps(2);
+        assert_eq!(harness.get_by_role_and_label(Role::TextInput, "Adresse").value().as_deref(), Some("1.015"));
+        harness.get_by_label("Fixture 2");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("patch-address-menu.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Conflit : expliqué dans le menu, qui reste ouvert, et rien ne bouge.
+        type_address(&mut harness, "1.020");
+        harness.get_by_label("Impossible : chevauche la fixture 3");
+        assert_eq!(harness.state().console.show.patch.get(FixtureId(2)).unwrap().address, 15);
+        type_address(&mut harness, "2.001");
+        harness.get_by_label("Un seul univers pour l'instant : 1.xxx");
+
+        // Adresse libre : la fixture garde son numéro et ses valeurs, qui sortent à la nouvelle adresse.
+        type_address(&mut harness, "201");
+        assert_eq!(harness.state().console.show.patch.get(FixtureId(2)).unwrap().address, 201);
+        assert!(harness.query_by_role_and_label(Role::TextInput, "Adresse").is_none(), "menu refermé");
+        harness.get_by_label("Fixture 2 déplacée en 1.201");
+        harness.get_by_label("2 · Rush MH 6 Wash 2 · 1.201–214"); // le tableau suit
+        assert_eq!((output(&harness, 202), output(&harness, 16)), (128, 0));
+        assert!(harness.state().file.dirty);
+
+        // Plusieurs fixtures sélectionnées : à la suite, dans l'ordre de sélection.
+        command(&mut harness, "Fixture 4 + 3");
+        harness.get_by_label("3 · Rush MH 6 Wash 3 · 1.029–042").click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("2 fixtures sélectionnées, à la suite");
+        type_address(&mut harness, "301");
+        let address = |h: &Harness<'_, FolieApp>, id| h.state().console.show.patch.get(FixtureId(id)).unwrap().address;
+        assert_eq!((address(&harness, 4), address(&harness, 3), address(&harness, 1)), (301, 315, 1));
+        harness.get_by_label("2 fixtures déplacées à la suite à partir de 1.301");
+
+        // La touche « Changer l'adresse… » fait de même pour la sélection.
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+        command(&mut harness, "Fixture 1");
+        harness.get_by_label("Changer l'adresse…").click();
+        harness.run_steps(2);
+        harness.get_by_label("Fixture 1");
+        type_address(&mut harness, "401");
+        assert_eq!(address(&harness, 1), 401);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let image = harness.render().expect("rendu");
+            let window = image::imageops::crop_imm(&image, 990, 20, 720, 620).to_image();
+            window.save(std::path::Path::new(&dir).join("patch-table.png")).expect("écriture de l'image");
+        }
+
+        // Supprimer : la sélection quitte le patch.
+        harness.get_by_label("Supprimer (1)").click();
+        settle(&mut harness);
+        assert!(harness.state().console.show.patch.get(FixtureId(1)).is_none());
+        assert!(harness.query_by_label("1 · Rush MH 6 Wash 1 · 1.401–414").is_none());
+    }
+
+    #[test]
+    fn add_form_warns_about_conflicts_before_patching() {
+        let mut harness = patch_harness();
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 2);
+        // Adresse choisie à la main, sur la fixture 1 : le conflit est dit, Patcher est grisé.
+        let form = &mut harness.state_mut().fixtures_view.form;
+        form.auto_address = false;
+        form.address = 10;
+        harness.run_steps(2);
+        harness.get_by_label("Conflit : Fixture 3 : chevauche la fixture 1");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let image = harness.render().expect("rendu");
+            let window = image::imageops::crop_imm(&image, 990, 20, 720, 320).to_image();
+            window.save(std::path::Path::new(&dir).join("patch-conflict.png")).expect("écriture de l'image");
+        }
+        harness.get_by_label("Patcher").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.show.patch.fixtures().len(), 2, "rien n'est patché");
+        // Numéro déjà pris.
+        let form = &mut harness.state_mut().fixtures_view.form;
+        form.address = 100;
+        form.first_id = 2;
+        harness.run_steps(2);
+        harness.get_by_label("Conflit : Fixture 2 : la fixture 2 existe déjà");
+        // Place libre : on peut patcher.
+        harness.state_mut().fixtures_view.form.first_id = 3;
+        harness.run_steps(2);
+        harness.get_by_label("2 × 14 = 28 canaux");
+        harness.get_by_label("Patcher").click();
+        settle(&mut harness);
+        assert_eq!(harness.state().console.show.patch.get(FixtureId(3)).unwrap().address, 100);
+        harness.get_by_label("2 fixtures patchées");
+    }
 
     /// Patche `quantity` fixtures du type donné par le formulaire, mode par défaut.
     fn patch_with_form(harness: &mut Harness<'_, FolieApp>, fixture_type: &str, quantity: u32) {
