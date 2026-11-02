@@ -147,15 +147,16 @@ fn phone_drives_the_console() {
     rt.block_on(send(&mut ws, json!({"type": "command", "line": "Group 9"})));
     let announced = frames(&server, &mut console, |_, a| !a.is_empty());
     assert_eq!(announced.len(), 1);
+    // Les réponses au fader et au Go peuvent arriver encore maintenant : on attend celle
+    // de cette commande.
     let reply = rt.block_on(async {
         loop {
             let message = next_json(&mut ws).await;
-            if message["type"] == "reply" {
+            if message["type"] == "reply" && message["ok"] == false {
                 break message;
             }
         }
     });
-    assert_eq!(reply["ok"], false);
     assert_eq!(reply["message"], announced[0]);
 
     // Flash tenu puis téléphone perdu : la touche est relâchée.
