@@ -206,6 +206,68 @@ fn playback_code_only_plays_executors() {
     assert!((snapshot.executors[&1].level - 1.0).abs() < 1e-3, "fader intact");
 }
 
+/// Onglet Sons : la liste et ce qui joue, lancer et arrêter ; le code lecture n'y a
+/// droit que si la console le permet.
+#[test]
+fn phone_plays_sounds() {
+    use folie_control::sounds::SoundRequest;
+    use folie_show::media::Sound;
+
+    let mut console = console();
+    console.show.sounds.insert(1, Sound { name: "Pluie".into(), start: 2.0, then: Some(2), ..Default::default() });
+    console.show.sounds.insert(2, Sound { name: "Orage".into(), group: 1, ..Default::default() });
+    let server = RemoteServer::start(0, "4821", "1357", || {}).unwrap();
+    server.set_sounds(state::SoundsLive {
+        positions: [(1, 3.53)].into(),
+        durations: [(1, 30.0), (2, 12.25)].into(),
+    });
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let mut ws = rt.block_on(phone(server.port(), "1357"));
+    assert_eq!(rt.block_on(next_json(&mut ws))["role"], "playback");
+    frames(&server, &mut console, |_, _| server.clients() == 1);
+    let state = rt.block_on(next_json(&mut ws));
+    assert_eq!(state["playback_sounds"], false);
+    assert_eq!(state["sounds"][0]["name"], "Pluie");
+    assert_eq!(state["sounds"][0]["then"], 2);
+    assert_eq!(state["sounds"][0]["elapsed"], 1.5, "depuis le point d'entrée, au dixième");
+    assert_eq!(state["sounds"][0]["duration"], 30.0);
+    assert_eq!(state["sounds"][1]["group"], 1);
+    assert!(state["sounds"][1]["elapsed"].is_null(), "à l'arrêt");
+
+    // Code lecture : refusé, puis permis par la console.
+    let reply = |ws: &mut Phone| {
+        rt.block_on(async {
+            loop {
+                let message = next_json(ws).await;
+                if message["type"] == "reply" {
+                    break message;
+                }
+            }
+        })
+    };
+    rt.block_on(send(&mut ws, json!({"type": "sound", "number": 2})));
+    assert_eq!(reply(&mut ws)["ok"], false);
+    server.set_playback_sounds(true);
+    rt.block_on(send(&mut ws, json!({"type": "sound", "number": 2})));
+    rt.block_on(send(&mut ws, json!({"type": "sound_off", "number": 1})));
+    rt.block_on(send(&mut ws, json!({"type": "sound_off", "number": null})));
+    let announced = frames(&server, &mut console, |_, a| a.len() == 3);
+    assert_eq!(announced, ["Son 2 « Orage » lancé", "Son 1 « Pluie » arrêté", "Tous les sons arrêtés"]);
+    assert_eq!(
+        console.take_sound_requests(),
+        [SoundRequest::Play(2), SoundRequest::Stop { number: 1, fade: 1.0 }, SoundRequest::StopAll { fade: 0.0 }]
+    );
+    let state = rt.block_on(async {
+        loop {
+            let message = next_json(&mut ws).await;
+            if message["type"] == "state" {
+                break message;
+            }
+        }
+    });
+    assert_eq!(state["playback_sounds"], true);
+}
+
 #[test]
 fn stopping_the_server_frees_the_port() {
     let server = RemoteServer::start(0, "1", "2", || {}).unwrap();

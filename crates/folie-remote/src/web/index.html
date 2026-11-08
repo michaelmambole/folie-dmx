@@ -42,6 +42,7 @@ header .title span { display: block; font-size: 12px; color: var(--muted); white
 nav { display: flex; gap: 6px; padding: 8px 12px 0; }
 nav button { flex: 1; min-height: 36px; background: transparent; border-color: transparent; color: var(--muted); }
 nav button.active { background: var(--s2); border-color: var(--line); color: var(--text); }
+nav[hidden], nav button[hidden] { display: none; }
 
 main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 10px 12px 12px; }
 section[hidden] { display: none !important; }
@@ -121,6 +122,21 @@ body.playback .fader { pointer-events: none; opacity: .6; }
 .badge { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--exec);
   border: 1px solid var(--exec); border-radius: 6px; padding: 3px 6px; display: none; }
 body.playback .badge { display: inline-block; }
+/* Sons */
+.sounds { display: flex; flex-direction: column; gap: 6px; }
+.sound { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; background: var(--s1);
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 8px 8px 10px; }
+.sound.playing { border-color: var(--go); box-shadow: inset 0 0 0 1px var(--go); }
+.sound .info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sound .title { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.sound .num { font-weight: 700; color: var(--info); flex: none; }
+.sound .label { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sound .meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sound.playing .time { color: var(--go); }
+.sound .progress i { background: var(--go); }
+.sound button { min-height: 48px; width: 86px; padding: 0 4px; font-weight: 700; }
+.sound .stop { font-weight: 400; }
+#sounds-off { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 700; }
 .toast { position: fixed; left: 12px; right: 12px; bottom: calc(96px + env(safe-area-inset-bottom)); padding: 10px 12px;
   border-radius: 8px; background: var(--s3); border: 1px solid var(--prog); font-size: 13px; opacity: 0;
   transition: opacity .2s; pointer-events: none; }
@@ -143,9 +159,10 @@ body.playback .badge { display: inline-block; }
   <span class="badge" title="Code lecture : GO, Back et touches des executors">Lecture</span>
   <button id="blackout" class="full-only">BLACKOUT</button>
 </header>
-<nav class="full-only">
+<nav id="tabs">
   <button class="active" data-tab="executors">Executors</button>
-  <button data-tab="command">Commande</button>
+  <button data-tab="sounds" id="tab-sounds">Sons</button>
+  <button data-tab="command" class="full-only">Commande</button>
 </nav>
 
 <main>
@@ -159,6 +176,14 @@ body.playback .badge { display: inline-block; }
     <div class="faders" id="faders"></div>
     <h2>Executors à boutons</h2>
     <div class="buttons" id="buttons"></div>
+  </section>
+
+  <section id="sounds" hidden>
+    <div class="bar">
+      <div class="page"><b>Sons</b><span id="sounds-playing"></span></div>
+      <button id="sounds-off">Tout arrêter</button>
+    </div>
+    <div class="sounds" id="sound-list"></div>
   </section>
 
   <section id="command" hidden>
@@ -257,10 +282,12 @@ function toast(text) {
 }
 
 // Onglets
-document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
-  document.querySelectorAll("nav button").forEach((o) => o.classList.toggle("active", o === b));
-  document.querySelectorAll("main section").forEach((s) => s.hidden = s.id !== b.dataset.tab);
-});
+document.querySelectorAll("nav button").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
+
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach((o) => o.classList.toggle("active", o.dataset.tab === name));
+  document.querySelectorAll("main section").forEach((s) => s.hidden = s.id !== name);
+}
 
 // En-tête et dock. Toucher le titre : changer de code (régie ou lecture).
 $("title").onclick = () => {
@@ -272,6 +299,7 @@ $("blackout").onclick = () => state && send({ type: "blackout", on: !state.black
 $("page-prev").onclick = () => state && send({ type: "page", page: Math.max(1, state.page - 1) });
 $("page-next").onclick = () => state && send({ type: "page", page: state.page + 1 });
 $("off-all").onclick = () => send({ type: "off_all" });
+$("sounds-off").onclick = () => send({ type: "sound_off", number: null });
 $("go").onclick = () => send({ type: "go", executor: null });
 $("back").onclick = () => send({ type: "back", executor: null });
 
@@ -388,6 +416,44 @@ function card(x, withFader) {
   return c;
 }
 
+// Durée lisible : « 2:31.4 ».
+function clock(t) {
+  const tenths = Math.round(Math.max(0, t) * 10);
+  return Math.floor(tenths / 600) + ":" + String(Math.floor(tenths / 10) % 60).padStart(2, "0") + "." + (tenths % 10);
+}
+
+// Lignes de sons, reconstruites seulement quand leur forme change.
+const soundRows = new Map();
+function soundRow(x) {
+  const playing = x.elapsed != null;
+  const shape = [x.number, x.name, x.group, x.then, x.looped, playing].join("|");
+  let r = soundRows.get(x.number);
+  if (!r || r.shape !== shape) {
+    r = el("div", "sound" + (playing ? " playing" : ""));
+    r.shape = shape;
+    const info = el("div", "info");
+    const title = el("div", "title");
+    title.append(el("span", "num mono", String(x.number)), el("span", "label", x.name || "Son " + x.number));
+    const extra = [x.group ? "groupe " + x.group : "", x.then != null ? "puis " + x.then : "", x.looped ? "en boucle" : ""];
+    r.parts = { time: el("span", "time mono"), progress: el("div", "progress") };
+    r.parts.progress.append(el("i"));
+    const meta = el("div", "meta");
+    meta.append(r.parts.time, document.createTextNode(extra.filter(Boolean).map((t) => " · " + t).join("")));
+    info.append(title, meta, r.parts.progress);
+    const play = el("button", "go", playing ? "Relancer" : "Lancer");
+    play.onclick = () => send({ type: "sound", number: x.number });
+    const stop = el("button", "stop", "Arrêter");
+    stop.disabled = !playing;
+    stop.onclick = () => send({ type: "sound_off", number: x.number });
+    r.append(info, play, stop);
+    soundRows.set(x.number, r);
+  }
+  const total = x.duration;
+  r.parts.time.textContent = playing ? clock(x.elapsed) + (total ? " / " + clock(total) : "") : (total ? clock(total) : "…");
+  r.parts.progress.firstChild.style.width = playing && total ? Math.min(100, x.elapsed / total * 100) + "%" : "0";
+  return r;
+}
+
 function fill(container, nodes) {
   nodes.forEach((n, i) => { if (container.children[i] !== n) container.insertBefore(n, container.children[i] || null); });
   while (container.children.length > nodes.length) container.lastChild.remove();
@@ -403,6 +469,18 @@ function render() {
   $("back-exec").textContent = "executor " + state.selected;
   fill($("faders"), state.executors.filter((x) => x.fader).map((x) => card(x, true)));
   fill($("buttons"), state.executors.filter((x) => !x.fader).map((x) => card(x, false)));
+  // Sons : onglet ouvert au code lecture seulement si la console le permet.
+  const playback = document.body.classList.contains("playback");
+  const sounds = !playback || state.playback_sounds;
+  $("tab-sounds").hidden = !sounds;
+  $("tabs").hidden = playback && !sounds;
+  if (!sounds && !$("sounds").hidden) showTab("executors");
+  const list = $("sound-list");
+  fill(list, state.sounds.map(soundRow));
+  if (!state.sounds.length) list.replaceChildren(el("div", "muted", "Aucun son dans le show"));
+  const playing = state.sounds.filter((x) => x.elapsed != null).length;
+  $("sounds-playing").textContent = playing ? playing + " en lecture" : "";
+  $("sounds-off").disabled = !playing;
   const groups = $("groups");
   const key = state.groups.map((g) => g.number + g.name).join("|");
   if (groups.dataset.key !== key) {

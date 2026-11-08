@@ -3386,6 +3386,26 @@ mod tests {
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
 
+        // Onglet Sons : le son du show arrive au téléphone ; permettre les sons au code
+        // lecture ne relance pas le serveur (le téléphone reste connecté).
+        let wav = dir.path().join("pluie.wav");
+        write_wav(&wav, 1.0);
+        harness.state_mut().import_sounds(std::slice::from_ref(&wav));
+        harness.get_by_label("Le code lecture lance aussi les sons").click();
+        settle(&mut harness);
+        assert!(Storage::at(dir.path()).remote().playback_sounds);
+        assert_eq!(harness.state().remote.as_ref().unwrap().port(), port);
+        let state = loop {
+            let message = phone.read().unwrap();
+            let Ok(text) = message.to_text() else { continue };
+            let json: serde_json::Value = serde_json::from_str(text).unwrap();
+            if json["type"] == "state" && json["playback_sounds"] == true && json["sounds"][0]["duration"].is_number() {
+                break json;
+            }
+        };
+        assert_eq!(state["sounds"][0]["name"], "pluie");
+        assert!((state["sounds"][0]["duration"].as_f64().unwrap() - 1.0).abs() < 0.05);
+
         // Couper : le téléphone est déconnecté, le réglage retenu.
         harness.get_by_label("Couper la télécommande").click();
         settle(&mut harness);

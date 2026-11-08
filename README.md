@@ -47,7 +47,9 @@ Bouton **Télécommande** de la barre du haut ; tout est coupé tant qu'on ne l'
 et seul le réseau local est accepté.
 
 - **Web** : le téléphone ouvre l'adresse affichée (ou scanne le QR code) et donne un code :
-  *régie* (tout) ou *lecture* (GO, Back, Flash). Sans l'interface :
+  *régie* (tout) ou *lecture* (GO, Back, Flash). Onglet **Sons** : lancer, arrêter,
+  tout arrêter, avec ce qui joue et où en est la lecture ; le code lecture n'y a droit
+  que si la case « Le code lecture lance aussi les sons » est cochée. Sans l'interface :
   `cargo run -p folie-remote --example demo`, puis http://localhost:8090 (codes 1234 et 5678).
 - **OSC** (UDP, port 8000 par défaut, retour d'état vers le port 9000 du client) :
 

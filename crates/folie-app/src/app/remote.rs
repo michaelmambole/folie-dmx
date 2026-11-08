@@ -84,6 +84,9 @@ impl FolieApp {
         let mut results = Vec::new();
         if let Some(server) = &self.remote {
             results.extend(server.handle(&mut self.console));
+            if server.clients() > 0 {
+                server.set_sounds(self.sounds_live());
+            }
             server.publish(&self.console, &self.snapshot, &self.file.show_name());
         }
         if let Some(osc) = &self.osc {
@@ -96,6 +99,23 @@ impl FolieApp {
                 self.mark_dirty();
             }
         }
+    }
+
+    /// Ce qui joue et les durées, pour l'onglet Sons des téléphones.
+    fn sounds_live(&self) -> folie_remote::state::SoundsLive {
+        let durations = self
+            .console
+            .show
+            .sounds
+            .iter()
+            .filter_map(|(&n, sound)| match self.playback.clip(sound) {
+                Some(crate::playback_sound::ClipState::Ready { clip, .. }) => {
+                    Some((n, (sound.end.unwrap_or(clip.duration()) - sound.start).max(0.0)))
+                }
+                _ => None,
+            })
+            .collect();
+        folie_remote::state::SoundsLive { positions: self.playback.positions(), durations }
     }
 
     /// Démarre, arrête ou relance le serveur selon les réglages, et les enregistre.
@@ -114,7 +134,10 @@ impl FolieApp {
             let ctx = ctx.clone();
             let started = RemoteServer::start(s.port, &s.pin, &s.playback_pin, move || ctx.request_repaint());
             match started {
-                Ok(server) => self.remote = Some(server),
+                Ok(server) => {
+                    server.set_playback_sounds(s.playback_sounds);
+                    self.remote = Some(server);
+                }
                 Err(err) => {
                     self.remote_settings.enabled = false;
                     self.error = Some(format!("Télécommande : port {} indisponible ({err})", self.remote_settings.port));
@@ -202,8 +225,11 @@ impl FolieApp {
                     ui.end_row();
                 };
                 code(ui, "Code régie", &settings.pin, "tout");
-                code(ui, "Code lecture", &settings.playback_pin, "GO, Back, Flash");
+                let detail = if settings.playback_sounds { "GO, Back, Flash, sons" } else { "GO, Back, Flash" };
+                code(ui, "Code lecture", &settings.playback_pin, detail);
             });
+            ui.checkbox(&mut settings.playback_sounds, "Le code lecture lance aussi les sons")
+                .on_hover_text("Onglet Sons du téléphone : lancer, arrêter, tout arrêter");
             let help = "Tirer deux autres codes : les appareils connectés sont déconnectés";
             if ui.button("Nouveaux codes").on_hover_text(help).clicked() {
                 settings.pin = new_pin();
@@ -235,8 +261,15 @@ impl FolieApp {
             }
         }
         if settings != self.remote_settings {
+            // Seul le droit aux sons change : appliqué sans relancer le serveur.
+            let only_sounds = crate::storage::RemoteSettings { playback_sounds: self.remote_settings.playback_sounds, ..settings.clone() } == self.remote_settings;
             self.remote_settings = settings;
-            self.remote_changed(&ui.ctx().clone());
+            if let (true, Some(server)) = (only_sounds, &self.remote) {
+                server.set_playback_sounds(self.remote_settings.playback_sounds);
+                self.file.storage.set_remote(&self.remote_settings);
+            } else {
+                self.remote_changed(&ui.ctx().clone());
+            }
         }
     }
 

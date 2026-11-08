@@ -17,7 +17,7 @@ pub mod state;
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -82,15 +82,25 @@ pub enum Action {
         executor: Option<u32>,
         cue: String,
     },
+    /// Lance un son du show (`Sound 3`).
+    Sound {
+        number: u32,
+    },
+    /// Arrête un son en fondu d'une seconde, ou tous (`None`) d'un coup.
+    SoundOff {
+        number: Option<u32>,
+    },
 }
 
 impl Action {
-    /// Avec le code « lecture », on ne fait que jouer les executors.
-    pub fn allowed(&self, role: Role) -> bool {
+    /// Avec le code « lecture », on ne fait que jouer les executors, et les sons si la
+    /// console le permet (`sounds`).
+    pub fn allowed(&self, role: Role, sounds: bool) -> bool {
         match role {
             Role::Full => true,
             Role::Playback => {
                 matches!(self, Self::Press { .. } | Self::Flash { .. } | Self::Go { .. } | Self::Back { .. })
+                    || (sounds && matches!(self, Self::Sound { .. } | Self::SoundOff { .. }))
             }
         }
     }
@@ -123,6 +133,9 @@ impl Action {
                 Ok(number) => console.goto_on(executor, number),
                 Err(_) => Err(CommandError::from(folie_control::command::SyntaxError(format!("numéro de cue illisible : {cue}")))),
             },
+            Self::Sound { number } => console.execute(&format!("Sound {number}")),
+            Self::SoundOff { number: Some(number) } => console.execute(&format!("Sound {number} Off Fade 1")),
+            Self::SoundOff { number: None } => console.execute("Sound Off"),
         }
     }
 }
@@ -152,6 +165,8 @@ struct Hub {
     stop: watch::Receiver<bool>,
     access: Access,
     clients: Arc<AtomicUsize>,
+    /// Le code lecture peut-il lancer les sons ?
+    playback_sounds: Arc<AtomicBool>,
     waker: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -162,6 +177,9 @@ pub struct RemoteServer {
     state: watch::Sender<Arc<str>>,
     stop: watch::Sender<bool>,
     clients: Arc<AtomicUsize>,
+    playback_sounds: Arc<AtomicBool>,
+    /// Sons en cours, transmis par l'interface (la console ne joue rien elle-même).
+    sounds: std::sync::Mutex<state::SoundsLive>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -182,12 +200,14 @@ impl RemoteServer {
         let (state, state_rx) = watch::channel(Arc::<str>::from(""));
         let (stop, stop_rx) = watch::channel(false);
         let clients = Arc::new(AtomicUsize::new(0));
+        let playback_sounds = Arc::new(AtomicBool::new(false));
         let hub = Arc::new(Hub {
             requests: requests_tx,
             state: state_rx,
             stop: stop_rx.clone(),
             access: Access::new(full_pin, playback_pin),
             clients: clients.clone(),
+            playback_sounds: playback_sounds.clone(),
             waker: Box::new(waker),
         });
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
@@ -211,11 +231,21 @@ impl RemoteServer {
             runtime.shutdown_timeout(std::time::Duration::from_millis(300));
         })?;
         log::info!("télécommande web sur le port {}", addr.port());
-        Ok(Self { addr, requests, state, stop, clients, thread: Some(thread) })
+        Ok(Self { addr, requests, state, stop, clients, playback_sounds, sounds: Default::default(), thread: Some(thread) })
     }
 
     pub fn port(&self) -> u16 {
         self.addr.port()
+    }
+
+    /// Le code lecture peut-il lancer et arrêter les sons ?
+    pub fn set_playback_sounds(&self, allowed: bool) {
+        self.playback_sounds.store(allowed, Ordering::Relaxed);
+    }
+
+    /// Sons en cours et durées, pour l'onglet Sons des téléphones.
+    pub fn set_sounds(&self, live: state::SoundsLive) {
+        *self.sounds.lock().unwrap_or_else(|e| e.into_inner()) = live;
     }
 
     /// Téléphones connectés (PIN accepté).
@@ -249,7 +279,10 @@ impl RemoteServer {
         if self.clients() == 0 {
             return;
         }
-        let json = serde_json::to_string(&state::build(console, snapshot, show_name)).unwrap_or_default();
+        let live = self.sounds.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut state = state::build(console, snapshot, show_name);
+        state.add_sounds(console, &live, self.playback_sounds.load(Ordering::Relaxed));
+        let json = serde_json::to_string(&state).unwrap_or_default();
         self.state.send_if_modified(|current| {
             if **current == *json {
                 return false;
@@ -350,7 +383,7 @@ async fn connection(mut socket: WebSocket, hub: Arc<Hub>, ip: IpAddr, role: Role
                         continue;
                     }
                 };
-                if !action.allowed(role) {
+                if !action.allowed(role, hub.playback_sounds.load(Ordering::Relaxed)) {
                     let reply = Reply { kind: "reply", ok: false, message: "Code lecture : réservé au code régie".into() };
                     let json = serde_json::to_string(&reply).unwrap_or_default();
                     if socket.send(Message::Text(json.into())).await.is_err() { break }

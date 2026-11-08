@@ -56,8 +56,18 @@ fn main() {
     console.execute("ClearAll").unwrap();
     console.rename_page(1, "Acte 1".into());
     console.select_executor(1);
+    // Des sons, joués « pour de faux » (la démo n'a pas de carte son) : durées inventées.
+    let sounds = [("Pluie", 42.0, 0, None), ("Orage", 18.5, 1, None), ("Vent", 95.0, 1, Some(4)), ("Entracte", 240.0, 0, None)];
+    let mut durations = std::collections::HashMap::new();
+    for (i, (name, duration, group, then)) in sounds.into_iter().enumerate() {
+        let number = i as u32 + 1;
+        console.show.sounds.insert(number, folie_show::media::Sound { name: name.into(), group, then, ..Default::default() });
+        durations.insert(number, duration);
+    }
+    let mut playing: std::collections::HashMap<u32, Instant> = Default::default();
 
     let server = RemoteServer::start(8090, "1234", "5678", || {}).expect("port 8090");
+    server.set_playback_sounds(true);
     println!("http://localhost:{}  (code régie 1234, code lecture 5678)", server.port());
     let mut last = Instant::now();
     loop {
@@ -67,6 +77,20 @@ fn main() {
                 Err(e) => println!("erreur : {e}"),
             }
         }
+        for request in console.take_sound_requests() {
+            match request {
+                folie_control::sounds::SoundRequest::Play(n) => {
+                    playing.insert(n, Instant::now());
+                }
+                folie_control::sounds::SoundRequest::Stop { number, .. } => {
+                    playing.remove(&number);
+                }
+                folie_control::sounds::SoundRequest::StopAll { .. } => playing.clear(),
+            }
+        }
+        playing.retain(|n, start| start.elapsed().as_secs_f64() < durations[n]);
+        let positions = playing.iter().map(|(n, start)| (*n, start.elapsed().as_secs_f64())).collect();
+        server.set_sounds(folie_remote::state::SoundsLive { positions, durations: durations.clone() });
         if last.elapsed() > Duration::from_millis(30) {
             server.publish(&console, &console.engine().snapshot(), "Démo");
             last = Instant::now();

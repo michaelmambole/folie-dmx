@@ -20,6 +20,51 @@ pub struct State {
     selected: String,
     executors: Vec<ExecutorView>,
     groups: Vec<GroupView>,
+    sounds: Vec<SoundView>,
+    /// Le code lecture peut-il lancer les sons ?
+    playback_sounds: bool,
+}
+
+/// Ce que l'interface sait des sons et que la console ignore : ce qui joue, les durées.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SoundsLive {
+    /// Son -> position de lecture (s).
+    pub positions: std::collections::HashMap<u32, f64>,
+    /// Son -> durée jouée, de l'entrée à la sortie (s), une fois le fichier chargé.
+    pub durations: std::collections::HashMap<u32, f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct SoundView {
+    number: u32,
+    name: String,
+    group: u32,
+    then: Option<u32>,
+    looped: bool,
+    duration: Option<f64>,
+    /// En lecture : temps écoulé depuis l'entrée, au dixième (s).
+    elapsed: Option<f64>,
+}
+
+impl State {
+    pub fn add_sounds(&mut self, console: &Console, live: &SoundsLive, playback_sounds: bool) {
+        let tenth = |t: f64| (t * 10.0).round() / 10.0;
+        self.sounds = console
+            .show
+            .sounds
+            .iter()
+            .map(|(&number, sound)| SoundView {
+                number,
+                name: sound.name.clone(),
+                group: sound.group,
+                then: sound.then,
+                looped: sound.looped,
+                duration: live.durations.get(&number).copied().map(tenth),
+                elapsed: live.positions.get(&number).map(|t| tenth((t - sound.start).max(0.0))),
+            })
+            .collect();
+        self.playback_sounds = playback_sounds;
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +111,8 @@ pub fn build(console: &Console, snapshot: &Snapshot, show_name: &str) -> State {
         selected: executor_label(console.selected_executor()),
         executors,
         groups,
+        sounds: Vec::new(),
+        playback_sounds: false,
     }
 }
 

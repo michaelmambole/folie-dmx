@@ -98,11 +98,13 @@ pub struct RemoteSettings {
     pub pin: String,
     /// Code « lecture » : GO, Back et touches des executors seulement.
     pub playback_pin: String,
+    /// Le code lecture peut aussi lancer et arrêter les sons.
+    pub playback_sounds: bool,
 }
 
 impl Default for RemoteSettings {
     fn default() -> Self {
-        Self { enabled: false, port: 8090, pin: String::new(), playback_pin: String::new() }
+        Self { enabled: false, port: 8090, pin: String::new(), playback_pin: String::new(), playback_sounds: false }
     }
 }
 
