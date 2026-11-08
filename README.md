@@ -122,7 +122,7 @@ par un port MIDI virtuel (gestionnaire IAC sur macOS, loopMIDI sous Windows).
 
 ## Sons
 
-Fenêtre **Sons** (menu Fenêtres) : importer des fichiers (WAV, AIFF, FLAC, MP3, OGG,
+Fenêtre **Sons** (menu Fenêtres) : importer ou glisser des fichiers ou des dossiers (WAV, AIFF, FLAC, MP3, OGG,
 M4A), régler pour chacun le point d'entrée et de sortie (à la souris sur la forme
 d'onde), le volume, les fondus et la boucle, écouter, choisir la sortie audio. Les sons
 partent par les commandes `Sound 3`, `Sound 3 Off Fade 2`, `Sound Off`, par exemple dans

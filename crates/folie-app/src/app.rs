@@ -1589,6 +1589,45 @@ mod tests {
         harness.get_by_label("Son 1 0:00:00.50 : cue 2 (executor 1)");
     }
 
+    /// Un fichier déposé (egui ne fournit que le principe : chaque intégration a le sien).
+    #[derive(Debug)]
+    struct Dropped(std::path::PathBuf);
+
+    impl egui::DroppedFile for Dropped {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+
+    /// Glisser-déposer sur la fenêtre Sons : un dossier (ses sons, sans le reste) et un
+    /// fichier seul, ajoutés d'un coup aux premiers numéros libres.
+    #[test]
+    fn drop_sounds_and_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Acte 1");
+        std::fs::create_dir_all(&folder).unwrap();
+        write_wav(&folder.join("02 orage.wav"), 0.2);
+        write_wav(&folder.join("01 pluie.wav"), 0.2);
+        std::fs::write(folder.join("notes.txt"), "à lire").unwrap();
+        std::fs::write(folder.join(".DS_Store"), "").unwrap();
+        let single = dir.path().join("vent.wav");
+        write_wav(&single, 0.2);
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        harness.state_mut().windows.open(WindowKind::Sounds);
+        harness.run_steps(2);
+        let files: Vec<std::sync::Arc<dyn egui::DroppedFile + Send + Sync>> =
+            vec![std::sync::Arc::new(Dropped(folder.clone())), std::sync::Arc::new(Dropped(single.clone()))];
+        harness.input_mut().dropped_files = files;
+        harness.run_steps(2);
+        let names: Vec<String> = harness.state().console.show.sounds.values().map(|s| s.name.clone()).collect();
+        assert_eq!(names, ["01 pluie", "02 orage", "vent"], "dans l'ordre, le texte et le fichier caché laissés de côté");
+        harness.get_by_label("3 son(s) ajouté(s), 1 fichier(s) ignoré(s)");
+        assert!(harness.state().file.dirty);
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();
@@ -3115,6 +3154,7 @@ mod tests {
             let path = std::path::Path::new(&dir).join("a-propos.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+        harness.run_steps(2); // la liste qui défile a pris sa taille
         harness.get_by_label("Fermer").click();
         harness.run_steps(2);
         assert!(!harness.state().about_open);

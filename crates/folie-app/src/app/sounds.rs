@@ -29,8 +29,42 @@ fn duration_text(seconds: f64) -> String {
     format!("{}:{:02}.{}", tenths / 600, (tenths / 10) % 60, tenths % 10)
 }
 
-/// Fichiers audio reconnus, pour le sélecteur.
+/// Fichiers audio reconnus, pour le sélecteur et le glisser-déposer.
 const AUDIO_EXTENSIONS: [&str; 9] = ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "aac", "mp4"];
+
+fn is_audio(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Fichiers audio parmi ceux déposés : un dossier donne ses sons (sous-dossiers compris),
+/// par ordre alphabétique. Rend aussi le nombre de fichiers laissés de côté.
+pub(crate) fn audio_files(dropped: &[PathBuf]) -> (Vec<PathBuf>, usize) {
+    fn walk(path: &std::path::Path, found: &mut Vec<PathBuf>, ignored: &mut usize, depth: usize) {
+        if path.is_dir() {
+            let Ok(entries) = std::fs::read_dir(path) else { return };
+            let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            children.sort();
+            for child in children {
+                // Fichiers cachés (.DS_Store…) et dossiers trop profonds : ignorés sans bruit.
+                if child.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) || depth > 8 {
+                    continue;
+                }
+                walk(&child, found, ignored, depth + 1);
+            }
+        } else if is_audio(path) {
+            found.push(path.to_path_buf());
+        } else {
+            *ignored += 1;
+        }
+    }
+    let (mut found, mut ignored) = (Vec::new(), 0);
+    for path in dropped {
+        walk(path, &mut found, &mut ignored, 0);
+    }
+    (found, ignored)
+}
 
 impl FolieApp {
     /// Lecture : demandes de la console passées à la carte son, fichiers chargés.
@@ -86,6 +120,22 @@ impl FolieApp {
         if !self.playback.is_open() && self.playback.error.is_none() {
             self.playback.open();
         }
+        // Fichiers ou dossiers glissés sur la fenêtre.
+        let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        if !dropped.is_empty() {
+            let (files, ignored) = audio_files(&dropped);
+            let count = files.len();
+            if let Some(first) = self.import_sounds(&files) {
+                self.sounds_view.selected = Some(first);
+            }
+            let message = match (count, ignored) {
+                (0, _) => (false, "Aucun son reconnu (WAV, AIFF, FLAC, MP3, OGG, M4A)".to_string()),
+                (n, 0) => (true, format!("{n} son(s) ajouté(s)")),
+                (n, i) => (true, format!("{n} son(s) ajouté(s), {i} fichier(s) ignoré(s)")),
+            };
+            self.command_line.feedback = Some(message);
+        }
+        let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
         let (positions, peaks) = self.playback.status();
         for (shown, peak) in self.sounds_view.meter.iter_mut().zip(peaks) {
             *shown = (*shown * 0.85).max(peak);
@@ -95,6 +145,17 @@ impl FolieApp {
         let numbers: Vec<u32> = self.console.show.sounds.keys().copied().collect();
         if self.sounds_view.selected.is_none_or(|n| !numbers.contains(&n)) {
             self.sounds_view.selected = numbers.first().copied();
+        }
+        if hovering {
+            let rect = ui.available_rect_before_wrap();
+            ui.painter().rect_filled(rect, theme::RADIUS, theme::INFO.gamma_multiply(0.18));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Déposez les sons ici (fichiers ou dossiers)",
+                egui::FontId::proportional(16.0),
+                theme::TEXT,
+            );
         }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
@@ -106,7 +167,10 @@ impl FolieApp {
                 Some(number) => self.sound_editor(ui, number, positions.get(&number).copied()),
                 None => {
                     ui.add_space(20.0);
-                    ui.label(RichText::new("Aucun son. Importez des fichiers : WAV, AIFF, FLAC, MP3, OGG, M4A.").color(theme::MUTED));
+                    ui.label(
+                        RichText::new("Aucun son. Importez ou glissez ici des fichiers : WAV, AIFF, FLAC, MP3, OGG, M4A.")
+                            .color(theme::MUTED),
+                    );
                 }
             });
         });
@@ -168,7 +232,8 @@ impl FolieApp {
             }
         });
         ui.add_space(4.0);
-        if ui.button("Importer des sons…").on_hover_text("Les fichiers seront copiés à côté du show à l'enregistrement").clicked()
+        let help = "Ou glissez des fichiers (ou un dossier) sur cette fenêtre. Ils seront copiés à côté du show à l'enregistrement";
+        if ui.button("Importer des sons…").on_hover_text(help).clicked()
             && let Some(files) = rfd::FileDialog::new().add_filter("Son", &AUDIO_EXTENSIONS).pick_files()
             && let Some(first) = self.import_sounds(&files)
         {
