@@ -43,6 +43,11 @@ fn main() {
         "At 20",
         "Store Cue 3 \"Nuit\"",
         "ClearAll",
+        "Fixture 1 Thru 4 At 30",
+        "Store Preset 1.1 \"Lueur\"",
+        "At 70",
+        "Store Preset 1.2 \"Soutenu\"",
+        "ClearAll",
         "Group 2 At 100",
     ];
     for line in lines {
@@ -58,6 +63,10 @@ fn main() {
     console.execute("ClearAll").unwrap();
     console.rename_page(1, "Acte 1".into());
     console.select_executor(1);
+    // Une macro, et une cue au timecode (un timecode « reçu » défile, voir la boucle).
+    console.show.macros.insert(1, folie_show::Macro { name: "Salut".into(), lines: vec!["Go".into(), "Wait 2".into(), "Back".into()] });
+    console.set_cue_timecode(folie_show::CueNumber::whole(3), Some(3600.0)).unwrap();
+    let clock = Instant::now();
     // Des sons, joués « pour de faux » (la démo n'a pas de carte son) : durées inventées.
     let sounds = [("Pluie", 42.0, 0, None), ("Orage", 18.5, 1, None), ("Vent", 95.0, 1, Some(4)), ("Entracte", 240.0, 0, None)];
     let mut durations = std::collections::HashMap::new();
@@ -93,6 +102,7 @@ fn main() {
         playing.retain(|n, start| start.elapsed().as_secs_f64() < durations[n]);
         let positions = playing.iter().map(|(n, start)| (*n, start.elapsed().as_secs_f64())).collect();
         server.set_sounds(folie_remote::state::SoundsLive { positions, durations: durations.clone() });
+        console.timecode_tick(clock.elapsed().as_secs_f64() + 60.0);
         if last.elapsed() > Duration::from_millis(30) {
             server.publish(&console, &console.engine().snapshot(), "Démo");
             last = Instant::now();

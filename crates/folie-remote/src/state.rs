@@ -29,6 +29,26 @@ pub struct State {
     sounds: Vec<SoundView>,
     /// Le code lecture peut-il lancer les sons ?
     playback_sounds: bool,
+    presets: Vec<PresetView>,
+    macros: Vec<MacroView>,
+    /// Timecode MIDI reçu (s, au dixième), s'il en arrive.
+    timecode: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct PresetView {
+    /// Famille, comme sur la console (« Couleur »).
+    feature: &'static str,
+    /// Numéro à taper : « 4.2 ».
+    key: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MacroView {
+    number: u32,
+    name: String,
+    running: bool,
 }
 
 /// Ce que l'interface sait des sons et que la console ignore : ce qui joue, les durées.
@@ -95,6 +115,8 @@ struct ExecutorView {
     /// Transition en cours : avancement de 0 à 1.
     progress: Option<f32>,
     fixed: bool,
+    /// Temps suivi par les cues à temps TC : « son 3 », « TC » ; vide sinon.
+    follows: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,6 +134,28 @@ pub fn build(console: &Console, snapshot: &Snapshot, show_name: &str) -> State {
         })
         .collect();
     let groups = console.show.groups.iter().map(|(n, g)| GroupView { number: *n, name: g.name.clone() }).collect();
+    // Presets dans l'ordre des familles de la console (Dimmer, Position, Gobo, Couleur…).
+    let presets = folie_fixture::FeatureGroup::ALL
+        .iter()
+        .flat_map(|&feature| {
+            console.show.presets.range((feature, 0)..=(feature, u32::MAX)).map(move |(&(f, n), p)| PresetView {
+                feature: f.label(),
+                key: format!("{}.{n}", f.preset_number()),
+                name: p.name.clone(),
+            })
+        })
+        .collect();
+    let running = console.macros_in_progress();
+    let macros = console
+        .show
+        .macros
+        .iter()
+        .map(|(&number, m)| MacroView {
+            number,
+            name: m.name.clone(),
+            running: running.iter().any(|p| p.number == number),
+        })
+        .collect();
     State {
         kind: "state",
         show: show_name.to_string(),
@@ -126,6 +170,9 @@ pub fn build(console: &Console, snapshot: &Snapshot, show_name: &str) -> State {
         groups,
         sounds: Vec::new(),
         playback_sounds: false,
+        presets,
+        macros,
+        timecode: console.received_timecode().map(|t| (t * 10.0).floor() / 10.0),
     }
 }
 
@@ -146,6 +193,7 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
         flashing: status.is_some_and(|s| s.flashing),
         progress: None,
         fixed: false,
+        follows: String::new(),
     };
     if let Some((number, m)) = console.executor_macro(id) {
         let running = console.macros_in_progress().iter().any(|p| p.number == number);
@@ -176,6 +224,12 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
     };
     view.progress = status.filter(|s| s.in_transition()).map(|s| (s.elapsed / s.duration.max(f32::EPSILON)).clamp(0.0, 1.0));
     view.fader_function = x.options.fader.label();
+    if sequence.cues.values().any(|c| c.timecode.is_some()) {
+        view.follows = match sequence.follows_sound {
+            Some(n) => format!("son {n}"),
+            None => "TC".into(),
+        };
+    }
     view.value = if x.options.fader == folie_show::FaderFunction::Speed {
         format!("× {:.2}", view.level * 2.0)
     } else {

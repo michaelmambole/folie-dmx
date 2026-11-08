@@ -51,7 +51,10 @@ et seul le réseau local est accepté.
   tout arrêter, avec ce qui joue et où en est la lecture ; le code lecture n'y a droit
   que si la case « Le code lecture lance aussi les sons » est cochée. Avec le code régie :
   bouton **Blind** (et un bandeau tant qu'il est actif), **Tempo** et **Tap**, état du
-  programmer ; les faders de vitesse et de crossfade s'affichent comme sur la console. Sans l'interface :
+  programmer ; les faders de vitesse et de crossfade s'affichent comme sur la console ;
+  l'onglet Commande a aussi les presets (par famille) et les macros ; le timecode reçu
+  s'affiche à côté du nom du show, et un executor dont la séquence suit le TC ou un son
+  le dit. Sans l'interface :
   `cargo run -p folie-remote --example demo`, puis http://localhost:8090 (codes 1234 et 5678).
 - **OSC** (UDP, port 8000 par défaut, retour d'état vers le port 9000 du client) :
 

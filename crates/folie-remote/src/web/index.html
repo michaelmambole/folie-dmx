@@ -118,6 +118,8 @@ button.lit { background: var(--exec); border-color: var(--exec); color: #141518;
 .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
 .groups button { min-height: 52px; text-align: left; padding: 6px 8px; }
 .groups button small { display: block; color: var(--muted); font-size: 11px; }
+.groups button.lit small { color: #141518; }
+.family { font-size: 12px; color: var(--muted); margin: 10px 2px 6px; }
 
 #login { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 14px; padding: 24px; z-index: 10; }
@@ -214,6 +216,10 @@ body.playback .badge { display: inline-block; }
     <div class="pad" id="pad"></div>
     <h2>Groupes</h2>
     <div class="groups" id="groups"></div>
+    <h2>Presets</h2>
+    <div id="presets"></div>
+    <h2>Macros</h2>
+    <div class="groups" id="macros"></div>
   </section>
 </main>
 
@@ -436,13 +442,21 @@ function card(x, withFader) {
   c.parts.name.textContent = x.name || (x.kind === "empty" ? "" : "Séquence");
   c.parts.cue.textContent = x.now;
   c.parts.cue.classList.toggle("on", x.on);
-  c.parts.next.textContent = x.next ? "› " + x.next : "";
+  const follows = x.follows ? (x.follows === "TC" ? "suit le TC" : "suit le " + x.follows) : "";
+  c.parts.next.textContent = [x.next ? "› " + x.next : "", follows].filter(Boolean).join(" · ");
   c.parts.progress.firstChild.style.width = x.progress == null ? "0" : (x.progress * 100) + "%";
   if (withFader && !dragging.has(x.id)) {
     c.parts.fader.set(x.level);
     c.parts.value.textContent = faderValue(x, x.level);
   }
   return c;
+}
+
+// Timecode lisible : « 0:01:23.4 ».
+function timecode(t) {
+  const tenths = Math.floor(t * 10);
+  const h = Math.floor(tenths / 36000), m = Math.floor(tenths / 600) % 60, s = Math.floor(tenths / 10) % 60;
+  return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + (tenths % 10);
 }
 
 // Durée lisible : « 2:31.4 ».
@@ -489,7 +503,8 @@ function fill(container, nodes) {
 }
 
 function render() {
-  $("show").textContent = state.show;
+  // Timecode reçu : à côté du nom du show.
+  $("show").textContent = state.timecode == null ? state.show : state.show + " · TC " + timecode(state.timecode);
   $("blackout").classList.toggle("on", state.blackout);
   $("blind").classList.toggle("on", state.blind);
   document.body.classList.toggle("blind", state.blind);
@@ -528,6 +543,40 @@ function render() {
       return b;
     }));
     if (!state.groups.length) groups.append(el("div", "muted", "Aucun groupe dans le show"));
+  }
+  // Presets, rangés par famille comme sur la console.
+  const presets = $("presets");
+  const presetKey = state.presets.map((p) => p.key + p.name).join("|");
+  if (presets.dataset.key !== presetKey) {
+    presets.dataset.key = presetKey;
+    const nodes = [];
+    let family = null, box = null;
+    for (const p of state.presets) {
+      if (p.feature !== family) {
+        family = p.feature;
+        box = el("div", "groups");
+        nodes.push(el("div", "family", family), box);
+      }
+      const b = el("button", "", p.name || "Preset " + p.key);
+      b.prepend(el("small", "", "Preset " + p.key));
+      b.onclick = () => { lastCommand = true; send({ type: "command", line: "Preset " + p.key }); };
+      box.append(b);
+    }
+    if (!nodes.length) nodes.push(el("div", "muted", "Aucun preset dans le show"));
+    presets.replaceChildren(...nodes);
+  }
+  // Macros : allumées pendant qu'elles tournent.
+  const macros = $("macros");
+  const macroKey = state.macros.map((m) => m.number + m.name + m.running).join("|");
+  if (macros.dataset.key !== macroKey) {
+    macros.dataset.key = macroKey;
+    macros.replaceChildren(...state.macros.map((m) => {
+      const b = el("button", m.running ? "lit" : "", m.name || "Macro " + m.number);
+      b.prepend(el("small", "", "Macro " + m.number + (m.running ? " · en cours" : "")));
+      b.onclick = () => { lastCommand = true; send({ type: "command", line: "Macro " + m.number }); };
+      return b;
+    }));
+    if (!state.macros.length) macros.append(el("div", "muted", "Aucune macro dans le show"));
   }
 }
 

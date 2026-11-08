@@ -328,6 +328,30 @@ fn phone_sees_blind_tempo_programmer_and_fader_functions() {
     assert!((110.0..=160.0).contains(&state["tempo"].as_f64().unwrap()), "{}", state["tempo"]);
 }
 
+/// Onglet Commande : presets par famille et macros ; timecode reçu et séquence qui le suit.
+#[test]
+fn phone_sees_presets_macros_and_timecode() {
+    let mut console = console();
+    for line in ["Fixture 1 Thru 2 At 30", r#"Store Preset 1.2 "Lueur""#, "ClearAll"] {
+        console.execute(line).unwrap_or_else(|e| panic!("{line} : {e}"));
+    }
+    console.show.macros.insert(3, folie_show::Macro { name: "Salut".into(), lines: vec!["Go".into()] });
+    console.select_executor(1);
+    console.set_cue_timecode(folie_show::CueNumber::whole(2), Some(12.0)).unwrap();
+    console.timecode_tick(83.47);
+    let server = RemoteServer::start(0, "4821", "1357", || {}).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let mut ws = rt.block_on(phone(server.port(), "4821"));
+    rt.block_on(next_json(&mut ws));
+    frames(&server, &mut console, |_, _| server.clients() == 1);
+    let state = rt.block_on(next_json(&mut ws));
+    assert_eq!(state["presets"][0], json!({"feature": "Dimmer", "key": "1.2", "name": "Lueur"}));
+    assert_eq!(state["macros"][0], json!({"number": 3, "name": "Salut", "running": false}));
+    assert_eq!(state["timecode"], 83.4, "au dixième, sans arrondir vers le haut");
+    assert_eq!(state["executors"][0]["follows"], "TC", "une cue à temps TC, pas de son suivi");
+    assert_eq!(state["executors"][1]["follows"], "");
+}
+
 #[test]
 fn stopping_the_server_frees_the_port() {
     let server = RemoteServer::start(0, "1", "2", || {}).unwrap();
