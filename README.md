@@ -120,6 +120,15 @@ cue → Timecode (h:mm:ss.cc, ou « Maintenant » pour le temps reçu). Quand la
 saute, la séquence se cale sur la dernière cue passée. Un séquenceur pilote Folie
 par un port MIDI virtuel (gestionnaire IAC sur macOS, loopMIDI sous Windows).
 
+## Sons
+
+Fenêtre **Sons** (menu Fenêtres) : importer des fichiers (WAV, AIFF, FLAC, MP3, OGG,
+M4A), régler pour chacun le point d'entrée et de sortie (à la souris sur la forme
+d'onde), le volume, les fondus et la boucle, écouter, choisir la sortie audio. Les sons
+partent par les commandes `Sound 3`, `Sound 3 Off Fade 2`, `Sound Off`, par exemple dans
+le champ « Au départ » d'une cue. À l'enregistrement, ils sont copiés à côté du show
+(`concert.folie` -> dossier `concert-sons`).
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

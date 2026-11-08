@@ -42,6 +42,9 @@ struct Settings {
     /// Contrôleurs et messages MIDI.
     #[serde(default)]
     midi: folie_remote::midi::MidiSettings,
+    /// Sortie audio des sons ; vide : celle du système.
+    #[serde(default)]
+    sound_output: String,
 }
 
 /// Réglages de la sortie Art-Net.
@@ -252,6 +255,14 @@ impl Storage {
 
     pub fn sound(&self) -> SoundSettings {
         self.settings().sound
+    }
+
+    pub fn sound_output(&self) -> String {
+        self.settings().sound_output
+    }
+
+    pub fn set_sound_output(&self, device: &str) {
+        self.update_settings(|s| s.sound_output = device.to_string());
     }
 
     pub fn midi(&self) -> folie_remote::midi::MidiSettings {

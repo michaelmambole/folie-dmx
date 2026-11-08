@@ -15,6 +15,7 @@ mod monitor;
 mod ofl_online;
 mod network;
 mod playback_ui;
+mod playback_sound;
 mod pools;
 mod screens;
 mod storage;

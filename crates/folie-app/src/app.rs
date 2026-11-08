@@ -23,6 +23,7 @@ mod file;
 mod midi;
 mod remote;
 mod sound;
+mod sounds;
 mod welcome;
 mod windows;
 
@@ -157,6 +158,9 @@ pub struct FolieApp {
     /// MIDI ouvert, quand il est actif.
     pub(crate) midi: Option<folie_remote::midi::MidiServer>,
     pub(crate) midi_view: midi::MidiView,
+    /// Lecture des sons du show.
+    pub(crate) playback: crate::playback_sound::SoundPlayback,
+    pub(crate) sounds_view: sounds::SoundsView,
     /// Adresses de cet ordinateur, montrées pour la télécommande et l'OSC.
     addresses: crate::network::AddressCache,
     /// Fenêtre « À propos » ouverte.
@@ -192,6 +196,7 @@ impl FolieApp {
         let remote_settings = storage.remote();
         let osc_settings = storage.osc();
         let midi_settings = storage.midi();
+        let sound_output = storage.sound_output();
         let sound_settings = storage.sound();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
@@ -219,6 +224,13 @@ impl FolieApp {
             midi_settings,
             midi: None,
             midi_view: Default::default(),
+            // Les tests ne touchent pas à la carte son.
+            playback: if cfg!(test) {
+                crate::playback_sound::SoundPlayback::silent()
+            } else {
+                crate::playback_sound::SoundPlayback::new(sound_output)
+            },
+            sounds_view: Default::default(),
             addresses: Default::default(),
             about_open: false,
             sound_settings,
@@ -564,6 +576,7 @@ impl eframe::App for FolieApp {
 
         let ctx = ui.ctx().clone();
         self.remote_tick();
+        self.sound_playback_tick(&ctx);
         self.sound_tick();
         self.global_shortcuts(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -1467,6 +1480,87 @@ mod tests {
         midi.inject(&[0xB0, 114, 63]);
         harness.run_steps(2);
         assert_eq!(harness.state().console.page(), 1, "pas en dessous de la page 1");
+    }
+
+    /// Un WAV de `seconds` secondes (La 440, mono 16 bits, 44,1 kHz).
+    fn write_wav(path: &std::path::Path, seconds: f32) {
+        let rate = 44_100u32;
+        let count = (rate as f32 * seconds) as u32;
+        let mut wav = Vec::new();
+        let data_len = count * 2;
+        wav.extend(b"RIFF");
+        wav.extend((36 + data_len).to_le_bytes());
+        wav.extend(b"WAVEfmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(1u16.to_le_bytes());
+        wav.extend(rate.to_le_bytes());
+        wav.extend((rate * 2).to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"data");
+        wav.extend(data_len.to_le_bytes());
+        for i in 0..count {
+            let s = ((i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 12_000.0) as i16;
+            wav.extend(s.to_le_bytes());
+        }
+        std::fs::write(path, wav).unwrap();
+    }
+
+    /// Fenêtre Sons : import d'un fichier, chargement, écoute, point de sortie ; une cue
+    /// lance le son par sa commande « Au départ ».
+    #[test]
+    fn import_and_play_a_sound() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("pluie.wav");
+        write_wav(&wav, 2.0);
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.windows.open(WindowKind::Sounds);
+            assert_eq!(app.import_sounds(std::slice::from_ref(&wav)), Some(1));
+            app.sounds_view.selected = Some(1);
+        }
+        // Chargement en arrière-plan.
+        let start = std::time::Instant::now();
+        loop {
+            harness.run_steps(1);
+            let app = harness.state();
+            if matches!(app.playback.clip(&app.console.show.sounds[&1]), Some(crate::playback_sound::ClipState::Ready { .. })) {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+        harness.get_by_label("1  pluie  0:02.0"); // numéro, nom, durée dans la liste
+        harness.state_mut().console.show.sounds.get_mut(&1).unwrap().end = Some(1.5);
+        harness.get_by_label("Écouter").click();
+        harness.run_steps(2);
+        harness.get_by_label("Son 1 « pluie » lancé");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sounds.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        // Le mélangeur muet joue : 1 s plus tard, on est à 1 s ; à 1,5 s, le son s'arrête.
+        let mixer = harness.state_mut().playback.silent_mixer().unwrap();
+        assert!(mixer.is_playing(1));
+        let mut block = vec![0.0; 48_000 * 2];
+        mixer.render(&mut block, 2);
+        assert!((mixer.positions()[&1] - 1.0).abs() < 1e-6);
+        mixer.render(&mut block, 2);
+        assert!(!mixer.is_playing(1), "arrêté au point de sortie");
+
+        // Une cue lance le son.
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 50");
+        command(&mut harness, "Store Cue 1");
+        command(&mut harness, "ClearAll");
+        harness.state_mut().console.set_cue_command(folie_show::CueNumber::whole(1), "Sound 1").unwrap();
+        command(&mut harness, "Go");
+        settle(&mut harness);
+        settle(&mut harness);
+        assert!(harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "lancé par la cue");
     }
 
     #[test]
