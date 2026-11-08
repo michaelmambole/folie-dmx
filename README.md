@@ -127,7 +127,9 @@ M4A), régler pour chacun le point d'entrée et de sortie (à la souris sur la f
 d'onde), le volume, les fondus et la boucle, écouter, choisir la sortie audio. Les sons
 partent par les commandes `Sound 3`, `Sound 3 Off Fade 2`, `Sound Off`, par exemple dans
 le champ « Au départ » d'une cue. À l'enregistrement, ils sont copiés à côté du show
-(`concert.folie` -> dossier `concert-sons`).
+(`concert.folie` -> dossier `concert-sons`). Une séquence peut **suivre la lecture d'un
+son** (fenêtre Cues, « Suit ») : ses cues qui ont un temps TC partent quand la lecture
+passe ce temps (« Maintenant », pendant l'écoute, cale une cue à l'oreille).
 
 ## Réaction au son
 

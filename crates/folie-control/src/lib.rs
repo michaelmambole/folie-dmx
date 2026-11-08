@@ -204,8 +204,8 @@ pub struct Console {
     macro_ticking: bool,
     /// Cue en cours de chaque executor à l'image précédente : une cue qui part joue sa commande.
     cues_seen: HashMap<u32, Option<usize>>,
-    /// Dernier temps de timecode reçu, en secondes.
-    timecode: Option<f64>,
+    /// Dernier temps reçu de chaque source (timecode MIDI, lecture d'un son), en secondes.
+    times: HashMap<timecode::TimeSource, f64>,
     /// Sons à lancer ou arrêter, que l'interface passe à la carte son.
     sound_requests: Vec<sounds::SoundRequest>,
     /// Socket d'envoi OSC, ouverte au premier message.
@@ -231,7 +231,7 @@ impl Console {
             macro_runs: Vec::new(),
             macro_ticking: false,
             cues_seen: HashMap::new(),
-            timecode: None,
+            times: HashMap::new(),
             sound_requests: Vec::new(),
             osc_socket: None,
         }

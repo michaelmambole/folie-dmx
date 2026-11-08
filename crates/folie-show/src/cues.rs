@@ -485,6 +485,9 @@ impl Executor {
 pub struct Sequence {
     pub name: String,
     pub cues: BTreeMap<CueNumber, Cue>,
+    /// Temps suivi par les cues qui ont un temps TC : le son de ce numéro (sa position de
+    /// lecture), ou à défaut le timecode MIDI reçu.
+    pub follows_sound: Option<u32>,
 }
 
 #[cfg(test)]

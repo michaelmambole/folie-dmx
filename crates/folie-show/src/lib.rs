@@ -208,6 +208,9 @@ struct SequenceEntry {
     number: u32,
     name: String,
     cues: Vec<CueEntry>,
+    /// Son dont la lecture fait partir les cues au temps TC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    follows_sound: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -456,6 +459,7 @@ pub fn to_json(show: &Show) -> String {
         .map(|(number, sequence)| SequenceEntry {
             number: *number,
             name: sequence.name.clone(),
+            follows_sound: sequence.follows_sound,
             cues: sequence
                 .cues
                 .iter()
@@ -665,7 +669,7 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
             }
             cues.insert(number, cue);
         }
-        sequences.insert(entry.number, Sequence { name: entry.name, cues });
+        sequences.insert(entry.number, Sequence { name: entry.name, cues, follows_sound: entry.follows_sound });
     }
     let mut executors = BTreeMap::new();
     for (executor, raw) in file.executors {
@@ -952,7 +956,7 @@ mod tests {
         let mut black = Cue::new("Noir".into());
         black.stopped_effects.insert((CueNumber::whole(1), 1)); // le cercle s'arrête, la vague continue
         cues.insert("1.5".parse().unwrap(), black);
-        let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues })]);
+        let sequences = BTreeMap::from([(1, Sequence { name: "Spectacle".into(), cues, follows_sound: Some(2) })]);
         let executors = BTreeMap::from([
             (1, Executor::new(1)),
             (11, Executor { sequence: 1, mode: ExecutorMode::Flash, options: ExecutorOptions::default() }),

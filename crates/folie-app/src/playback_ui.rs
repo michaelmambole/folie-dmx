@@ -762,7 +762,7 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
     ui.horizontal(|ui| {
         let label = ui.label("Timecode");
         let edit = egui::TextEdit::singleline(&mut tc_text).hint_text("0:01:23.40").font(egui::TextStyle::Monospace).desired_width(110.0);
-        let help = "La cue part quand le timecode reçu (MTC) passe ce temps : h:mm:ss.cc, mm:ss ou secondes. Vide : pas de départ au timecode";
+        let help = "La cue part quand le temps suivi par la séquence (timecode MIDI ou lecture d'un son, voir « Suit » en haut de la fenêtre) passe ce temps : h:mm:ss.cc, mm:ss ou secondes. Vide : pas de départ au temps";
         let edit = ui.add(edit).labelled_by(label.id).on_hover_text(help);
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui.button("Valider").on_hover_text(format!("Timecode de la cue {number}")).clicked() || enter {
@@ -778,8 +778,8 @@ fn cue_menu(ui: &mut egui::Ui, console: &mut Console, number: CueNumber, cue: &C
                 }
             });
         }
-        if let Some(now) = console.received_timecode()
-            && ui.button("Maintenant").on_hover_text("Prend le timecode reçu à l'instant").clicked()
+        if let Some(now) = console.selected_sequence_time()
+            && ui.button("Maintenant").on_hover_text("Prend le temps suivi par la séquence à l'instant (timecode reçu ou lecture du son)").clicked()
         {
             tc_text = folie_show::format_timecode(now);
             action = Some(console.set_cue_timecode(number, Some(now)));
@@ -1029,9 +1029,32 @@ pub fn cues_window(ui: &mut egui::Ui, console: &mut Console, snapshot: &Snapshot
                 Some((_, sequence)) => {
                     ui.label(RichText::new(&sequence.name).family(theme::medium()).size(15.0));
                     let count = sequence.cues.len();
+                    let follows = sequence.follows_sound;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let text = format!("{count} cue{}", if count > 1 { "s" } else { "" });
                         ui.label(RichText::new(text).size(12.0).color(theme::MUTED));
+                        // Temps suivi par les cues à temps TC : timecode MIDI ou lecture d'un son.
+                        let sound_label = |n: u32| match console.show.sounds.get(&n) {
+                            Some(s) if !s.name.is_empty() => format!("son {n} « {} »", s.name),
+                            _ => format!("son {n}"),
+                        };
+                        let current = follows.map_or_else(|| "timecode MIDI".to_string(), sound_label);
+                        let mut chosen = follows;
+                        let combo = egui::ComboBox::from_id_salt("sequence_follows")
+                            .width(170.0)
+                            .selected_text(current)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut chosen, None, "timecode MIDI");
+                                for n in console.show.sounds.keys() {
+                                    ui.selectable_value(&mut chosen, Some(*n), sound_label(*n));
+                                }
+                            })
+                            .response;
+                        let label = ui.label(RichText::new("Suit").size(12.0).color(theme::MUTED));
+                        combo.labelled_by(label.id).on_hover_text("Les cues qui ont un temps TC partent quand ce temps le passe");
+                        if chosen != follows {
+                            action = Some(console.set_sequence_follows(chosen));
+                        }
                     });
                 }
                 None => {

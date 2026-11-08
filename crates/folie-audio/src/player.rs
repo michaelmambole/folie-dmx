@@ -369,6 +369,11 @@ impl Player {
         let _ = self.commands.send(command);
     }
 
+    /// Positions des sons en cours (sans toucher aux crêtes).
+    pub fn positions(&self) -> HashMap<u32, f64> {
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).positions.clone()
+    }
+
     /// Positions des sons en cours, et crêtes depuis le dernier appel (remises à zéro).
     pub fn status(&self) -> PlayerStatus {
         let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());

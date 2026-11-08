@@ -1561,6 +1561,32 @@ mod tests {
         settle(&mut harness);
         settle(&mut harness);
         assert!(harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "lancé par la cue");
+
+        // La séquence suit le son 1 : la cue 2, à 0,5 s, part quand la lecture y arrive.
+        command(&mut harness, "Fixture 1 At 80");
+        command(&mut harness, "Store Cue 2");
+        command(&mut harness, "ClearAll");
+        harness.state_mut().windows.open(WindowKind::Cues);
+        harness.run_steps(3);
+        harness.get_by_role_and_label(Role::ComboBox, "Suit").click();
+        harness.run_steps(2);
+        harness.get_by_label("son 1 « pluie »").click();
+        harness.run_steps(2);
+        let app = harness.state_mut();
+        assert_eq!(app.console.selected_sequence().unwrap().1.follows_sound, Some(1));
+        app.console.set_cue_timecode(folie_show::CueNumber::whole(2), Some(0.5)).unwrap();
+        let executor = app.console.selected_executor();
+        let mixer = app.playback.silent_mixer().unwrap();
+        mixer.apply(folie_audio::player::Command::Stop { id: 1, fade: 0.0 });
+        command(&mut harness, "Sound 1");
+        settle(&mut harness);
+        let mut block = vec![0.0; 2 * 24_000]; // 0,25 s à 48 kHz
+        for _ in 0..3 {
+            harness.state_mut().playback.silent_mixer().unwrap().render(&mut block, 2);
+            settle(&mut harness);
+        }
+        assert_eq!(harness.state().snapshot.executors.get(&executor).and_then(|s| s.cue), Some(1), "cue 2 partie à 0,5 s");
+        harness.get_by_label("Son 1 0:00:00.50 : cue 2 (executor 1)");
     }
 
     #[test]

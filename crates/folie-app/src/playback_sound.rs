@@ -208,6 +208,15 @@ impl SoundPlayback {
         self.send(Command::Gain { id: number, gain_db });
     }
 
+    /// Sons en cours -> position dans le fichier (s).
+    pub fn positions(&self) -> HashMap<u32, f64> {
+        match &self.output {
+            Some(Output::Device(player)) => player.positions(),
+            Some(Output::Silent(mixer)) => mixer.positions(),
+            None => HashMap::new(),
+        }
+    }
+
     /// Sons en cours -> position dans le fichier (s), et crêtes de sortie.
     pub fn status(&mut self) -> (HashMap<u32, f64>, [f32; 2]) {
         match &mut self.output {

@@ -350,7 +350,7 @@ impl Console {
             Some(x) => x.sequence,
             None => {
                 let n = (1..).find(|n| !self.show.sequences.contains_key(n)).unwrap_or(executor);
-                self.show.sequences.insert(n, Sequence { name: format!("Séquence {n}"), cues: BTreeMap::new() });
+                self.show.sequences.insert(n, Sequence { name: format!("Séquence {n}"), ..Default::default() });
                 self.show.executors.insert(executor, Executor::new(n));
                 n
             }

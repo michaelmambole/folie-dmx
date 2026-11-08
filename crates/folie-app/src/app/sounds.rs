@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, Sense, Stroke};
+use folie_control::timecode::TimeSource;
 use folie_show::media::Sound;
 
 use super::FolieApp;
@@ -18,6 +19,8 @@ pub struct SoundsView {
     devices: Option<Vec<String>>,
     /// Crêtes affichées, qui retombent doucement.
     meter: [f32; 2],
+    /// Sons en lecture à l'image précédente.
+    playing: Vec<u32>,
 }
 
 /// Durée lisible : « 2:31.4 ».
@@ -40,6 +43,19 @@ impl FolieApp {
             self.playback.sync(&self.console.show.sounds);
             ctx.request_repaint_after(Duration::from_millis(40));
         }
+        // La lecture des sons fait partir les cues des séquences qui les suivent.
+        let positions = self.playback.positions();
+        for number in std::mem::take(&mut self.sounds_view.playing) {
+            if !positions.contains_key(&number) {
+                self.console.forget_time(TimeSource::Sound(number));
+            }
+        }
+        for (&number, &position) in &positions {
+            for outcome in self.console.time_tick(TimeSource::Sound(number), position) {
+                self.command_line.feedback = Some((true, outcome.message));
+            }
+        }
+        self.sounds_view.playing = positions.keys().copied().collect();
     }
 
     /// Une commande des boutons de la fenêtre, annoncée comme à la ligne de commande.
