@@ -13,6 +13,7 @@ pub mod effects;
 pub mod gels;
 pub mod macros;
 pub mod osc_out;
+pub mod sounds;
 pub mod timecode;
 pub mod tracking;
 
@@ -205,6 +206,8 @@ pub struct Console {
     cues_seen: HashMap<u32, Option<usize>>,
     /// Dernier temps de timecode reçu, en secondes.
     timecode: Option<f64>,
+    /// Sons à lancer ou arrêter, que l'interface passe à la carte son.
+    sound_requests: Vec<sounds::SoundRequest>,
     /// Socket d'envoi OSC, ouverte au premier message.
     osc_socket: Option<std::net::UdpSocket>,
 }
@@ -229,6 +232,7 @@ impl Console {
             macro_ticking: false,
             cues_seen: HashMap::new(),
             timecode: None,
+            sound_requests: Vec::new(),
             osc_socket: None,
         }
     }
@@ -525,6 +529,7 @@ impl Console {
             Command::Macro(number) => self.run_macro(number),
             Command::Wait(_) => invalid("Wait ne s'utilise que dans une macro"),
             Command::Osc { destination, address, args } => self.send_osc(&destination, &address, &args),
+            Command::Sound { number, stop } => self.sound_command(number, stop),
             Command::Label { object: Object::Cue(Some(number)), name } => self.label_cue(number, name),
             Command::Delete(Object::Cue(Some(number))) => self.delete_cue(number),
             Command::Label { object, name } => self.label(object, name),

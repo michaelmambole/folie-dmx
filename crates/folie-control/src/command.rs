@@ -14,6 +14,7 @@
 //! Fixture 2 Release             Assert Executor 3
 //! Osc "Reaper" "/play"           Osc "Reaper" "/marker" 3
 //! Blind   Blind Off
+//! Sound 3   Sound 3 Off   Sound 3 Off Fade 2   Sound Off
 //! ```
 //!
 //! Les mots-clés sont insensibles à la casse et s'abrègent tant qu'il n'y a
@@ -61,6 +62,7 @@ pub enum Keyword {
     Wait,
     Osc,
     Blind,
+    Sound,
 }
 
 /// Abréviations d'usage qui l'emportent sur la règle du préfixe unique.
@@ -76,7 +78,7 @@ pub(crate) const ALIASES: [(&str, Keyword); 8] = [
     ("o", Keyword::Off),
 ];
 
-pub(crate) const KEYWORDS: [(&str, Keyword); 32] = [
+pub(crate) const KEYWORDS: [(&str, Keyword); 33] = [
     ("fixture", Keyword::Fixture),
     ("group", Keyword::Group),
     ("preset", Keyword::Preset),
@@ -109,6 +111,7 @@ pub(crate) const KEYWORDS: [(&str, Keyword); 32] = [
     ("wait", Keyword::Wait),
     ("osc", Keyword::Osc),
     ("blind", Keyword::Blind),
+    ("sound", Keyword::Sound),
 ];
 
 impl Keyword {
@@ -146,6 +149,7 @@ impl Keyword {
             Self::Wait => "Wait",
             Self::Osc => "Osc",
             Self::Blind => "Blind",
+            Self::Sound => "Sound",
         }
     }
 
@@ -321,6 +325,8 @@ pub enum Command {
     Wait(f32),
     /// `Osc "Reaper" "/marker" 3` : message OSC vers une destination nommée du show.
     Osc { destination: String, address: String, args: Vec<OscArg> },
+    /// `Sound 3` : lance le son 3 ; `Sound 3 Off Fade 2` l'arrête ; `Sound Off` : tous.
+    Sound { number: Option<u32>, stop: Option<f32> },
 }
 
 struct Parser {
@@ -605,6 +611,22 @@ impl Parser {
                 self.position += 1;
                 Command::Macro(self.integer("numéro de macro")?)
             }
+            Some(Token::Keyword(Keyword::Sound)) => {
+                self.position += 1;
+                let number = match self.peek() {
+                    Some(Token::Number(_)) => Some(self.integer("numéro de son")?),
+                    _ => None,
+                };
+                let stop = if self.eat(Keyword::Off) {
+                    Some(if self.eat(Keyword::Fade) { self.seconds()? } else { 0.0 })
+                } else {
+                    None
+                };
+                if number.is_none() && stop.is_none() {
+                    return Err(SyntaxError("Sound <numéro>, Sound <numéro> Off ou Sound Off attendu".into()));
+                }
+                Command::Sound { number, stop }
+            }
             Some(Token::Keyword(Keyword::Wait)) => {
                 self.position += 1;
                 Command::Wait(self.seconds()?)
@@ -845,6 +867,11 @@ mod tests {
     #[test]
     fn macros() {
         assert_eq!(parse("Macro 2"), Ok(Command::Macro(2)));
+        assert_eq!(parse("Sound 3"), Ok(Command::Sound { number: Some(3), stop: None }));
+        assert_eq!(parse("so 3 off fade 2.5"), Ok(Command::Sound { number: Some(3), stop: Some(2.5) }));
+        assert_eq!(parse("Sound 3 Off"), Ok(Command::Sound { number: Some(3), stop: Some(0.0) }));
+        assert_eq!(parse("Sound Off Fade 4"), Ok(Command::Sound { number: None, stop: Some(4.0) }));
+        assert!(parse("Sound").unwrap_err().0.contains("Sound <numéro>"));
         assert_eq!(parse("ma 12"), Ok(Command::Macro(12)));
         assert_eq!(parse("Wait 2.5"), Ok(Command::Wait(2.5)));
         assert_eq!(

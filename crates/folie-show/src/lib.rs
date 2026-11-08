@@ -10,6 +10,7 @@
 pub mod cues;
 pub mod sound;
 pub mod effects;
+pub mod media;
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -81,6 +82,8 @@ pub struct Show {
     pub osc_destinations: BTreeMap<String, String>,
     /// Réaction au son : tempo suivi, executors qui réagissent.
     pub sound: sound::SoundSetup,
+    /// Sons à jouer, par numéro.
+    pub sounds: BTreeMap<u32, media::Sound>,
 }
 
 /// Une macro : des lignes de commande jouées dans l'ordre ; `Wait 2` attend 2 secondes.
@@ -116,6 +119,7 @@ impl Default for Show {
             macros: BTreeMap::new(),
             macro_executors: BTreeMap::new(),
             osc_destinations: BTreeMap::new(),
+            sounds: BTreeMap::new(),
             sound: sound::SoundSetup::default(),
         }
     }
@@ -184,6 +188,9 @@ struct ShowFile {
     osc_destinations: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "sound::SoundSetup::is_empty")]
     sound: sound::SoundSetup,
+    /// Numéro -> son ; chemins relatifs au dossier du show quand ils y sont.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sounds: BTreeMap<String, media::Sound>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -517,6 +524,7 @@ pub fn to_json(show: &Show) -> String {
         macros: show.macros.iter().map(|(n, m)| (n.to_string(), m.clone())).collect(),
         macro_executors: show.macro_executors.iter().map(|(e, m)| (e.to_string(), *m)).collect(),
         osc_destinations: show.osc_destinations.clone(),
+        sounds: show.sounds.iter().map(|(n, s)| (n.to_string(), s.clone())).collect(),
         sound: show.sound.clone(),
     };
     serde_json::to_string_pretty(&file).expect("un show se sérialise toujours")
@@ -732,6 +740,15 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
 
     let tempo = file.tempo.clamp(1.0, 999.0);
     let osc_destinations = file.osc_destinations;
+    let mut sounds = BTreeMap::new();
+    for (number, sound) in file.sounds {
+        match number.parse::<u32>() {
+            Ok(n) if n > 0 => {
+                sounds.insert(n, sound);
+            }
+            _ => warnings.push(format!("son « {number} » : numéro invalide, ignoré")),
+        }
+    }
     let sound = file.sound;
     let show = Show {
         patch,
@@ -746,6 +763,7 @@ pub fn from_json(json: &str, library: &Library) -> Result<Loaded, ShowError> {
         macros,
         macro_executors,
         osc_destinations,
+        sounds,
         sound,
     };
     Ok(Loaded { show, warnings })
@@ -804,8 +822,14 @@ pub fn save(show: &Show, path: &Path) -> Result<(), ShowError> {
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
 
+    // Sons rangés à côté du show : chemins relatifs, pour que tout se déplace ensemble.
+    let dir = path.parent();
+    let mut written = show.clone();
+    for sound in written.sounds.values_mut() {
+        sound.file = media::relative(&sound.file, dir);
+    }
     let mut file = std::fs::File::create(&tmp).map_err(io)?;
-    file.write_all(to_json(show).as_bytes()).map_err(io)?;
+    file.write_all(to_json(&written).as_bytes()).map_err(io)?;
     file.sync_all().map_err(io)?;
     drop(file);
     std::fs::rename(&tmp, path).map_err(io)
@@ -814,12 +838,59 @@ pub fn save(show: &Show, path: &Path) -> Result<(), ShowError> {
 pub fn load(path: &Path, library: &Library) -> Result<Loaded, ShowError> {
     let json = std::fs::read_to_string(path)
         .map_err(|source| ShowError::Io { path: path.to_path_buf(), source })?;
-    from_json(&json, library)
+    let mut loaded = from_json(&json, library)?;
+    let dir = path.parent();
+    for (number, sound) in loaded.show.sounds.iter_mut() {
+        sound.file = media::absolute(&sound.file, dir);
+        if !sound.file.is_file() {
+            loaded.warnings.push(format!("son {number} « {} » : fichier introuvable ({})", sound.name, sound.file.display()));
+        }
+    }
+    Ok(loaded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un son pris n'importe où : copié à côté du show, chemin relatif dans le fichier,
+    /// retrouvé quand on déplace le dossier du show.
+    #[test]
+    fn sounds_travel_with_the_show() {
+        let root = std::env::temp_dir().join(format!("folie-media-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (elsewhere, tour) = (root.join("ailleurs"), root.join("tournee"));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir_all(&tour).unwrap();
+        std::fs::write(elsewhere.join("pluie.wav"), b"RIFF son 1").unwrap();
+        let other = root.join("autre");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("pluie.wav"), b"RIFF son 2, autre contenu").unwrap();
+
+        let mut show = Show::default();
+        show.sounds.insert(1, media::Sound { gain_db: -3.0, ..media::Sound::from_file(&elsewhere.join("pluie.wav")) });
+        show.sounds.insert(2, media::Sound::from_file(&other.join("pluie.wav")));
+        show.sounds.insert(3, media::Sound::from_file(&root.join("absent.wav")));
+        let path = tour.join("concert.folie");
+        let problems = media::gather(&mut show.sounds, &path);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("son 3"));
+        assert_eq!(show.sounds[&1].file, tour.join("concert-sons/pluie.wav"));
+        assert_eq!(show.sounds[&2].file, tour.join("concert-sons/pluie 2.wav"), "même nom, autre contenu");
+        assert!(show.sounds[&1].file.is_file() && elsewhere.join("pluie.wav").is_file(), "copié, pas déplacé");
+        save(&show, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"concert-sons/pluie.wav\""), "relatif dans le fichier");
+
+        // Le dossier part en tournée ailleurs : les sons suivent.
+        let moved = root.join("ailleurs-encore");
+        std::fs::rename(&tour, &moved).unwrap();
+        let loaded = load(&moved.join("concert.folie"), &library()).unwrap();
+        assert_eq!(loaded.show.sounds[&1].file, moved.join("concert-sons/pluie.wav"));
+        assert_eq!(loaded.show.sounds[&1].gain_db, -3.0);
+        assert!(loaded.warnings.iter().any(|w| w.contains("son 3")), "{:?}", loaded.warnings);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn library() -> Library {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../library"));
@@ -956,6 +1027,19 @@ mod tests {
             macros,
             macro_executors,
             osc_destinations,
+            sounds: BTreeMap::from([(
+                2,
+                media::Sound {
+                    name: "Pluie".into(),
+                    file: "/sons/pluie.wav".into(),
+                    start: 1.5,
+                    end: Some(30.0),
+                    gain_db: -6.0,
+                    fade_in: 2.0,
+                    fade_out: 3.0,
+                    looped: true,
+                },
+            )]),
             sound: sound::SoundSetup {
                 tempo: true,
                 reactions: vec![
@@ -986,7 +1070,9 @@ mod tests {
 
         save(&show, &path).unwrap();
         let loaded = load(&path, &library).unwrap();
-        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        // Seul avertissement : le son de l'exemple n'existe pas sur le disque.
+        assert_eq!(loaded.warnings, ["son 2 « Pluie » : fichier introuvable (/sons/pluie.wav)"]);
+        assert_eq!(loaded.show.sounds, show.sounds, "réglages des sons relus");
         assert_eq!(summary(&loaded.show), summary(&show));
         assert_eq!(loaded.show.patch.fixtures()[2].mode().name, "Individual");
         assert_eq!(loaded.show.groups, show.groups);

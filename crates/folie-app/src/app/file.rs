@@ -149,9 +149,14 @@ impl FolieApp {
         if path.extension().is_none() {
             path.set_extension(folie_show::EXTENSION);
         }
+        // Les sons sont copiés à côté du show, et le show en mémoire pointe sur ces copies.
+        let problems = folie_show::media::gather(&mut self.console.show.sounds, &path);
         let show = self.current_show();
         match folie_show::save(&show, &path) {
             Ok(()) => {
+                if !problems.is_empty() {
+                    self.file.report = Some(("Enregistré, mais des sons manquent".into(), problems));
+                }
                 self.file.saved = Some(show);
                 self.file.storage.set_last_show(Some(&path));
                 self.file.clear_autosave();
