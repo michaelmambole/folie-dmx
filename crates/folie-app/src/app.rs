@@ -1562,6 +1562,30 @@ mod tests {
         settle(&mut harness);
         assert!(harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "lancé par la cue");
 
+        // Retour du volume à 0 dB : bouton, puis double-clic sur le curseur.
+        harness.state_mut().console.show.sounds.get_mut(&1).unwrap().gain_db = -12.0;
+        harness.run_steps(2);
+        harness.get_by_label("0 dB").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.sounds[&1].gain_db, 0.0);
+        harness.state_mut().console.show.sounds.get_mut(&1).unwrap().gain_db = -12.0;
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::Slider, "Volume").click_modifiers(egui::Modifiers::ALT);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.sounds[&1].gain_db, 0.0, "Option-clic sur le volume");
+        harness.state_mut().console.show.sounds.get_mut(&1).unwrap().gain_db = -12.0;
+        harness.run_steps(2);
+        // Les deux clics dans la même image (le harnais espace sinon ses événements de 0,25 s).
+        let pos = harness.get_by_role_and_label(Role::Slider, "Volume").rect().center();
+        harness.hover_at(pos);
+        harness.run_steps(1);
+        for pressed in [true, false, true, false] {
+            let click = egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            harness.input_mut().events.push(click);
+        }
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.sounds[&1].gain_db, 0.0, "double-clic sur le volume");
+
         // La séquence suit le son 1 : la cue 2, à 0,5 s, part quand la lecture y arrive.
         command(&mut harness, "Fixture 1 At 80");
         command(&mut harness, "Store Cue 2");

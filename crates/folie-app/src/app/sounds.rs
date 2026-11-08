@@ -297,7 +297,24 @@ impl FolieApp {
             }
             ui.end_row();
             let label = ui.label("Volume");
-            ui.add(egui::Slider::new(&mut edited.gain_db, -60.0..=12.0).suffix(" dB").max_decimals(1)).labelled_by(label.id);
+            ui.horizontal(|ui| {
+                let response = ui
+                    .add(egui::Slider::new(&mut edited.gain_db, -60.0..=12.0).suffix(" dB").max_decimals(1))
+                    .labelled_by(label.id)
+                    .on_hover_text("Option-clic ou double-clic : retour à 0 dB");
+                // Retour à 0 dB comme sur un fader de console : double-clic ou Option-clic,
+                // et un cran à 0 dB quand on glisse.
+                // Le curseur d'egui ne capte que le glissé : le double-clic se lit sur le pointeur.
+                let (alt, double) = ui.input(|i| (i.modifiers.alt, i.pointer.button_double_clicked(egui::PointerButton::Primary)));
+                let reset = (double && response.hovered()) || (alt && (response.changed() || response.dragged()));
+                let detent = response.dragged() && edited.gain_db.abs() < 0.75;
+                if reset || detent {
+                    edited.gain_db = 0.0;
+                }
+                if ui.add_enabled(edited.gain_db != 0.0, egui::Button::new("0 dB").small()).on_hover_text("Volume d'origine du fichier").clicked() {
+                    edited.gain_db = 0.0;
+                }
+            });
             ui.checkbox(&mut edited.looped, "En boucle");
             ui.label("");
             ui.end_row();
