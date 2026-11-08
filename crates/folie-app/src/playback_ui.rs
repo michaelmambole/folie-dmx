@@ -1156,28 +1156,55 @@ fn page_selector(ui: &mut egui::Ui, console: &mut Console) -> Action {
 }
 
 /// GO principal : Go et Back de l'executor sélectionné (Espace au clavier), avec son
-/// nom en jaune pour savoir ce que la touche va lancer. Dans une mise en page de
-/// droite à gauche : le GO vient en premier, au bord.
-fn main_go(ui: &mut egui::Ui, console: &mut Console) -> Action {
+/// numéro en jaune pour savoir ce que la touche va lancer. Se lit dans l'ordre de la
+/// mise en page : « Exec 2 · nom · Back · GO », le GO toujours au bord de fin.
+/// `with_name` : le nom de la séquence à côté ; sinon il passe dans l'infobulle.
+pub fn main_go(ui: &mut egui::Ui, console: &mut Console, with_name: bool) -> Action {
+    #[derive(Clone, Copy)]
+    enum Piece {
+        Label,
+        Name,
+        Back,
+        Go,
+    }
     let executor = console.selected_executor();
     let label = executor_label(executor);
-    let mut action = None;
-    let go = egui::Button::new(RichText::new("GO").family(theme::medium()).size(15.0).color(Color32::from_rgb(10, 40, 30)))
-        .fill(theme::GO)
-        .min_size(egui::vec2(72.0, 26.0));
-    if ui.add(go).on_hover_text(format!("GO principal : executor {label} (Espace)")).clicked() {
-        action = Some(console.press(executor));
-    }
-    if ui.button("Back").on_hover_text(format!("GO principal : Back executor {label}")).clicked() {
-        action = Some(console.back(Some(executor)));
-    }
     let name = console
         .executor(executor)
         .map(|(_, s)| s.name.clone())
         .or_else(|| console.executor_macro(executor).map(|(_, m)| m.name.clone()))
         .unwrap_or_else(|| "vide".into());
-    ui.label(RichText::new(name).size(12.0).color(theme::MUTED));
-    ui.label(RichText::new(format!("Exec {label}")).family(theme::medium()).color(theme::SELECTION));
+    let mut pieces = vec![Piece::Label, Piece::Name, Piece::Back, Piece::Go];
+    if !with_name {
+        pieces.remove(1);
+    }
+    if ui.layout().prefer_right_to_left() {
+        pieces.reverse();
+    }
+    let mut action = None;
+    for piece in pieces {
+        match piece {
+            Piece::Label => {
+                let text = RichText::new(format!("Exec {label}")).family(theme::medium()).color(theme::SELECTION);
+                ui.label(text).on_hover_text(format!("Executor du GO principal : {label} « {name} »"));
+            }
+            Piece::Name => {
+                ui.label(RichText::new(&name).size(12.0).color(theme::MUTED));
+            }
+            Piece::Back => {
+                if ui.button("Back").on_hover_text(format!("GO principal : Back executor {label}")).clicked() {
+                    action = Some(console.back(Some(executor)));
+                }
+            }
+            Piece::Go => {
+                let text = RichText::new("GO").family(theme::medium()).size(15.0).color(Color32::from_rgb(10, 40, 30));
+                let go = egui::Button::new(text).fill(theme::GO).min_size(egui::vec2(72.0, 26.0));
+                if ui.add(go).on_hover_text(format!("GO principal : executor {label} (Espace)")).clicked() {
+                    action = Some(console.press(executor));
+                }
+            }
+        }
+    }
     action
 }
 
@@ -1206,7 +1233,7 @@ pub fn executors_window(
         keep(page_selector(ui, console));
         let hint = if *store_armed { "Choisissez l'executor où enregistrer" } else { "Clic droit sur un numéro : mode, options, fixer, nom" };
         ui.add(egui::Label::new(RichText::new(hint).size(12.0).color(theme::MUTED)).truncate());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| keep(main_go(ui, console)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| keep(main_go(ui, console, true)));
     });
     ui.add_space(4.0);
 

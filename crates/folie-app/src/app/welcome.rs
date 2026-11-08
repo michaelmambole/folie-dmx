@@ -9,7 +9,8 @@ use crate::theme;
 use crate::workspace::WindowKind;
 
 /// Touches de la console, hors fenêtres.
-const KEYS: [(&str, &str); 5] = [
+const KEYS: [(&str, &str); 6] = [
+    ("Espace", "GO de l'executor sélectionné"),
     ("S", "Store"),
     ("B", "Blackout"),
     ("R", "Relâcher la sélection"),

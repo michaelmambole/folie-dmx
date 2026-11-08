@@ -455,6 +455,11 @@ impl FolieApp {
         if ui.add(button).on_hover_text(help).clicked() {
             self.toggle_blackout();
         }
+        // GO principal, sur l'executor sélectionné (Espace).
+        ui.separator();
+        if let Some(result) = crate::playback_ui::main_go(ui, &mut self.console, false) {
+            self.command_line.report(result);
+        }
     }
 
     /// Sortie choisie, en pastille : un clic ouvre la liste des interfaces.
@@ -1172,7 +1177,7 @@ mod tests {
             let mut harness = harness_with(Storage::disabled(), Workspace::default(), egui::vec2(width, 700.0));
             harness.run_steps(3);
             let rect = |label: &str| harness.get_by_label(label).rect();
-            let keys = ["STORE", "CLEAR", "BLIND", "BLACKOUT"].map(rect);
+            let keys = ["STORE", "CLEAR", "BLIND", "BLACKOUT", "GO", "Exec 1"].map(rect);
             for other in ["Fichier", "Fenêtres", "Télécommande", "Virtuelle"] {
                 let other = rect(other);
                 for key in keys {
@@ -2623,7 +2628,8 @@ mod tests {
         harness.get_all(By::new().role(Role::Button).label("2")).find(|n| n.rect().min.y > 800.0).unwrap().click();
         harness.run_steps(2);
         assert_eq!(harness.state().console.selected_executor(), 2);
-        harness.get_by_label("Exec 2"); // le GO principal dit ce qu'il va lancer
+        // Le GO principal, dans la barre du haut et dans la fenêtre, dit ce qu'il va lancer.
+        assert_eq!(harness.get_all_by_label("Exec 2").count(), 2);
         harness.key_press(egui::Key::Space);
         settle(&mut harness);
         assert!(harness.state().snapshot.executors[&2].cue.is_some(), "Espace : Go sur l'executor 2");
@@ -2635,17 +2641,23 @@ mod tests {
         }
         // Le bouton GO fait de même ; son Back est celui de l'executor sélectionné.
         let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
-        harness.get(described("GO principal : Back executor 2"));
+        assert_eq!(harness.get_all(described("GO principal : Back executor 2")).count(), 2);
         command(&mut harness, "Off Executor 2");
-        harness.get(By::new().role(Role::Button).label("GO")).click();
+        let go_keys = |h: &Harness<'_, FolieApp>| h.get_all(By::new().role(Role::Button).label("GO")).map(|n| n.rect()).collect::<Vec<_>>();
+        assert!(go_keys(&harness).iter().any(|r| r.max.y < 80.0), "GO dans la barre du haut");
+        harness.get_all(By::new().role(Role::Button).label("GO")).find(|n| n.rect().min.y > 800.0).unwrap().click();
         settle(&mut harness);
-        assert!(harness.state().snapshot.executors[&2].cue.is_some(), "bouton GO principal");
+        assert!(harness.state().snapshot.executors[&2].cue.is_some(), "bouton GO de la fenêtre");
+        command(&mut harness, "Off Executor 2");
+        harness.get_all(By::new().role(Role::Button).label("GO")).find(|n| n.rect().max.y < 80.0).unwrap().click();
+        settle(&mut harness);
+        assert!(harness.state().snapshot.executors[&2].cue.is_some(), "bouton GO de la barre du haut");
         // La commande « Executor 11 » change l'executor du GO principal (utilisable dans
         // une macro) ; « Go » tout court part sur lui.
         command(&mut harness, "Off Executor 2");
         command(&mut harness, "Executor 11");
         assert_eq!(harness.state().console.selected_executor(), 11);
-        harness.get_by_label("Exec 11");
+        assert_eq!(harness.get_all_by_label("Exec 11").count(), 2);
         // Pendant la saisie d'une commande, Espace reste une espace.
         harness.get_by_role_and_label(Role::TextInput, "Commande").focus();
         harness.run_steps(1);
