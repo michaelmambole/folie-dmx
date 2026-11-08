@@ -73,6 +73,31 @@ fn duration_text(seconds: f64) -> String {
     format!("{}:{:02}.{}", tenths / 600, (tenths / 10) % 60, tenths % 10)
 }
 
+/// Paire de sorties lisible : 0 -> « 1-2 », 1 -> « 3-4 ».
+fn pair_label(pair: u32) -> String {
+    format!("{}-{}", pair * 2 + 1, pair * 2 + 2)
+}
+
+/// Choix d'une paire parmi les `channels` sorties d'une carte. Rend vrai si elle change.
+fn pair_combo(ui: &mut egui::Ui, id: &str, pair: &mut u32, channels: usize, label: egui::Id) -> bool {
+    let pairs = (channels / 2).max(1) as u32;
+    let mut chosen = *pair;
+    let text = if *pair < pairs { pair_label(*pair) } else { format!("{} (absente)", pair_label(*pair)) };
+    egui::ComboBox::from_id_salt(id)
+        .width(90.0)
+        .selected_text(text)
+        .show_ui(ui, |ui| {
+            for p in 0..pairs {
+                ui.selectable_value(&mut chosen, p, pair_label(p));
+            }
+        })
+        .response
+        .labelled_by(label);
+    let changed = chosen != *pair;
+    *pair = chosen;
+    changed
+}
+
 /// Fichiers audio reconnus, pour le sélecteur et le glisser-déposer.
 const AUDIO_EXTENSIONS: [&str; 9] = ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "aac", "mp4"];
 
@@ -272,7 +297,8 @@ impl FolieApp {
             }
             meter(ui, self.sounds_view.meter);
             if let Some(name) = self.playback.device_name() {
-                ui.label(RichText::new(format!("ouverte : {name}")).size(11.0).color(theme::MUTED));
+                let text = format!("ouverte : {name} ({} sorties)", self.playback.channels());
+                ui.label(RichText::new(text).size(11.0).color(theme::MUTED));
             }
         });
         ui.horizontal(|ui| {
@@ -295,12 +321,29 @@ impl FolieApp {
                 self.playback.set_preview_device(chosen);
                 self.file.storage.set_sound_preview_output(&self.playback.preview.device);
             }
+            // Carte à plus de deux sorties : la paire du casque.
+            let channels = self.playback.preview_channels();
+            if channels > 2 || self.playback.preview.pair != 0 {
+                let label = ui.label("sorties");
+                let mut pair = self.playback.preview.pair;
+                if pair_combo(ui, "sound_preview_pair", &mut pair, channels, label.id) {
+                    self.playback.set_preview_pair(pair);
+                    self.file.storage.set_sound_preview_pair(pair);
+                }
+            }
+            let pair = self.playback.preview.pair;
+            let salle_uses = |n: u32| self.console.show.sounds.values().any(|s| s.pair == n);
             match self.playback.preview_device_name() {
-                Some(name) if name == self.playback.device_name().unwrap_or_default() && !self.playback.silent_output() => {
-                    ui.label(RichText::new("même sortie que la salle : la salle entendra").size(11.0).color(theme::EXECUTOR));
+                Some(_) if self.playback.preview_shares_output() && (pair == 0 || salle_uses(pair)) => {
+                    let text = format!("mêmes sorties ({}) que des sons de la salle : la salle entendra", pair_label(pair));
+                    ui.label(RichText::new(text).size(11.0).color(theme::EXECUTOR));
+                }
+                Some(_) if self.playback.preview_shares_output() => {
+                    let text = format!("sur la carte de la salle, sorties {}", pair_label(pair));
+                    ui.label(RichText::new(text).size(11.0).color(theme::MUTED));
                 }
                 Some(name) => {
-                    ui.label(RichText::new(format!("ouverte : {name}")).size(11.0).color(theme::MUTED));
+                    ui.label(RichText::new(format!("ouverte : {name} ({channels} sorties)")).size(11.0).color(theme::MUTED));
                 }
                 None => {
                     ui.label(RichText::new("sans pré-écoute, « Écouter » joue en salle").size(11.0).color(theme::MUTED));
@@ -505,6 +548,17 @@ impl FolieApp {
                 ui.label(RichText::new(format!("coupe {others} autre(s) son(s)")).size(11.0).color(theme::MUTED));
             }
             ui.end_row();
+            // Carte à plus de deux sorties : où part ce son.
+            let channels = self.playback.channels();
+            if channels > 2 || edited.pair != 0 {
+                let label = ui.label("Sorties");
+                pair_combo(ui, "sound_pair", &mut edited.pair, channels, label.id);
+                let shared = self.playback.preview_shares_output() && self.playback.preview.pair == edited.pair;
+                if shared {
+                    ui.label(RichText::new("ce sont aussi celles de la pré-écoute").size(11.0).color(theme::EXECUTOR));
+                }
+                ui.end_row();
+            }
         });
         if edited.end.is_some_and(|e| e <= edited.start) {
             edited.end = None;

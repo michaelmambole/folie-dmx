@@ -25,6 +25,8 @@ pub struct Sound {
     /// Groupe d'exclusion, comme sur un sampleur : un son qui part coupe ceux de son
     /// groupe. 0 : aucun.
     pub group: u32,
+    /// Paire de sorties de la carte son : 0 pour 1-2, 1 pour 3-4…
+    pub pair: u32,
 }
 
 impl Default for Sound {
@@ -39,6 +41,7 @@ impl Default for Sound {
             fade_out: 0.0,
             looped: false,
             group: 0,
+            pair: 0,
         }
     }
 }

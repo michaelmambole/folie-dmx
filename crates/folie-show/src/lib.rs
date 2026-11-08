@@ -1043,6 +1043,7 @@ mod tests {
                     fade_out: 3.0,
                     looped: true,
                     group: 4,
+                    pair: 2,
                 },
             )]),
             sound: sound::SoundSetup {

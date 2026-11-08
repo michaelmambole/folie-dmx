@@ -136,13 +136,19 @@ pub struct PlaySettings {
     pub fade_in: f32,
     pub fade_out: f32,
     pub looped: bool,
+    /// Paire de sorties : 0 pour 1-2, 1 pour 3-4… Absente de la carte : rien ne sort.
+    pub pair: usize,
 }
 
 impl Default for PlaySettings {
     fn default() -> Self {
-        Self { start: 0.0, end: None, gain_db: 0.0, fade_in: 0.0, fade_out: 0.0, looped: false }
+        Self { start: 0.0, end: None, gain_db: 0.0, fade_in: 0.0, fade_out: 0.0, looped: false, pair: 0 }
     }
 }
+
+/// Bit des numéros de pré-écoute : un son pré-écouté dans le même mélangeur que la salle
+/// porte `PREVIEW | numéro`, si bien que `StopAll` et la salle ne le touchent pas.
+pub const PREVIEW: u32 = 1 << 31;
 
 pub fn db_to_gain(db: f32) -> f32 {
     if db <= -80.0 { 0.0 } else { 10f32.powf(db / 20.0) }
@@ -154,7 +160,10 @@ pub enum Command {
     Play { id: u32, clip: Clip, settings: PlaySettings },
     /// Arrête un son, en fondu de `fade` secondes (0 : net).
     Stop { id: u32, fade: f32 },
+    /// Arrête tous les sons de la salle (pas la pré-écoute).
     StopAll { fade: f32 },
+    /// Arrête la pré-écoute (les sons marqués [`PREVIEW`]).
+    StopPreview { fade: f32 },
     /// Change le volume d'un son en cours.
     Gain { id: u32, gain_db: f32 },
     /// Les sons ont changé de numéro (ancien -> nouveau) : ceux en cours suivent.
@@ -176,6 +185,7 @@ struct Voice {
     fade_out: usize,
     looped: bool,
     stopping: bool,
+    pair: usize,
 }
 
 /// État visible de l'extérieur : où en est chaque son, et les crêtes de sortie.
@@ -222,10 +232,12 @@ impl Mixer {
                     fade_out: self.frames(settings.fade_out as f64),
                     looped: settings.looped,
                     stopping: false,
+                    pair: settings.pair,
                 });
             }
             Command::Stop { id, fade } => self.stop(|v| v.id == id, fade),
-            Command::StopAll { fade } => self.stop(|_| true, fade),
+            Command::StopAll { fade } => self.stop(|v| v.id & PREVIEW == 0, fade),
+            Command::StopPreview { fade } => self.stop(|v| v.id & PREVIEW != 0, fade),
             Command::Gain { id, gain_db } => {
                 for voice in self.voices.iter_mut().filter(|v| v.id == id) {
                     voice.gain = db_to_gain(gain_db);
@@ -267,6 +279,9 @@ impl Mixer {
         out.iter_mut().for_each(|s| *s = 0.0);
         let mut peaks = [0.0f32; 2];
         for voice in &mut self.voices {
+            // Paire absente de cette sortie : le son avance sans rien jouer.
+            let base = voice.pair * 2;
+            let routed = channels == 1 || base + 1 < channels;
             for frame in out.chunks_exact_mut(channels) {
                 if voice.position >= voice.end {
                     if voice.looped && voice.end > voice.start && !voice.stopping {
@@ -293,17 +308,23 @@ impl Mixer {
                 let right = voice.clip.samples[voice.position * 2 + 1] * level;
                 if channels == 1 {
                     frame[0] += (left + right) * 0.5;
-                } else {
-                    frame[0] += left;
-                    frame[1] += right;
+                } else if routed {
+                    frame[base] += left;
+                    frame[base + 1] += right;
                 }
                 voice.position += 1;
             }
         }
         self.voices.retain(|v| !(v.stopping && v.envelope <= 0.0));
+        // Crêtes : toutes les sorties impaires à gauche, paires à droite.
         for frame in out.chunks_exact(channels) {
-            peaks[0] = peaks[0].max(frame[0].abs());
-            peaks[1] = peaks[1].max(frame[channels.min(2) - 1].abs());
+            for (c, s) in frame.iter().enumerate() {
+                let side = if channels == 1 { 0 } else { c % 2 };
+                peaks[side] = peaks[side].max(s.abs());
+            }
+        }
+        if channels == 1 {
+            peaks[1] = peaks[0];
         }
         peaks
     }
@@ -322,6 +343,7 @@ pub struct Player {
     commands: Sender<Command>,
     status: Arc<Mutex<PlayerStatus>>,
     rate: u32,
+    channels: usize,
     pub device: String,
     _stream: cpal::Stream,
 }
@@ -373,11 +395,16 @@ impl Player {
             )
             .map_err(|e| format!("sortie {name} : {e}"))?;
         stream.play().map_err(|e| format!("sortie {name} : {e}"))?;
-        Ok(Self { commands, status, rate, device: name, _stream: stream })
+        Ok(Self { commands, status, rate, channels, device: name, _stream: stream })
     }
 
     pub fn rate(&self) -> u32 {
         self.rate
+    }
+
+    /// Nombre de sorties de la carte.
+    pub fn channels(&self) -> usize {
+        self.channels
     }
 
     pub fn send(&self, command: Command) {
@@ -470,6 +497,25 @@ mod tests {
         assert_eq!(peaks, [1.5, 1.5]);
         mixer.apply(Command::StopAll { fade: 0.0 });
         assert!(!mixer.is_playing(1) && !mixer.is_playing(2));
+    }
+
+    /// Chaque son sur sa paire de sorties ; la pré-écoute à part de `StopAll`.
+    #[test]
+    fn routes_pairs_and_keeps_preview_apart() {
+        let mut mixer = Mixer::new(100);
+        mixer.apply(Command::Play { id: 1, clip: clip(10), settings: PlaySettings::default() });
+        let pair = |pair| PlaySettings { pair, ..Default::default() };
+        mixer.apply(Command::Play { id: PREVIEW | 1, clip: clip(10), settings: pair(1) });
+        mixer.apply(Command::Play { id: 2, clip: clip(10), settings: pair(3) });
+        let mut out = vec![0.0; 4 * 2];
+        let peaks = mixer.render(&mut out, 4);
+        assert_eq!(&out[..4], &[1.0, 0.5, 1.0, 0.5], "salle en 1-2, pré-écoute en 3-4, rien pour 7-8");
+        assert_eq!(peaks, [1.0, 0.5]);
+        assert!(mixer.is_playing(2), "sans sortie, le son avance quand même");
+        mixer.apply(Command::StopAll { fade: 0.0 });
+        assert!(!mixer.is_playing(1) && mixer.is_playing(PREVIEW | 1), "Sound Off ne coupe pas le casque");
+        mixer.apply(Command::StopPreview { fade: 0.0 });
+        assert!(!mixer.is_playing(PREVIEW | 1));
     }
 
     /// Un vrai fichier : WAV mono 16 bits à 44,1 kHz, décodé en stéréo et passé à 48 kHz.

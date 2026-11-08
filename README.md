@@ -143,6 +143,11 @@ forme d'onde fait écouter depuis ce point ; « En salle » lance le son pour le
 La pré-écoute ne déclenche rien dans le show : ni les cues qui suivent le son, ni les
 groupes d'exclusion.
 
+Avec une carte à plus de deux sorties, chaque son choisit sa paire (1-2, 3-4…), par
+exemple la façade en 1-2 et les retours en 5-6. La pré-écoute peut être sur la même
+carte que la salle, sur une autre paire (un seul flux audio, la même horloge) ;
+`Sound Off` ne la coupe pas.
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

@@ -198,6 +198,7 @@ impl FolieApp {
         let midi_settings = storage.midi();
         let sound_output = storage.sound_output();
         let sound_preview_output = storage.sound_preview_output();
+        let sound_preview_pair = storage.sound_preview_pair();
         let sound_settings = storage.sound();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
@@ -233,6 +234,7 @@ impl FolieApp {
                     crate::playback_sound::SoundPlayback::new(sound_output)
                 };
                 playback.preview.device = sound_preview_output;
+                playback.preview.pair = sound_preview_pair;
                 playback
             },
             sounds_view: Default::default(),
@@ -1786,11 +1788,12 @@ mod tests {
         assert!(harness.query_by_label("En salle").is_none());
         harness.state_mut().playback.set_preview_device("Casque".into());
         harness.run_steps(2);
-        assert_eq!(harness.query_all_by_label("ouverte : muet").count(), 2, "salle et pré-écoute ouvertes");
+        assert_eq!(harness.query_all_by_label("ouverte : muet (2 sorties)").count(), 2, "salle et pré-écoute ouvertes");
 
         harness.get_by_label("Écouter").click();
         harness.run_steps(2);
-        assert!(harness.state_mut().playback.silent_preview().unwrap().is_playing(1), "dans le casque");
+        let preview_id = folie_audio::player::PREVIEW | 1;
+        assert!(harness.state_mut().playback.silent_preview().unwrap().is_playing(preview_id), "dans le casque");
         assert!(!harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "la salle n'entend rien");
         harness.get_by_label("casque 0:00.0");
 
@@ -1820,7 +1823,7 @@ mod tests {
         let mut block = vec![0.0; 48_000 * 2];
         playback.silent_preview().unwrap().render(&mut block, 2);
         playback.silent_mixer().unwrap().render(&mut block, 2);
-        assert!(!playback.silent_preview().unwrap().is_playing(1) && !playback.silent_mixer().unwrap().is_playing(1), "tout arrêté");
+        assert!(!playback.silent_preview().unwrap().is_playing(preview_id) && !playback.silent_mixer().unwrap().is_playing(1), "tout arrêté");
         assert_eq!(harness.state().file.storage.sound_preview_output(), "", "réglé par le code, pas par la liste : rien d'enregistré");
 
         // Un casque à 44,1 kHz (salle à 48) : le fichier est refait pour lui, puis joué.
@@ -1837,7 +1840,74 @@ mod tests {
         let mixer = harness.state_mut().playback.silent_preview().unwrap();
         let mut block = vec![0.0; 44_100 * 2];
         mixer.render(&mut block, 2);
-        assert!((mixer.positions()[&1] - 1.0).abs() < 1e-3, "1 s jouée en 44 100 images : {:?}", mixer.positions());
+        assert!((mixer.positions()[&preview_id] - 1.0).abs() < 1e-3, "1 s jouée en 44 100 images : {:?}", mixer.positions());
+    }
+
+    /// Carte à plusieurs sorties : chaque son sur sa paire, et la pré-écoute sur une autre
+    /// paire de la même carte (un seul flux), que « Sound Off » ne coupe pas.
+    #[test]
+    fn preview_on_other_outputs_of_the_same_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("pluie.wav");
+        write_wav(&wav, 2.0);
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.playback.silent_channels = 6;
+            app.windows.open(WindowKind::Sounds);
+            app.import_sounds(std::slice::from_ref(&wav));
+            app.sounds_view.selected = Some(1);
+        }
+        let start = std::time::Instant::now();
+        while !matches!(harness.state().playback.clip(&harness.state().console.show.sounds[&1]), Some(crate::playback_sound::ClipState::Ready { .. })) {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+        harness.get_by_label("ouverte : muet (6 sorties)");
+
+        // Le son part sur 5-6.
+        harness.get_by_role_and_label(Role::ComboBox, "Sorties").click();
+        harness.run_steps(2);
+        harness.get_by_label("5-6").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.sounds[&1].pair, 2);
+
+        // Pré-écoute sur la carte de la salle (la muette, absente de la liste des cartes) :
+        // d'abord en 1-2 (prévenu), puis en 3-4.
+        harness.state_mut().playback.set_preview_device("muet".into());
+        harness.run_steps(2);
+        assert!(harness.state().playback.preview_shares_output());
+        harness.get_by_label("mêmes sorties (1-2) que des sons de la salle : la salle entendra");
+        harness.get_by_role_and_label(Role::ComboBox, "sorties").click();
+        harness.run_steps(2);
+        harness.get_by_label("3-4").click();
+        harness.run_steps(2);
+        harness.get_by_label("sur la carte de la salle, sorties 3-4");
+        assert_eq!(harness.state().file.storage.sound_preview_pair(), 1, "retenue");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sounds-outputs.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        harness.get_by_label("Écouter").click();
+        harness.run_steps(2);
+        harness.get_by_label("En salle").click();
+        harness.run_steps(2);
+        let playback = &mut harness.state_mut().playback;
+        assert_eq!(playback.preview_position().map(|(n, _)| n), Some(1));
+        assert_eq!(playback.positions().keys().copied().collect::<Vec<_>>(), [1], "la salle ne voit pas la pré-écoute");
+        let mixer = playback.silent_mixer().unwrap();
+        let mut block = vec![0.0; 6 * 10];
+        mixer.render(&mut block, 6);
+        let used: Vec<bool> = (0..6).map(|c| block.chunks(6).any(|f| f[c] != 0.0)).collect();
+        assert_eq!(used, [false, false, true, true, true, true], "casque en 3-4, salle en 5-6, rien en 1-2");
+
+        command(&mut harness, "Sound Off");
+        let playback = &mut harness.state_mut().playback;
+        assert!(playback.positions().is_empty(), "salle arrêtée");
+        assert!(playback.preview_position().is_some(), "le casque continue");
     }
 
     #[test]

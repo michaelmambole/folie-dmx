@@ -48,6 +48,9 @@ struct Settings {
     /// Sortie de pré-écoute (casque) ; vide : aucune.
     #[serde(default)]
     sound_preview_output: String,
+    /// Paire de sorties de la pré-écoute : 0 pour 1-2, 1 pour 3-4…
+    #[serde(default)]
+    sound_preview_pair: u32,
 }
 
 /// Réglages de la sortie Art-Net.
@@ -274,6 +277,14 @@ impl Storage {
 
     pub fn set_sound_preview_output(&self, device: &str) {
         self.update_settings(|s| s.sound_preview_output = device.to_string());
+    }
+
+    pub fn sound_preview_pair(&self) -> u32 {
+        self.settings().sound_preview_pair
+    }
+
+    pub fn set_sound_preview_pair(&self, pair: u32) {
+        self.update_settings(|s| s.sound_preview_pair = pair);
     }
 
     pub fn midi(&self) -> folie_remote::midi::MidiSettings {

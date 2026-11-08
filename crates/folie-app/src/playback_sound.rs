@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use folie_audio::player::{self, Clip, Command, Mixer, PlaySettings, Player};
+use folie_audio::player::{self, Clip, Command, Mixer, PREVIEW, PlaySettings, Player};
 use folie_control::sounds::SoundRequest;
 use folie_show::media::Sound;
 
@@ -40,8 +40,11 @@ pub struct SoundPlayback {
     pending: Vec<u32>,
     /// Muet (tests) : aucune carte son n'est ouverte.
     silent: bool,
-    /// Pré-écoute (casque) : une seconde sortie, que la salle n'entend pas et que le show
-    /// ne voit pas (ni cues qui suivent le son, ni groupes d'exclusion).
+    /// Sorties du mélangeur muet (tests).
+    pub silent_channels: usize,
+    /// Pré-écoute (casque) : une autre paire de sorties de la carte de la salle, ou une
+    /// autre carte. La salle ne l'entend pas et le show ne la voit pas (ni cues qui
+    /// suivent le son, ni groupes d'exclusion).
     pub preview: Preview,
 }
 
@@ -53,6 +56,10 @@ type Prepared = (PathBuf, ClipState);
 pub struct Preview {
     /// Sortie choisie ; vide : pas de pré-écoute.
     pub device: String,
+    /// Paire de sorties : 0 pour 1-2, 1 pour 3-4…
+    pub pair: u32,
+    /// Même carte que la salle : la pré-écoute passe par son mélangeur, sur sa paire.
+    shared: bool,
     output: Option<Output>,
     pub error: Option<String>,
     /// Fichiers remis à la fréquence de la pré-écoute, quand ce n'est pas celle de la salle.
@@ -85,6 +92,7 @@ impl SoundPlayback {
             receiver,
             pending: Vec::new(),
             silent: false,
+            silent_channels: 2,
             preview: Preview::default(),
         }
     }
@@ -112,6 +120,29 @@ impl SoundPlayback {
             Some(Output::Silent(_)) => Some(SILENT_RATE),
             None => None,
         }
+    }
+
+    fn output_channels(&self, output: &Option<Output>) -> usize {
+        match output {
+            Some(Output::Device(player)) => player.channels(),
+            Some(Output::Silent(_)) => self.silent_channels,
+            None => 0,
+        }
+    }
+
+    /// Sorties de la carte de la salle (0 : fermée).
+    pub fn channels(&self) -> usize {
+        self.output_channels(&self.output)
+    }
+
+    /// Sorties de la carte de pré-écoute (0 : fermée).
+    pub fn preview_channels(&self) -> usize {
+        if self.preview.shared { self.channels() } else { self.output_channels(&self.preview.output) }
+    }
+
+    /// La pré-écoute passe-t-elle par la carte de la salle ?
+    pub fn preview_shares_output(&self) -> bool {
+        self.preview.shared
     }
 
     /// Ouvre la sortie si besoin. Une autre fréquence oblige à recharger les fichiers.
@@ -154,7 +185,15 @@ impl SoundPlayback {
         self.open_preview();
     }
 
+    /// Choisit la paire de sorties de la pré-écoute ; ce qui y joue s'arrête.
+    pub fn set_preview_pair(&mut self, pair: u32) {
+        self.stop_preview();
+        self.preview.pair = pair;
+    }
+
     fn close_preview(&mut self) {
+        self.stop_preview();
+        self.preview.shared = false;
         self.preview.output = None;
         self.preview.clips.clear();
         self.preview.pending = None;
@@ -163,10 +202,13 @@ impl SoundPlayback {
 
     /// Une pré-écoute est-elle réglée (et ouverte) ?
     pub fn has_preview(&self) -> bool {
-        self.preview.output.is_some()
+        self.preview.shared || self.preview.output.is_some()
     }
 
     pub fn preview_device_name(&self) -> Option<&str> {
+        if self.preview.shared {
+            return self.device_name();
+        }
         match &self.preview.output {
             Some(Output::Device(player)) => Some(&player.device),
             Some(Output::Silent(_)) => Some("muet"),
@@ -176,11 +218,17 @@ impl SoundPlayback {
 
     /// Ouvre la pré-écoute si elle est réglée, à la fréquence de la salle si elle peut.
     pub fn open_preview(&mut self) -> bool {
-        if self.preview.output.is_some() {
+        if self.has_preview() {
             return true;
         }
         if self.preview.device.is_empty() {
             return false;
+        }
+        // Même carte que la salle : un seul flux, la pré-écoute sur sa paire.
+        if self.open() && (self.device_name() == Some(self.preview.device.as_str()) || self.device == self.preview.device) {
+            self.preview.shared = true;
+            self.preview.error = None;
+            return true;
         }
         let output = if self.silent {
             Output::Silent(Mixer::new(if self.preview.silent_rate == 0 { SILENT_RATE } else { self.preview.silent_rate }))
@@ -199,6 +247,9 @@ impl SoundPlayback {
     }
 
     fn preview_rate(&self) -> Option<u32> {
+        if self.preview.shared {
+            return self.rate();
+        }
         match &self.preview.output {
             Some(Output::Device(player)) => Some(player.rate()),
             Some(Output::Silent(_)) => Some(if self.preview.silent_rate == 0 { SILENT_RATE } else { self.preview.silent_rate }),
@@ -207,6 +258,9 @@ impl SoundPlayback {
     }
 
     fn send_preview(&mut self, command: Command) {
+        if self.preview.shared {
+            return self.send(command);
+        }
         match &mut self.preview.output {
             Some(Output::Device(player)) => player.send(command),
             Some(Output::Silent(mixer)) => mixer.apply(command),
@@ -264,6 +318,7 @@ impl SoundPlayback {
             fade_in: sound.fade_in,
             fade_out: sound.fade_out,
             looped: sound.looped,
+            pair: self.preview.pair as usize,
         };
         if let Some(from) = from {
             settings.start = from.max(0.0);
@@ -274,40 +329,32 @@ impl SoundPlayback {
             }
         }
         self.preview.pending = None;
-        self.send_preview(Command::StopAll { fade: PREVIEW_FADE });
-        self.send_preview(Command::Play { id: number, clip, settings });
+        self.send_preview(Command::StopPreview { fade: PREVIEW_FADE });
+        self.send_preview(Command::Play { id: PREVIEW | number, clip, settings });
         None
     }
 
     /// Volume changé pendant la pré-écoute.
     pub fn set_preview_gain(&mut self, number: u32, gain_db: f32) {
-        self.send_preview(Command::Gain { id: number, gain_db });
-    }
-
-    /// Mélangeur muet (tests) : rien ne sort.
-    pub fn silent_output(&self) -> bool {
-        self.silent
+        self.send_preview(Command::Gain { id: PREVIEW | number, gain_db });
     }
 
     pub fn stop_preview(&mut self) {
         self.preview.pending = None;
-        self.send_preview(Command::StopAll { fade: PREVIEW_FADE });
+        self.send_preview(Command::StopPreview { fade: PREVIEW_FADE });
     }
 
     /// Son en pré-écoute et sa position (s).
     pub fn preview_position(&self) -> Option<(u32, f64)> {
-        let positions = match &self.preview.output {
-            Some(Output::Device(player)) => player.positions(),
-            Some(Output::Silent(mixer)) => mixer.positions(),
-            None => return None,
-        };
-        positions.into_iter().next()
+        let output = if self.preview.shared { &self.output } else { &self.preview.output };
+        all_positions(output).into_iter().find(|(id, _)| id & PREVIEW != 0).map(|(id, t)| (id & !PREVIEW, t))
     }
 
-    /// Pré-écoute muette (tests).
+    /// Pré-écoute muette (tests) : le mélangeur de la salle quand elle le partage.
     #[cfg(test)]
     pub fn silent_preview(&mut self) -> Option<&mut Mixer> {
-        match &mut self.preview.output {
+        let output = if self.preview.shared { &mut self.output } else { &mut self.preview.output };
+        match output {
             Some(Output::Silent(mixer)) => Some(mixer),
             _ => None,
         }
@@ -417,6 +464,7 @@ impl SoundPlayback {
             fade_in: sound.fade_in,
             fade_out: sound.fade_out,
             looped: sound.looped,
+            pair: sound.pair as usize,
         };
         // Groupe d'exclusion : les autres sons du groupe sont coupés net (un rien de fondu
         // pour éviter le clic), comme sur un sampleur.
@@ -435,8 +483,14 @@ impl SoundPlayback {
         for n in &mut self.pending {
             *n = map.get(n).copied().unwrap_or(*n);
         }
-        self.send(Command::Renumber(map.clone()));
-        self.send_preview(Command::Renumber(map.clone()));
+        // La pré-écoute porte les mêmes numéros, marqués.
+        let marked: HashMap<u32, u32> = map.iter().map(|(old, new)| (PREVIEW | old, PREVIEW | new)).collect();
+        if self.preview.shared {
+            self.send(Command::Renumber(map.iter().map(|(o, n)| (*o, *n)).chain(marked).collect()));
+        } else {
+            self.send(Command::Renumber(map.clone()));
+            self.send_preview(Command::Renumber(marked));
+        }
         if let Some((n, _)) = &mut self.preview.pending {
             *n = map.get(n).copied().unwrap_or(*n);
         }
@@ -447,25 +501,25 @@ impl SoundPlayback {
         self.send(Command::Gain { id: number, gain_db });
     }
 
-    /// Sons en cours -> position dans le fichier (s).
+    /// Sons en cours en salle -> position dans le fichier (s).
     pub fn positions(&self) -> HashMap<u32, f64> {
-        match &self.output {
-            Some(Output::Device(player)) => player.positions(),
-            Some(Output::Silent(mixer)) => mixer.positions(),
-            None => HashMap::new(),
-        }
+        let mut positions = all_positions(&self.output);
+        positions.retain(|id, _| id & PREVIEW == 0);
+        positions
     }
 
-    /// Sons en cours -> position dans le fichier (s), et crêtes de sortie.
+    /// Sons en cours en salle -> position dans le fichier (s), et crêtes de sortie.
     pub fn status(&mut self) -> (HashMap<u32, f64>, [f32; 2]) {
-        match &mut self.output {
+        let (mut positions, peaks) = match &mut self.output {
             Some(Output::Device(player)) => {
                 let status = player.status();
                 (status.positions, status.peaks)
             }
             Some(Output::Silent(mixer)) => (mixer.positions(), [0.0; 2]),
             None => (HashMap::new(), [0.0; 2]),
-        }
+        };
+        positions.retain(|id, _| id & PREVIEW == 0);
+        (positions, peaks)
     }
 
     /// Mélangeur muet (tests) : on y fait avancer le temps.
@@ -475,5 +529,14 @@ impl SoundPlayback {
             Some(Output::Silent(mixer)) => Some(mixer),
             _ => None,
         }
+    }
+}
+
+/// Tous les sons en cours d'une sortie, pré-écoute comprise.
+fn all_positions(output: &Option<Output>) -> HashMap<u32, f64> {
+    match output {
+        Some(Output::Device(player)) => player.positions(),
+        Some(Output::Silent(mixer)) => mixer.positions(),
+        None => HashMap::new(),
     }
 }
