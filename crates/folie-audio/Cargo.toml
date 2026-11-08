@@ -1,6 +1,6 @@
 [package]
 name = "folie-audio"
-description = "Réaction au son : entrée audio, niveaux par bande, beat et tempo"
+description = "Son : réaction à l'entrée audio (niveaux, beat, tempo) et lecture de sons"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,3 +12,5 @@ folie-show.workspace = true
 crossbeam-channel.workspace = true
 log.workspace = true
 cpal = "0.18"
+symphonia = { version = "0.6.1", features = ["all"] }
+rubato = "5.0.1"
