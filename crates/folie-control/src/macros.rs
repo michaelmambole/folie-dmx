@@ -214,6 +214,16 @@ mod tests {
         assert!(c.macros_in_progress().is_empty(), "macro finie");
     }
 
+    /// « Song macro » : une macro choisit la page et l'executor du GO principal.
+    #[test]
+    fn a_macro_selects_the_main_go_executor() {
+        let mut c = console();
+        run(&mut c, "Store Macro 4");
+        c.set_macro_lines(4, vec!["Page 2".into(), "Executor 2.3".into()]).unwrap();
+        c.run_macro(4).unwrap();
+        assert_eq!((c.page(), c.selected_executor()), (2, 103));
+    }
+
     #[test]
     fn errors_stop_a_macro_and_executors_launch_macros() {
         let mut c = console();

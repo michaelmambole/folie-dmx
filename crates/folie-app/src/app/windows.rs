@@ -253,6 +253,11 @@ impl FolieApp {
             let message = format!("{count} cible(s) relâchée(s) : le programmer ne les tient plus");
             self.command_line.feedback = Some((true, message));
         }
+        // Espace : le GO principal, sur l'executor sélectionné.
+        if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+            let result = self.console.press(self.console.selected_executor());
+            self.command_line.report(result);
+        }
         // S : la touche Store, comme sur grandMA2 onPC.
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
             self.store_armed = !self.store_armed;

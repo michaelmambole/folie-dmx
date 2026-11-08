@@ -84,8 +84,9 @@ impl State {
 
 /// Cadre d'un executor, de largeur fixe, contenu centré. Allumé, il prend un fond
 /// teinté et une bordure épaisse de sa couleur. Un executor fixé (présent sur
-/// toutes les pages) a un cadre en pointillés.
-fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// toutes les pages) a un cadre en pointillés. L'executor sélectionné, celui du GO
+/// principal (Espace), porte une bande jaune en haut.
+fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, selected: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let (fill, stroke) = match state {
         State::Empty => (theme::BG, egui::Stroke::new(1.0, theme::SURFACE_2)),
         State::Off => (theme::SURFACE_1, egui::Stroke::new(1.0, theme::LINE)),
@@ -106,6 +107,12 @@ fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, add: impl F
         let outline = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
         let color = if let State::On(color) = state { color } else { theme::MUTED };
         ui.painter().extend(egui::Shape::dashed_line(&outline, egui::Stroke::new(stroke.width, color), 5.0, 3.0));
+    }
+    if selected {
+        let r = frame.response.rect;
+        let band = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), 5.0));
+        let corners = egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
+        ui.painter().rect_filled(band, corners, theme::SELECTION);
     }
     frame.inner
 }
@@ -1148,6 +1155,32 @@ fn page_selector(ui: &mut egui::Ui, console: &mut Console) -> Action {
     action
 }
 
+/// GO principal : Go et Back de l'executor sélectionné (Espace au clavier), avec son
+/// nom en jaune pour savoir ce que la touche va lancer. Dans une mise en page de
+/// droite à gauche : le GO vient en premier, au bord.
+fn main_go(ui: &mut egui::Ui, console: &mut Console) -> Action {
+    let executor = console.selected_executor();
+    let label = executor_label(executor);
+    let mut action = None;
+    let go = egui::Button::new(RichText::new("GO").family(theme::medium()).size(15.0).color(Color32::from_rgb(10, 40, 30)))
+        .fill(theme::GO)
+        .min_size(egui::vec2(72.0, 26.0));
+    if ui.add(go).on_hover_text(format!("GO principal : executor {label} (Espace)")).clicked() {
+        action = Some(console.press(executor));
+    }
+    if ui.button("Back").on_hover_text(format!("GO principal : Back executor {label}")).clicked() {
+        action = Some(console.back(Some(executor)));
+    }
+    let name = console
+        .executor(executor)
+        .map(|(_, s)| s.name.clone())
+        .or_else(|| console.executor_macro(executor).map(|(_, m)| m.name.clone()))
+        .unwrap_or_else(|| "vide".into());
+    ui.label(RichText::new(name).size(12.0).color(theme::MUTED));
+    ui.label(RichText::new(format!("Exec {label}")).family(theme::medium()).color(theme::SELECTION));
+    action
+}
+
 /// Aile de 10 executors à fader, puis une rangée de 10 executors à boutons.
 /// Les cartes se partagent la largeur et le fader suit la hauteur de la fenêtre.
 pub fn executors_window(
@@ -1172,7 +1205,8 @@ pub fn executors_window(
         ui.separator();
         keep(page_selector(ui, console));
         let hint = if *store_armed { "Choisissez l'executor où enregistrer" } else { "Clic droit sur un numéro : mode, options, fixer, nom" };
-        ui.label(RichText::new(hint).size(12.0).color(theme::MUTED));
+        ui.add(egui::Label::new(RichText::new(hint).size(12.0).color(theme::MUTED)).truncate());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| keep(main_go(ui, console)));
     });
     ui.add_space(4.0);
 
@@ -1200,7 +1234,8 @@ pub fn executors_window(
                 let state = State::of(console, executor, status);
                 let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, state, fixed, |ui| {
+                let selected = console.selected_executor() == executor;
+                card(ui, inner, state, fixed, selected, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
@@ -1238,7 +1273,8 @@ pub fn executors_window(
                 let state = State::of(console, executor, status);
                 let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
-                card(ui, inner, state, fixed, |ui| {
+                let selected = console.selected_executor() == executor;
+                card(ui, inner, state, fixed, selected, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));

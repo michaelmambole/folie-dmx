@@ -2618,6 +2618,40 @@ mod tests {
             let window = image::imageops::crop_imm(&image, 900, 820, 1350, 700).to_image();
             window.save(std::path::Path::new(&dir).join("executors-state.png")).expect("écriture de l'image");
         }
+
+        // GO principal : Espace lance l'executor sélectionné, ici le 2, encore éteint.
+        harness.get_all(By::new().role(Role::Button).label("2")).find(|n| n.rect().min.y > 800.0).unwrap().click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.selected_executor(), 2);
+        harness.get_by_label("Exec 2"); // le GO principal dit ce qu'il va lancer
+        harness.key_press(egui::Key::Space);
+        settle(&mut harness);
+        assert!(harness.state().snapshot.executors[&2].cue.is_some(), "Espace : Go sur l'executor 2");
+        harness.get_by_label("Go executor 2");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let image = harness.render().expect("rendu");
+            let window = image::imageops::crop_imm(&image, 900, 820, 1350, 700).to_image();
+            window.save(std::path::Path::new(&dir).join("executors-main-go.png")).expect("écriture de l'image");
+        }
+        // Le bouton GO fait de même ; son Back est celui de l'executor sélectionné.
+        let described = |text: &'static str| By::new().predicate(move |n| n.description().as_deref() == Some(text));
+        harness.get(described("GO principal : Back executor 2"));
+        command(&mut harness, "Off Executor 2");
+        harness.get(By::new().role(Role::Button).label("GO")).click();
+        settle(&mut harness);
+        assert!(harness.state().snapshot.executors[&2].cue.is_some(), "bouton GO principal");
+        // La commande « Executor 11 » change l'executor du GO principal (utilisable dans
+        // une macro) ; « Go » tout court part sur lui.
+        command(&mut harness, "Off Executor 2");
+        command(&mut harness, "Executor 11");
+        assert_eq!(harness.state().console.selected_executor(), 11);
+        harness.get_by_label("Exec 11");
+        // Pendant la saisie d'une commande, Espace reste une espace.
+        harness.get_by_role_and_label(Role::TextInput, "Commande").focus();
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Space);
+        settle(&mut harness);
+        assert!(harness.state().snapshot.executors.get(&2).is_none_or(|s| s.cue.is_none()), "Espace tapée dans la commande");
     }
 
     #[test]
