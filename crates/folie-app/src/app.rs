@@ -1910,6 +1910,85 @@ mod tests {
         assert!(playback.preview_position().is_some(), "le casque continue");
     }
 
+    /// Enchaînement : la pluie passe la main à l'orage en fondu croisé, l'orage au vent à
+    /// la fin ; un seul « Sound 1 » joue toute la chaîne.
+    #[test]
+    fn sounds_play_one_after_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let files: Vec<_> = ["pluie", "orage", "vent"].iter().map(|n| dir.path().join(format!("{n}.wav"))).collect();
+        for f in &files {
+            write_wav(f, 0.5);
+        }
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.windows.open(WindowKind::Sounds);
+            app.import_sounds(&files);
+            app.sounds_view.selected = Some(1);
+        }
+        let start = std::time::Instant::now();
+        while !harness.state().console.show.sounds.values().all(|s| {
+            matches!(harness.state().playback.clip(s), Some(crate::playback_sound::ClipState::Ready { .. }))
+        }) {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+
+        // Dans la fenêtre : Puis l'orage, en fondu croisé.
+        harness.get_by_role_and_label(Role::ComboBox, "Puis").click();
+        harness.run_steps(2);
+        harness.get_by_label("2  orage").click();
+        harness.run_steps(2);
+        harness.get_by_role_and_label(Role::ComboBox, "Enchaînement").click();
+        harness.run_steps(2);
+        harness.get_by_label("en fondu croisé").click();
+        harness.run_steps(2);
+        let transition = harness.state().console.show.sounds[&1].transition;
+        assert_eq!(harness.state().console.show.sounds[&1].then, Some(2));
+        assert!(matches!(transition, folie_show::media::Transition::Crossfade(_)), "{transition:?}");
+        harness.get_by_label("1  pluie  0:00.5  puis 2");
+        {
+            let sounds = &mut harness.state_mut().console.show.sounds;
+            sounds.get_mut(&1).unwrap().transition = folie_show::media::Transition::Crossfade(0.1);
+            sounds.get_mut(&2).unwrap().then = Some(3);
+        }
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            harness.run_steps(2);
+            let path = std::path::Path::new(&dir).join("sounds-chain.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        command(&mut harness, "Sound 1");
+        let mut block = vec![0.0; 2 * 4800]; // 0,1 s
+        let mut render = |harness: &mut Harness<'_, FolieApp>, blocks: usize| {
+            for _ in 0..blocks {
+                harness.state_mut().playback.silent_mixer().unwrap().render(&mut block, 2);
+            }
+            harness.run_steps(1); // l'interface voit qui est parti, et prépare la suite
+            harness.state().playback.positions()
+        };
+        let playing = render(&mut harness, 4);
+        assert!(playing.contains_key(&1) && !playing.contains_key(&2), "{playing:?}");
+        // Le 1 arrive au bout (il disparaît au bloc suivant) ; le 2 a déjà 0,1 s.
+        let playing = render(&mut harness, 1);
+        assert!((playing[&2] - 0.1).abs() < 1e-3, "fondu croisé de 0,1 s avant la fin : {playing:?}");
+        let playing = render(&mut harness, 4);
+        assert!(!playing.contains_key(&1) && playing.contains_key(&2), "{playing:?}");
+        // L'orage (parti à 0,4 s) finit pile à 0,9 s : le vent part sans blanc.
+        let playing = render(&mut harness, 1);
+        assert!(!playing.contains_key(&2) && (playing[&3] - 0.1).abs() < 1e-3, "le vent à la fin de l'orage : {playing:?}");
+
+        // Arrêté à la main : rien ne suit.
+        harness.state_mut().console.show.sounds.get_mut(&3).unwrap().then = Some(1);
+        let sounds = harness.state().console.show.sounds.clone();
+        harness.state_mut().playback.requeue(3, &sounds);
+        command(&mut harness, "Sound 3 Off");
+        let playing = render(&mut harness, 10);
+        assert!(playing.is_empty(), "{playing:?}");
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();

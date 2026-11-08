@@ -64,7 +64,13 @@ impl Console {
     pub fn renumber_sounds(&mut self, map: &HashMap<u32, u32>) {
         let renumber = |n: u32| map.get(&n).copied().unwrap_or(n);
         let sounds = std::mem::take(&mut self.show.sounds);
-        self.show.sounds = sounds.into_iter().map(|(n, s)| (renumber(n), s)).collect::<BTreeMap<_, _>>();
+        self.show.sounds = sounds
+            .into_iter()
+            .map(|(n, mut s)| {
+                s.then = s.then.map(renumber);
+                (renumber(n), s)
+            })
+            .collect::<BTreeMap<_, _>>();
         for sequence in self.show.sequences.values_mut() {
             sequence.follows_sound = sequence.follows_sound.map(renumber);
             for cue in sequence.cues.values_mut() {
@@ -167,12 +173,14 @@ mod tests {
             c.show.sounds.insert(if n == 3 { 5 } else { n }, folie_show::media::Sound { name: name.into(), ..Default::default() });
         }
         c.show.macros.insert(1, folie_show::Macro { name: "Orage".into(), lines: vec!["Sound 2".into(), "Sound 5 Off".into()] });
+        c.show.sounds.get_mut(&1).unwrap().then = Some(5);
         // Le vent (5) passe en tête : les numéros 1, 2, 5 restent, dans le nouvel ordre.
         let map = c.move_sound(5, 0);
         assert_eq!(map, HashMap::from([(5, 1), (1, 2), (2, 5)]));
         let names: Vec<(u32, &str)> = c.show.sounds.iter().map(|(n, s)| (*n, s.name.as_str())).collect();
         assert_eq!(names, [(1, "Vent"), (2, "Pluie"), (5, "Orage")]);
         assert_eq!(c.show.macros[&1].lines, ["Sound 5", "Sound 1 Off"]);
+        assert_eq!(c.show.sounds[&2].then, Some(1), "la pluie enchaîne toujours sur le vent");
         assert!(c.move_sound(1, 0).is_empty(), "déjà à sa place");
     }
 }

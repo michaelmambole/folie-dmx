@@ -148,6 +148,12 @@ exemple la façade en 1-2 et les retours en 5-6. La pré-écoute peut être sur 
 carte que la salle, sur une autre paire (un seul flux audio, la même horloge) ;
 `Sound Off` ne la coupe pas.
 
+**Enchaînements** : chaque son peut dire lequel le suit (« Puis »), à la fin sans blanc,
+après une pause, ou en fondu croisé (l'un descend pendant que l'autre monte), à
+l'échantillon près. `Sound 3` lance toute la chaîne ; un son qui renvoie à lui-même, ou
+une chaîne qui revient au début, tourne en boucle. Un son arrêté (à la main, par
+`Sound Off`, par son groupe) ne passe pas la main ; un son en boucle non plus.
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

@@ -372,7 +372,8 @@ impl FolieApp {
                     None => String::new(),
                 };
                 let group = if sound.group == 0 { String::new() } else { format!("  G{}", sound.group) };
-                let text = RichText::new(format!("{number}  {}  {duration}{group}", sound.name))
+                let then = sound.then.map(|n| format!("  puis {n}")).unwrap_or_default();
+                let text = RichText::new(format!("{number}  {}  {duration}{group}{then}", sound.name))
                     .color(if playing { theme::GO } else { theme::TEXT });
                 let selected = self.sounds_view.selected == Some(*number);
                 let row = ui.selectable_label(selected, text).interact(Sense::drag());
@@ -548,6 +549,60 @@ impl FolieApp {
                 ui.label(RichText::new(format!("coupe {others} autre(s) son(s)")).size(11.0).color(theme::MUTED));
             }
             ui.end_row();
+            // Enchaînement : le son qui part à la fin de celui-ci.
+            let label = ui.label("Puis");
+            let names: Vec<(u32, String)> = self.console.show.sounds.iter().map(|(n, s)| (*n, s.name.clone())).collect();
+            let name_of = |n: u32| {
+                let name = names.iter().find(|(m, _)| *m == n).map_or("absent", |(_, name)| name.as_str());
+                if n == number { format!("{n}  {name} (lui-même)") } else { format!("{n}  {name}") }
+            };
+            egui::ComboBox::from_id_salt("sound_then")
+                .width(160.0)
+                .selected_text(edited.then.map_or("rien".to_string(), name_of))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut edited.then, None, "rien");
+                    for (n, _) in &names {
+                        ui.selectable_value(&mut edited.then, Some(*n), name_of(*n));
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text("Part quand ce son arrive à sa sortie ; pas s'il est arrêté");
+            if edited.then.is_some() {
+                use folie_show::media::Transition;
+                let seconds = match edited.transition {
+                    Transition::End => 2.0,
+                    Transition::Pause(s) | Transition::Crossfade(s) => s,
+                };
+                let mode = |t: &Transition| match t {
+                    Transition::End => "à la fin",
+                    Transition::Pause(_) => "après une pause",
+                    Transition::Crossfade(_) => "en fondu croisé",
+                };
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("sound_transition")
+                        .width(130.0)
+                        .selected_text(mode(&edited.transition))
+                        .show_ui(ui, |ui| {
+                            for t in [Transition::End, Transition::Pause(seconds), Transition::Crossfade(seconds)] {
+                                let selected = std::mem::discriminant(&t) == std::mem::discriminant(&edited.transition);
+                                if ui.selectable_label(selected, mode(&t)).clicked() {
+                                    edited.transition = t;
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Enchaînement");
+                    if let Transition::Pause(s) | Transition::Crossfade(s) = &mut edited.transition {
+                        ui.add(egui::DragValue::new(s).range(0.0..=60.0).speed(0.05).suffix(" s").max_decimals(2))
+                            .on_hover_text("Durée de la pause ou du fondu croisé");
+                    }
+                });
+                if edited.looped {
+                    ui.label(RichText::new("en boucle : il ne finit pas, rien ne suit").size(11.0).color(theme::EXECUTOR));
+                }
+            }
+            ui.end_row();
             // Carte à plus de deux sorties : où part ce son.
             let channels = self.playback.channels();
             if channels > 2 || edited.pair != 0 {
@@ -611,7 +666,11 @@ impl FolieApp {
                 self.playback.set_gain(number, edited.gain_db);
                 self.playback.set_preview_gain(number, edited.gain_db);
             }
+            let chain_changed = (edited.then, edited.transition) != (sound.then, sound.transition);
             self.console.show.sounds.insert(number, edited);
+            if chain_changed {
+                self.playback.requeue(number, &self.console.show.sounds);
+            }
             self.mark_dirty();
         }
     }

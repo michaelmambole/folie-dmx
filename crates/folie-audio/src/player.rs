@@ -168,6 +168,24 @@ pub enum Command {
     Gain { id: u32, gain_db: f32 },
     /// Les sons ont changé de numéro (ancien -> nouveau) : ceux en cours suivent.
     Renumber(HashMap<u32, u32>),
+    /// Enchaînement : `id` partira quand `after` arrivera à sa fin naturelle, décalé de
+    /// `offset` secondes (> 0 : après une pause ; < 0 : avant la fin, en fondu croisé,
+    /// `after` descendant pendant que `id` monte). Annulé si `after` est arrêté avant.
+    Queue { after: u32, id: u32, clip: Clip, settings: PlaySettings, offset: f64 },
+    /// Plus rien ne suit `after`.
+    Unqueue { after: u32 },
+}
+
+/// Un son qui attend la fin d'un autre pour partir.
+struct Queued {
+    after: u32,
+    id: u32,
+    clip: Clip,
+    settings: PlaySettings,
+    /// Décalage par rapport à la fin de `after`, en images.
+    offset: i64,
+    /// Pause en cours (`after` fini) : images restantes avant le départ.
+    wait: Option<usize>,
 }
 
 struct Voice {
@@ -186,6 +204,10 @@ struct Voice {
     looped: bool,
     stopping: bool,
     pair: usize,
+    /// Images de silence avant de commencer, dans le bloc en cours (départ enchaîné).
+    delay: usize,
+    /// Fondu croisé : à cette image du fichier, descente en tant d'images.
+    fade_at: Option<(usize, usize)>,
 }
 
 /// État visible de l'extérieur : où en est chaque son, et les crêtes de sortie.
@@ -195,17 +217,96 @@ pub struct PlayerStatus {
     pub positions: HashMap<u32, f64>,
     /// Crêtes de sortie, gauche et droite, depuis le dernier relevé.
     pub peaks: [f32; 2],
+    /// Sons partis par enchaînement depuis le dernier relevé.
+    pub chained: Vec<u32>,
 }
 
 /// Mélangeur : les sons en cours, rendus bloc par bloc.
 pub struct Mixer {
     rate: u32,
     voices: Vec<Voice>,
+    queued: Vec<Queued>,
+    /// Sons partis par enchaînement, pas encore relevés.
+    chained: Vec<u32>,
 }
 
 impl Mixer {
     pub fn new(rate: u32) -> Self {
-        Self { rate, voices: Vec::new() }
+        Self { rate, voices: Vec::new(), queued: Vec::new(), chained: Vec::new() }
+    }
+
+    fn voice(&self, id: u32, clip: Clip, settings: PlaySettings) -> Voice {
+        let length = clip.frames();
+        let start = self.frames(settings.start).min(length);
+        let end = settings.end.map_or(length, |e| self.frames(e)).clamp(start, length);
+        let fade_in = self.frames(settings.fade_in as f64);
+        Voice {
+            id,
+            clip,
+            position: start,
+            start,
+            end,
+            gain: db_to_gain(settings.gain_db),
+            envelope: if fade_in == 0 { 1.0 } else { 0.0 },
+            ramp: if fade_in == 0 { 0.0 } else { 1.0 / fade_in as f32 },
+            fade_out: self.frames(settings.fade_out as f64),
+            looped: settings.looped,
+            stopping: false,
+            pair: settings.pair,
+            delay: 0,
+            fade_at: None,
+        }
+    }
+
+    /// Sons partis par enchaînement depuis le dernier appel.
+    pub fn take_chained(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.chained)
+    }
+
+    /// Fait partir, dans le bloc de `len` images qui vient, les sons enchaînés dont
+    /// c'est le moment, à l'image près.
+    fn start_queued(&mut self, len: usize) {
+        let voices = &self.voices;
+        let mut starting = Vec::new();
+        self.queued.retain_mut(|q| {
+            let at = match q.wait {
+                Some(wait) if wait >= len => {
+                    q.wait = Some(wait - len);
+                    return true;
+                }
+                Some(wait) => wait,
+                None => {
+                    // Le son d'avant, encore en route (pas arrêté) : sinon, plus d'enchaînement.
+                    let Some(before) = voices.iter().rfind(|v| v.id == q.after && !v.stopping) else { return false };
+                    if before.looped {
+                        return true;
+                    }
+                    let remaining = before.end.saturating_sub(before.position) as i64;
+                    let at = remaining + q.offset;
+                    if at >= len as i64 {
+                        // Pause commencée dans ce bloc : on compte sans le son d'avant.
+                        if q.offset > 0 && remaining < len as i64 {
+                            q.wait = Some((at - len as i64) as usize);
+                        }
+                        return true;
+                    }
+                    at.max(0) as usize
+                }
+            };
+            starting.push((q.after, q.id, q.clip.clone(), q.settings, q.offset, at));
+            false
+        });
+        for (after, id, clip, settings, offset, at) in starting {
+            if offset < 0
+                && let Some(before) = self.voices.iter_mut().rfind(|v| v.id == after && !v.stopping)
+            {
+                before.fade_at = Some((before.position + at, (-offset) as usize));
+            }
+            let mut voice = self.voice(id, clip, settings);
+            voice.delay = at;
+            self.voices.push(voice);
+            self.chained.push(id);
+        }
     }
 
     fn frames(&self, seconds: f64) -> usize {
@@ -216,36 +317,40 @@ impl Mixer {
         match command {
             Command::Play { id, clip, settings } => {
                 self.voices.retain(|v| v.id != id);
-                let length = clip.frames();
-                let start = self.frames(settings.start).min(length);
-                let end = settings.end.map_or(length, |e| self.frames(e)).clamp(start, length);
-                let fade_in = self.frames(settings.fade_in as f64);
-                self.voices.push(Voice {
-                    id,
-                    clip,
-                    position: start,
-                    start,
-                    end,
-                    gain: db_to_gain(settings.gain_db),
-                    envelope: if fade_in == 0 { 1.0 } else { 0.0 },
-                    ramp: if fade_in == 0 { 0.0 } else { 1.0 / fade_in as f32 },
-                    fade_out: self.frames(settings.fade_out as f64),
-                    looped: settings.looped,
-                    stopping: false,
-                    pair: settings.pair,
-                });
+                self.queued.retain(|q| q.after != id && q.id != id);
+                let voice = self.voice(id, clip, settings);
+                self.voices.push(voice);
             }
-            Command::Stop { id, fade } => self.stop(|v| v.id == id, fade),
-            Command::StopAll { fade } => self.stop(|v| v.id & PREVIEW == 0, fade),
-            Command::StopPreview { fade } => self.stop(|v| v.id & PREVIEW != 0, fade),
+            Command::Queue { after, id, clip, settings, offset } => {
+                let offset = (offset * self.rate as f64).round() as i64;
+                self.queued.retain(|q| q.after != after);
+                self.queued.push(Queued { after, id, clip, settings, offset, wait: None });
+            }
+            Command::Unqueue { after } => self.queued.retain(|q| q.after != after),
+            Command::Stop { id, fade } => {
+                self.queued.retain(|q| q.after != id && q.id != id);
+                self.stop(|v| v.id == id, fade);
+            }
+            Command::StopAll { fade } => {
+                self.queued.retain(|q| q.id & PREVIEW != 0);
+                self.stop(|v| v.id & PREVIEW == 0, fade);
+            }
+            Command::StopPreview { fade } => {
+                self.queued.retain(|q| q.id & PREVIEW == 0);
+                self.stop(|v| v.id & PREVIEW != 0, fade);
+            }
             Command::Gain { id, gain_db } => {
                 for voice in self.voices.iter_mut().filter(|v| v.id == id) {
                     voice.gain = db_to_gain(gain_db);
                 }
             }
             Command::Renumber(map) => {
+                let renumber = |n: u32| map.get(&n).copied().unwrap_or(n);
                 for voice in &mut self.voices {
-                    voice.id = map.get(&voice.id).copied().unwrap_or(voice.id);
+                    voice.id = renumber(voice.id);
+                }
+                for q in &mut self.queued {
+                    (q.after, q.id) = (renumber(q.after), renumber(q.id));
                 }
             }
         }
@@ -268,6 +373,11 @@ impl Mixer {
         self.voices.iter().any(|v| v.id == id)
     }
 
+    /// Un son attend-il pour partir en enchaînement ?
+    pub fn is_queued(&self, id: u32) -> bool {
+        self.queued.iter().any(|q| q.id == id)
+    }
+
     /// Positions des sons en cours, en secondes dans le fichier.
     pub fn positions(&self) -> HashMap<u32, f64> {
         self.voices.iter().map(|v| (v.id, v.position as f64 / self.rate as f64)).collect()
@@ -277,12 +387,21 @@ impl Mixer {
     pub fn render(&mut self, out: &mut [f32], channels: usize) -> [f32; 2] {
         let channels = channels.max(1);
         out.iter_mut().for_each(|s| *s = 0.0);
+        self.start_queued(out.len() / channels);
         let mut peaks = [0.0f32; 2];
         for voice in &mut self.voices {
             // Paire absente de cette sortie : le son avance sans rien jouer.
             let base = voice.pair * 2;
             let routed = channels == 1 || base + 1 < channels;
-            for frame in out.chunks_exact_mut(channels) {
+            let delay = std::mem::take(&mut voice.delay);
+            for frame in out.chunks_exact_mut(channels).skip(delay) {
+                if let Some((at, frames)) = voice.fade_at
+                    && voice.position >= at
+                {
+                    voice.fade_at = None;
+                    voice.stopping = true;
+                    voice.ramp = -1.0 / frames.max(1) as f32;
+                }
                 if voice.position >= voice.end {
                     if voice.looped && voice.end > voice.start && !voice.stopping {
                         voice.position = voice.start;
@@ -386,6 +505,7 @@ impl Player {
                     let peaks = mixer.render(out, channels);
                     // Jamais d'attente dans le fil audio : relevé sauté si l'interface lit.
                     if let Ok(mut status) = shared.try_lock() {
+                        status.chained.extend(mixer.take_chained());
                         status.positions = mixer.positions();
                         status.peaks = [status.peaks[0].max(peaks[0]), status.peaks[1].max(peaks[1])];
                     }
@@ -419,9 +539,14 @@ impl Player {
     /// Positions des sons en cours, et crêtes depuis le dernier appel (remises à zéro).
     pub fn status(&self) -> PlayerStatus {
         let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
-        let copy = status.clone();
+        let copy = PlayerStatus { positions: status.positions.clone(), peaks: status.peaks, chained: Vec::new() };
         status.peaks = [0.0; 2];
         copy
+    }
+
+    /// Sons partis par enchaînement depuis le dernier appel.
+    pub fn take_chained(&self) -> Vec<u32> {
+        std::mem::take(&mut self.status.lock().unwrap_or_else(|e| e.into_inner()).chained)
     }
 }
 
@@ -516,6 +641,55 @@ mod tests {
         assert!(!mixer.is_playing(1) && mixer.is_playing(PREVIEW | 1), "Sound Off ne coupe pas le casque");
         mixer.apply(Command::StopPreview { fade: 0.0 });
         assert!(!mixer.is_playing(PREVIEW | 1));
+    }
+
+    /// Rendu par petits blocs (le départ enchaîné tombe au milieu d'un bloc) : la voie
+    /// gauche, image par image.
+    fn left_in_blocks(mixer: &mut Mixer, frames: usize) -> Vec<f32> {
+        let mut left = Vec::new();
+        while left.len() < frames {
+            let mut out = vec![0.0; 7 * 2];
+            mixer.render(&mut out, 2);
+            left.extend(out.chunks(2).map(|f| (f[0] * 1000.0).round() / 1000.0));
+        }
+        left.truncate(frames);
+        left
+    }
+
+    /// Enchaînements : à la fin sans blanc, après une pause, en vrai fondu croisé ; un
+    /// arrêt à la main annule la suite.
+    #[test]
+    fn chains_sounds_to_the_frame() {
+        let queue = |offset| Command::Queue { after: 1, id: 2, clip: clip(10), settings: PlaySettings::default(), offset };
+        let mut mixer = Mixer::new(100);
+        mixer.apply(Command::Play { id: 1, clip: clip(10), settings: PlaySettings::default() });
+        mixer.apply(queue(0.0));
+        let left = left_in_blocks(&mut mixer, 21);
+        assert_eq!(left, [vec![1.0; 20], vec![0.0]].concat(), "le 2 part à l'image où le 1 finit");
+        assert_eq!(mixer.take_chained(), [2]);
+
+        let mut mixer = Mixer::new(100);
+        mixer.apply(Command::Play { id: 1, clip: clip(10), settings: PlaySettings::default() });
+        mixer.apply(queue(0.05));
+        let left = left_in_blocks(&mut mixer, 26);
+        assert_eq!(left, [vec![1.0; 10], vec![0.0; 5], vec![1.0; 10], vec![0.0]].concat(), "pause de 5 images");
+
+        // Fondu croisé de 4 images : l'un descend pendant que l'autre monte, la somme reste pleine.
+        let mut mixer = Mixer::new(100);
+        mixer.apply(Command::Play { id: 1, clip: clip(10), settings: PlaySettings::default() });
+        let rising = PlaySettings { fade_in: 0.04, ..Default::default() };
+        mixer.apply(Command::Queue { after: 1, id: 2, clip: clip(10), settings: rising, offset: -0.04 });
+        let left = left_in_blocks(&mut mixer, 17);
+        assert_eq!(left, [vec![1.0; 16], vec![0.0]].concat(), "6 + 10 images, sans creux ni bosse");
+        assert!(!mixer.is_playing(1));
+
+        let mut mixer = Mixer::new(100);
+        mixer.apply(Command::Play { id: 1, clip: clip(10), settings: PlaySettings::default() });
+        mixer.apply(queue(0.0));
+        left_in_blocks(&mut mixer, 3);
+        mixer.apply(Command::Stop { id: 1, fade: 0.0 });
+        assert!(!mixer.is_queued(2), "arrêté à la main : rien ne suit");
+        assert!(left_in_blocks(&mut mixer, 20).iter().all(|s| *s == 0.0));
     }
 
     /// Un vrai fichier : WAV mono 16 bits à 44,1 kHz, décodé en stéréo et passé à 48 kHz.

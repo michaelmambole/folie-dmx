@@ -27,6 +27,32 @@ pub struct Sound {
     pub group: u32,
     /// Paire de sorties de la carte son : 0 pour 1-2, 1 pour 3-4…
     pub pair: u32,
+    /// Son qui part quand celui-ci arrive à sa fin (pas s'il est arrêté).
+    pub then: Option<u32>,
+    pub transition: Transition,
+}
+
+/// Comment le son suivant prend le relais.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum Transition {
+    /// À la fin, sans blanc.
+    #[default]
+    End,
+    /// Après une pause, en secondes.
+    Pause(f32),
+    /// Fondu croisé, en secondes : le suivant monte pendant que celui-ci descend.
+    Crossfade(f32),
+}
+
+impl Transition {
+    /// Décalage du départ par rapport à la fin, en secondes (négatif : avant la fin).
+    pub fn offset(self) -> f64 {
+        match self {
+            Self::End => 0.0,
+            Self::Pause(s) => f64::from(s.max(0.0)),
+            Self::Crossfade(s) => -f64::from(s.max(0.0)),
+        }
+    }
 }
 
 impl Default for Sound {
@@ -42,6 +68,8 @@ impl Default for Sound {
             looped: false,
             group: 0,
             pair: 0,
+            then: None,
+            transition: Transition::End,
         }
     }
 }

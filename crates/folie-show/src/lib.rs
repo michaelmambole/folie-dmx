@@ -1044,6 +1044,8 @@ mod tests {
                     looped: true,
                     group: 4,
                     pair: 2,
+                    then: Some(2),
+                    transition: media::Transition::Crossfade(1.5),
                 },
             )]),
             sound: sound::SoundSetup {

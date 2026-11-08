@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use folie_audio::player::{self, Clip, Command, Mixer, PREVIEW, PlaySettings, Player};
 use folie_control::sounds::SoundRequest;
-use folie_show::media::Sound;
+use folie_show::media::{Sound, Transition};
 
 /// Où part le son : la carte son, ou (tests) un mélangeur muet qu'on interroge.
 pub enum Output {
@@ -38,6 +38,8 @@ pub struct SoundPlayback {
     receiver: Receiver<(PathBuf, Result<Clip, String>)>,
     /// Sons demandés pendant leur chargement : joués dès qu'ils sont prêts.
     pending: Vec<u32>,
+    /// Sons en cours dont le suivant n'est pas encore chargé : enchaînement à préparer.
+    pending_chains: Vec<u32>,
     /// Muet (tests) : aucune carte son n'est ouverte.
     silent: bool,
     /// Sorties du mélangeur muet (tests).
@@ -91,6 +93,7 @@ impl SoundPlayback {
             sender,
             receiver,
             pending: Vec::new(),
+            pending_chains: Vec::new(),
             silent: false,
             silent_channels: 2,
             preview: Preview::default(),
@@ -311,15 +314,7 @@ impl SoundPlayback {
                 }
             }
         };
-        let mut settings = PlaySettings {
-            start: sound.start,
-            end: sound.end,
-            gain_db: sound.gain_db,
-            fade_in: sound.fade_in,
-            fade_out: sound.fade_out,
-            looped: sound.looped,
-            pair: self.preview.pair as usize,
-        };
+        let mut settings = PlaySettings { pair: self.preview.pair as usize, ..settings_of(sound) };
         if let Some(from) = from {
             settings.start = from.max(0.0);
             settings.fade_in = PREVIEW_FADE;
@@ -402,6 +397,17 @@ impl SoundPlayback {
         for number in pending {
             let _ = self.play(number, sounds);
         }
+        // Enchaînements : sons partis tout seuls, suivants enfin chargés.
+        for number in self.take_chained() {
+            self.chained(number, sounds);
+        }
+        for number in self.pending_chains.clone() {
+            if self.positions().contains_key(&number) {
+                self.queue_next(number, sounds);
+            } else {
+                self.pending_chains.retain(|n| *n != number);
+            }
+        }
         if let Some((_, receiver)) = &self.preview.channel {
             for (path, state) in receiver.try_iter() {
                 self.preview.clips.insert(path, state);
@@ -432,15 +438,68 @@ impl SoundPlayback {
                 }
                 SoundRequest::Stop { number, fade } => {
                     self.pending.retain(|n| *n != number);
+                    self.pending_chains.retain(|n| *n != number);
                     self.send(Command::Stop { id: number, fade });
                 }
                 SoundRequest::StopAll { fade } => {
                     self.pending.clear();
+                    self.pending_chains.clear();
                     self.send(Command::StopAll { fade });
                 }
             }
         }
         problems
+    }
+
+    /// Prépare le son qui suit `number` : le mélangeur le lancera à la fin, à l'image près.
+    fn queue_next(&mut self, number: u32, sounds: &BTreeMap<u32, Sound>) {
+        self.pending_chains.retain(|n| *n != number);
+        let Some(sound) = sounds.get(&number) else { return };
+        let Some(next) = sound.then.filter(|n| sounds.contains_key(n)) else { return };
+        let next_sound = &sounds[&next];
+        let clip = match self.clips.get(&next_sound.file) {
+            Some(ClipState::Ready { clip, .. }) => clip.clone(),
+            Some(ClipState::Failed(_)) => return,
+            Some(ClipState::Loading) | None => {
+                self.pending_chains.push(number);
+                return;
+            }
+        };
+        let mut settings = settings_of(next_sound);
+        if let Transition::Crossfade(seconds) = sound.transition {
+            settings.fade_in = seconds.max(0.0);
+        }
+        self.send(Command::Queue { after: number, id: next, clip, settings, offset: sound.transition.offset() });
+    }
+
+    /// Le suivant d'un son a changé : s'il joue, l'enchaînement préparé est refait.
+    pub fn requeue(&mut self, number: u32, sounds: &BTreeMap<u32, Sound>) {
+        if !self.positions().contains_key(&number) {
+            return;
+        }
+        self.send(Command::Unqueue { after: number });
+        self.queue_next(number, sounds);
+    }
+
+    /// Un son est parti par enchaînement : comme lancé, il coupe son groupe (sauf le son
+    /// qui lui passe la main) et prépare son propre suivant.
+    fn chained(&mut self, number: u32, sounds: &BTreeMap<u32, Sound>) {
+        let Some(sound) = sounds.get(&number) else { return };
+        if sound.group != 0 {
+            for (&other, _) in sounds.iter().filter(|(n, s)| **n != number && s.group == sound.group && s.then != Some(number)) {
+                self.pending.retain(|n| *n != other);
+                self.send(Command::Stop { id: other, fade: CHOKE_FADE });
+            }
+        }
+        self.queue_next(number, sounds);
+    }
+
+    fn take_chained(&mut self) -> Vec<u32> {
+        match &mut self.output {
+            Some(Output::Device(player)) => player.take_chained(),
+            Some(Output::Silent(mixer)) => mixer.take_chained(),
+            None => Vec::new(),
+        }
     }
 
     fn play(&mut self, number: u32, sounds: &BTreeMap<u32, Sound>) -> Option<String> {
@@ -457,15 +516,7 @@ impl SoundPlayback {
                 return None;
             }
         };
-        let settings = PlaySettings {
-            start: sound.start,
-            end: sound.end,
-            gain_db: sound.gain_db,
-            fade_in: sound.fade_in,
-            fade_out: sound.fade_out,
-            looped: sound.looped,
-            pair: sound.pair as usize,
-        };
+        let settings = settings_of(sound);
         // Groupe d'exclusion : les autres sons du groupe sont coupés net (un rien de fondu
         // pour éviter le clic), comme sur un sampleur.
         if sound.group != 0 {
@@ -475,12 +526,13 @@ impl SoundPlayback {
             }
         }
         self.send(Command::Play { id: number, clip, settings });
+        self.queue_next(number, sounds);
         None
     }
 
     /// Les sons ont changé de numéro : ceux en cours ou attendus suivent.
     pub fn renumber(&mut self, map: &HashMap<u32, u32>) {
-        for n in &mut self.pending {
+        for n in self.pending.iter_mut().chain(&mut self.pending_chains) {
             *n = map.get(n).copied().unwrap_or(*n);
         }
         // La pré-écoute porte les mêmes numéros, marqués.
@@ -538,5 +590,18 @@ fn all_positions(output: &Option<Output>) -> HashMap<u32, f64> {
         Some(Output::Device(player)) => player.positions(),
         Some(Output::Silent(mixer)) => mixer.positions(),
         None => HashMap::new(),
+    }
+}
+
+/// Comment jouer un son du show.
+fn settings_of(sound: &Sound) -> PlaySettings {
+    PlaySettings {
+        start: sound.start,
+        end: sound.end,
+        gain_db: sound.gain_db,
+        fade_in: sound.fade_in,
+        fade_out: sound.fade_out,
+        looped: sound.looped,
+        pair: sound.pair as usize,
     }
 }
