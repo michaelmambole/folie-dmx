@@ -22,11 +22,24 @@ pub struct Sound {
     pub fade_in: f32,
     pub fade_out: f32,
     pub looped: bool,
+    /// Groupe d'exclusion, comme sur un sampleur : un son qui part coupe ceux de son
+    /// groupe. 0 : aucun.
+    pub group: u32,
 }
 
 impl Default for Sound {
     fn default() -> Self {
-        Self { name: String::new(), file: PathBuf::new(), start: 0.0, end: None, gain_db: 0.0, fade_in: 0.0, fade_out: 0.0, looped: false }
+        Self {
+            name: String::new(),
+            file: PathBuf::new(),
+            start: 0.0,
+            end: None,
+            gain_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            looped: false,
+            group: 0,
+        }
     }
 }
 

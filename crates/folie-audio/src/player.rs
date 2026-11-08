@@ -157,6 +157,8 @@ pub enum Command {
     StopAll { fade: f32 },
     /// Change le volume d'un son en cours.
     Gain { id: u32, gain_db: f32 },
+    /// Les sons ont changé de numéro (ancien -> nouveau) : ceux en cours suivent.
+    Renumber(HashMap<u32, u32>),
 }
 
 struct Voice {
@@ -227,6 +229,11 @@ impl Mixer {
             Command::Gain { id, gain_db } => {
                 for voice in self.voices.iter_mut().filter(|v| v.id == id) {
                     voice.gain = db_to_gain(gain_db);
+                }
+            }
+            Command::Renumber(map) => {
+                for voice in &mut self.voices {
+                    voice.id = map.get(&voice.id).copied().unwrap_or(voice.id);
                 }
             }
         }

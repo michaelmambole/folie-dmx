@@ -131,6 +131,12 @@ le champ « Au départ » d'une cue. À l'enregistrement, ils sont copiés à c�
 son** (fenêtre Cues, « Suit ») : ses cues qui ont un temps TC partent quand la lecture
 passe ce temps (« Maintenant », pendant l'écoute, cale une cue à l'oreille).
 
+La forme d'onde se zoome (Cmd + molette ou pincer, autour de la souris ; boutons Zoom,
+« Tout », « Entrée-sortie »). Le volume revient à 0 dB par Option-clic ou double-clic.
+Glisser un son dans la liste le renumérote : les `Sound 3` des cues et des macros et
+les séquences qui le suivent sont mis à jour. Comme sur un sampleur, un **groupe**
+d'exclusion fait qu'un son qui part coupe net ceux de son groupe.
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

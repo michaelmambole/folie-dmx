@@ -9,7 +9,7 @@ use folie_control::timecode::TimeSource;
 use folie_show::media::Sound;
 
 use super::FolieApp;
-use crate::playback_sound::ClipState;
+use crate::playback_sound::{ClipState, PEAK_BLOCK};
 use crate::theme;
 
 /// État de la fenêtre Sons (pas enregistré).
@@ -21,6 +21,50 @@ pub struct SoundsView {
     meter: [f32; 2],
     /// Sons en lecture à l'image précédente.
     playing: Vec<u32>,
+    /// Partie de la forme d'onde affichée (zoom).
+    pub zoom: Option<WaveZoom>,
+}
+
+/// Partie affichée de la forme d'onde d'un son : à partir de `from`, sur `span` secondes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaveZoom {
+    pub sound: u32,
+    pub from: f64,
+    pub span: f64,
+}
+
+impl WaveZoom {
+    /// Plus petite durée affichée.
+    const MIN_SPAN: f64 = 0.02;
+
+    fn whole(sound: u32, duration: f64) -> Self {
+        Self { sound, from: 0.0, span: duration }
+    }
+
+    /// Zoom de `factor` (> 1 : on s'approche) autour du temps `at`, qui reste sous la souris.
+    fn zoom(&mut self, factor: f64, at: f64, duration: f64) {
+        let span = (self.span / factor).clamp(Self::MIN_SPAN.min(duration), duration);
+        self.from = at - (at - self.from) * span / self.span;
+        self.span = span;
+        self.clamp(duration);
+    }
+
+    /// Montre la plage `from..to`, avec un peu de marge.
+    fn frame(&mut self, from: f64, to: f64, duration: f64) {
+        let margin = (to - from) * 0.05;
+        self.span = (to - from + 2.0 * margin).clamp(Self::MIN_SPAN.min(duration), duration);
+        self.from = from - margin;
+        self.clamp(duration);
+    }
+
+    fn clamp(&mut self, duration: f64) {
+        self.span = self.span.min(duration);
+        self.from = self.from.clamp(0.0, (duration - self.span).max(0.0));
+    }
+
+    fn is_whole(&self, duration: f64) -> bool {
+        self.span >= duration - 1e-9
+    }
 }
 
 /// Durée lisible : « 2:31.4 ».
@@ -113,6 +157,28 @@ impl FolieApp {
             self.playback.open();
         }
         first
+    }
+
+    /// Déplace un son dans la liste : renuméroté, avec tout ce qui le désigne (cues,
+    /// macros, séquences), et ce qui joue suit.
+    pub(crate) fn move_sound(&mut self, number: u32, index: usize) {
+        let map = self.console.move_sound(number, index);
+        if map.is_empty() {
+            return;
+        }
+        let renumber = |n: u32| map.get(&n).copied().unwrap_or(n);
+        self.playback.renumber(&map);
+        for n in &mut self.sounds_view.playing {
+            *n = renumber(*n);
+        }
+        self.sounds_view.selected = self.sounds_view.selected.map(renumber);
+        if let Some(zoom) = &mut self.sounds_view.zoom {
+            zoom.sound = renumber(zoom.sound);
+        }
+        let new = renumber(number);
+        let message = if map.len() > 1 { format!("Son {number} devenu le son {new}, les suivants renumérotés") } else { format!("Son {number} devenu le son {new}") };
+        self.command_line.feedback = Some((true, message));
+        self.mark_dirty();
     }
 
     pub(super) fn sounds_window(&mut self, ui: &mut egui::Ui) {
@@ -212,8 +278,11 @@ impl FolieApp {
     }
 
     fn sound_list(&mut self, ui: &mut egui::Ui, positions: &std::collections::HashMap<u32, f64>) {
+        // Glisser un son à une autre place de la liste : (son déplacé, place visée).
+        let mut moved: Option<(u32, usize)> = None;
         egui::ScrollArea::vertical().id_salt("sound_list").max_height(ui.available_height() - 70.0).show(ui, |ui| {
-            for (number, sound) in &self.console.show.sounds {
+            let count = self.console.show.sounds.len();
+            for (place, (number, sound)) in self.console.show.sounds.iter().enumerate() {
                 let playing = positions.contains_key(number);
                 let duration = match self.playback.clip(sound) {
                     Some(ClipState::Ready { clip, .. }) => duration_text(clip.duration()),
@@ -221,16 +290,36 @@ impl FolieApp {
                     Some(ClipState::Failed(_)) => "illisible".into(),
                     None => String::new(),
                 };
-                let text = RichText::new(format!("{number}  {}  {duration}", sound.name))
+                let group = if sound.group == 0 { String::new() } else { format!("  G{}", sound.group) };
+                let text = RichText::new(format!("{number}  {}  {duration}{group}", sound.name))
                     .color(if playing { theme::GO } else { theme::TEXT });
                 let selected = self.sounds_view.selected == Some(*number);
-                let row = ui.selectable_label(selected, text);
+                let row = ui.selectable_label(selected, text).interact(Sense::drag());
                 let row = if playing { row.on_hover_text("En lecture") } else { row };
                 if row.clicked() {
                     self.sounds_view.selected = Some(*number);
                 }
+                row.dnd_set_drag_payload(*number);
+                if row.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+                // Au-dessus ou au-dessous de la ligne survolée, selon la moitié.
+                let below = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| p.y > row.rect.center().y);
+                if row.dnd_hover_payload::<u32>().is_some_and(|d| *d != *number) {
+                    let y = if below { row.rect.bottom() } else { row.rect.top() };
+                    ui.painter().hline(row.rect.x_range(), y, Stroke::new(2.0, theme::SELECTION));
+                }
+                if let Some(dragged) = row.dnd_release_payload::<u32>().filter(|d| **d != *number) {
+                    let from = self.console.show.sounds.keys().position(|n| n == &*dragged).unwrap_or(0);
+                    let target = place + usize::from(below);
+                    let index = if from < target { target - 1 } else { target };
+                    moved = Some((*dragged, index.min(count - 1)));
+                }
             }
         });
+        if let Some((number, index)) = moved {
+            self.move_sound(number, index);
+        }
         ui.add_space(4.0);
         let help = "Ou glissez des fichiers (ou un dossier) sur cette fenêtre. Ils seront copiés à côté du show à l'enregistrement";
         if ui.button("Importer des sons…").on_hover_text(help).clicked()
@@ -267,8 +356,36 @@ impl FolieApp {
         ui.label(RichText::new(file).size(11.5).color(theme::MUTED)).on_hover_text(sound.file.display().to_string());
         ui.add_space(4.0);
         match state {
-            Some(ClipState::Ready { peaks, .. }) => {
-                waveform(ui, peaks, duration.unwrap_or(1.0), &mut edited, position);
+            Some(ClipState::Ready { clip, peaks }) => {
+                let duration = clip.duration().max(1e-6);
+                let zoom = match self.sounds_view.zoom {
+                    Some(z) if z.sound == number => z,
+                    _ => WaveZoom::whole(number, duration),
+                };
+                let mut zoom = zoom;
+                zoom.clamp(duration);
+                ui.horizontal(|ui| {
+                    let whole = zoom.is_whole(duration);
+                    let center = zoom.from + zoom.span / 2.0;
+                    if ui.add_enabled(zoom.span > WaveZoom::MIN_SPAN, egui::Button::new("Zoom avant").small()).on_hover_text("Ou Cmd + molette, ou pincer, sur la forme d'onde").clicked() {
+                        zoom.zoom(2.0, center, duration);
+                    }
+                    if ui.add_enabled(!whole, egui::Button::new("Zoom arrière").small()).clicked() {
+                        zoom.zoom(0.5, center, duration);
+                    }
+                    if ui.add_enabled(!whole, egui::Button::new("Tout").small()).on_hover_text("Tout le fichier").clicked() {
+                        zoom = WaveZoom::whole(number, duration);
+                    }
+                    if ui.add(egui::Button::new("Entrée-sortie").small()).on_hover_text("Cadrer la partie jouée").clicked() {
+                        zoom.frame(edited.start, edited.end.unwrap_or(duration), duration);
+                    }
+                    if !zoom.is_whole(duration) {
+                        let text = format!("{} à {}", duration_text(zoom.from), duration_text(zoom.from + zoom.span));
+                        ui.label(RichText::new(text).size(11.0).monospace().color(theme::MUTED));
+                    }
+                });
+                waveform(ui, clip, peaks, &mut zoom, &mut edited, position);
+                self.sounds_view.zoom = Some(zoom);
             }
             Some(ClipState::Failed(e)) => {
                 ui.colored_label(theme::DANGER, format!("Fichier illisible : {e}"));
@@ -326,6 +443,24 @@ impl FolieApp {
                 .labelled_by(label.id)
                 .on_hover_text("Avant le point de sortie");
             ui.end_row();
+            let label = ui.label("Groupe");
+            ui.add(
+                egui::DragValue::new(&mut edited.group)
+                    .range(0..=99)
+                    .speed(0.1)
+                    .custom_formatter(|g, _| if g < 0.5 { "aucun".into() } else { format!("{g:.0}") })
+                    .custom_parser(|t| match t.trim() {
+                        "" | "aucun" | "-" => Some(0.0),
+                        t => t.parse::<u32>().ok().map(f64::from),
+                    }),
+            )
+            .labelled_by(label.id)
+            .on_hover_text("Comme sur un sampleur : un son qui part coupe net ceux de son groupe");
+            let others = self.console.show.sounds.iter().filter(|(n, s)| **n != number && edited.group != 0 && s.group == edited.group).count();
+            if others > 0 {
+                ui.label(RichText::new(format!("coupe {others} autre(s) son(s)")).size(11.0).color(theme::MUTED));
+            }
+            ui.end_row();
         });
         if edited.end.is_some_and(|e| e <= edited.start) {
             edited.end = None;
@@ -372,45 +507,100 @@ fn meter(ui: &mut egui::Ui, peaks: [f32; 2]) {
     response.widget_info(|| egui::WidgetInfo::slider(false, f64::from(peaks[0].max(peaks[1])) * 100.0, "Niveau de sortie"));
 }
 
+/// Crête de la tranche `from..to` (en images) : par les crêtes gardées si la tranche
+/// est large, dans le fichier lui-même sinon.
+fn peak_between(clip: &folie_audio::player::Clip, blocks: &[f32], from: usize, to: usize) -> f32 {
+    let to = to.min(clip.frames()).max(from + 1);
+    if to - from > 2 * PEAK_BLOCK && !blocks.is_empty() {
+        let last = blocks.len() - 1;
+        blocks[(from / PEAK_BLOCK).min(last)..=((to - 1) / PEAK_BLOCK).min(last)].iter().fold(0.0f32, |m, p| m.max(*p))
+    } else {
+        let samples = &clip.samples;
+        samples.get(from * 2..(to * 2).min(samples.len())).map_or(0.0, |s| s.iter().fold(0.0f32, |m, v| m.max(v.abs())))
+    }
+}
+
 /// Forme d'onde : la partie jouée en clair, les points d'entrée et de sortie à la souris,
-/// la tête de lecture.
-fn waveform(ui: &mut egui::Ui, peaks: &[f32], duration: f64, sound: &mut Sound, position: Option<f64>) {
+/// la tête de lecture. Zoom : Cmd + molette ou pincer, autour de la souris ; défilement par
+/// la molette horizontale, ou en glissant ailleurs que sur une poignée.
+fn waveform(
+    ui: &mut egui::Ui,
+    clip: &folie_audio::player::Clip,
+    blocks: &[f32],
+    zoom: &mut WaveZoom,
+    sound: &mut Sound,
+    position: Option<f64>,
+) {
+    let duration = clip.duration().max(1e-6);
     let width = ui.available_width().clamp(200.0, 900.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 90.0), Sense::click_and_drag());
-    let x_of = |t: f64| rect.left() + (t / duration.max(1e-6)) as f32 * rect.width();
-    let t_of = |x: f32| (((x - rect.left()) / rect.width()) as f64 * duration).clamp(0.0, duration);
+    let t_of_x = |zoom: &WaveZoom, x: f32| zoom.from + ((x - rect.left()) / rect.width()) as f64 * zoom.span;
+
+    // Zoom et défilement, souris au-dessus.
+    if response.hovered() {
+        let (factor, scroll, pointer) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.x, i.pointer.hover_pos()));
+        if factor != 1.0
+            && let Some(pos) = pointer
+        {
+            let at = t_of_x(zoom, pos.x);
+            zoom.zoom(f64::from(factor), at, duration);
+        }
+        if scroll != 0.0 {
+            zoom.from -= f64::from(scroll / rect.width()) * zoom.span;
+            zoom.clamp(duration);
+        }
+    }
+    let x_at = |zoom: &WaveZoom, t: f64| rect.left() + ((t - zoom.from) / zoom.span) as f32 * rect.width();
     let end = sound.end.unwrap_or(duration);
 
-    // Glisser : la poignée la plus proche (entrée ou sortie) suit la souris.
+    // Glisser : la poignée (entrée ou sortie) la plus proche suit la souris. Zoomé, on ne
+    // prend une poignée que tout près ; ailleurs, on fait défiler.
     let handle_id = response.id.with("handle");
     if response.drag_started()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        let nearer_start = (pos.x - x_of(sound.start)).abs() <= (pos.x - x_of(end)).abs();
-        ui.data_mut(|d| d.insert_temp(handle_id, nearer_start));
+        let (to_start, to_end) = ((pos.x - x_at(zoom, sound.start)).abs(), (pos.x - x_at(zoom, end)).abs());
+        let grab = if zoom.is_whole(duration) || to_start.min(to_end) <= 12.0 { Some(to_start <= to_end) } else { None };
+        ui.data_mut(|d| d.insert_temp(handle_id, grab));
     }
     if response.dragged()
-        && let (Some(pos), Some(start_handle)) = (response.interact_pointer_pos(), ui.data(|d| d.get_temp::<bool>(handle_id)))
+        && let Some(pos) = response.interact_pointer_pos()
     {
-        let t = (t_of(pos.x) * 100.0).round() / 100.0;
-        if start_handle {
-            sound.start = t.min(end - 0.01).max(0.0);
-        } else {
-            let t = t.max(sound.start + 0.01);
-            sound.end = (t < duration - 0.005).then_some(t);
+        match ui.data(|d| d.get_temp::<Option<bool>>(handle_id)).flatten() {
+            Some(start_handle) => {
+                // Arrondi au centième, ou à l'image près quand on est très près.
+                let step = if zoom.span < 2.0 { 1.0 / clip.rate.max(1) as f64 } else { 0.01 };
+                let t = ((t_of_x(zoom, pos.x).clamp(0.0, duration) / step).round() * step).min(duration);
+                if start_handle {
+                    sound.start = t.min(end - 0.01).max(0.0);
+                } else {
+                    let t = t.max(sound.start + 0.01);
+                    sound.end = (t < duration - 0.005).then_some(t);
+                }
+            }
+            None => {
+                zoom.from -= f64::from(response.drag_delta().x / rect.width()) * zoom.span;
+                zoom.clamp(duration);
+            }
         }
     }
 
+    let x_of = |t: f64| x_at(zoom, t);
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, theme::BG);
     let middle = rect.center().y;
     let half = rect.height() / 2.0 - 4.0;
-    let columns = peaks.len().max(1);
-    for (i, peak) in peaks.iter().enumerate() {
-        let x = rect.left() + (i as f32 + 0.5) / columns as f32 * rect.width();
-        let t = (i as f64 + 0.5) / columns as f64 * duration;
+    // Une colonne par point d'écran.
+    let columns = (rect.width().round() as usize).max(1);
+    let rate = clip.rate.max(1) as f64;
+    for c in 0..columns {
+        let t0 = zoom.from + c as f64 / columns as f64 * zoom.span;
+        let t1 = zoom.from + (c + 1) as f64 / columns as f64 * zoom.span;
+        let peak = peak_between(clip, blocks, (t0 * rate) as usize, (t1 * rate).ceil() as usize);
+        let t = (t0 + t1) / 2.0;
         let inside = t >= sound.start && t <= end;
         let color = if inside { theme::INFO } else { theme::INFO.gamma_multiply(0.25) };
+        let x = rect.left() + (c as f32 + 0.5) / columns as f32 * rect.width();
         let h = (peak.clamp(0.0, 1.0) * half).max(0.5);
         painter.line_segment([egui::pos2(x, middle - h), egui::pos2(x, middle + h)], Stroke::new(rect.width() / columns as f32 + 0.3, color));
     }
@@ -422,6 +612,13 @@ fn waveform(ui: &mut egui::Ui, peaks: &[f32], duration: f64, sound: &mut Sound, 
     if let Some(t) = position {
         let x = x_of(t);
         painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(1.5, theme::GO));
+    }
+    // Zoomé : où l'on est dans le fichier, en bas.
+    if !zoom.is_whole(duration) {
+        let bar = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - 3.0), egui::vec2(rect.width(), 3.0));
+        let left = bar.left() + (zoom.from / duration) as f32 * bar.width();
+        let w = ((zoom.span / duration) as f32 * bar.width()).max(4.0);
+        painter.rect_filled(egui::Rect::from_min_size(egui::pos2(left, bar.top()), egui::vec2(w, bar.height())), 1.5, theme::MUTED);
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "Forme d'onde : glisser les points d'entrée et de sortie"));
 }

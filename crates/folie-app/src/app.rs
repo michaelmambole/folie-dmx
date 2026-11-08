@@ -1657,6 +1657,105 @@ mod tests {
         assert!(harness.state().file.dirty);
     }
 
+    /// Groupes d'exclusion (un son coupe les autres de son groupe), zoom sur la forme
+    /// d'onde, et liste réordonnée à la souris avec renumérotation des références.
+    #[test]
+    fn sound_groups_zoom_and_reorder() {
+        let dir = tempfile::tempdir().unwrap();
+        let files: Vec<_> = ["pluie", "orage", "vent"].iter().map(|n| dir.path().join(format!("{n}.wav"))).collect();
+        for f in &files {
+            write_wav(f, 2.0);
+        }
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.windows.open(WindowKind::Sounds);
+            app.import_sounds(&files);
+            app.sounds_view.selected = Some(1);
+        }
+        let start = std::time::Instant::now();
+        while !harness.state().console.show.sounds.values().all(|s| {
+            matches!(harness.state().playback.clip(s), Some(crate::playback_sound::ClipState::Ready { .. }))
+        }) {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+
+        // Groupe 1 pour la pluie, réglé dans la fenêtre, puis pour l'orage.
+        harness.get_by_role_and_label(Role::SpinButton, "Groupe").focus();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::SpinButton, "Groupe").type_text("1");
+        harness.run_steps(1);
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.sounds[&1].group, 1);
+        harness.state_mut().console.show.sounds.get_mut(&2).unwrap().group = 1;
+        harness.run_steps(2);
+        harness.get_by_label("1  pluie  0:02.0  G1");
+        harness.get_by_label("coupe 1 autre(s) son(s)");
+        command(&mut harness, "Sound 1");
+        command(&mut harness, "Sound 3");
+        command(&mut harness, "Sound 2");
+        let mixer = harness.state_mut().playback.silent_mixer().unwrap();
+        let mut block = vec![0.0; 480 * 2];
+        mixer.render(&mut block, 2); // 10 ms : le fondu anti-clic est passé
+        assert!(!mixer.is_playing(1), "coupé par l'orage, du même groupe");
+        assert!(mixer.is_playing(2) && mixer.is_playing(3), "le vent n'a pas de groupe");
+
+        // Zoom : boutons, puis Cmd + molette (ou pincer) sur la forme d'onde.
+        harness.get_by_label("Zoom avant").click();
+        harness.run_steps(2);
+        let zoom = harness.state().sounds_view.zoom.unwrap();
+        assert!((zoom.span - 1.0).abs() < 1e-3 && (zoom.from - 0.5).abs() < 1e-3, "{zoom:?}");
+        harness.get_by_label("0:00.5 à 0:01.5");
+        harness.get_by_label("Tout").click();
+        harness.run_steps(2);
+        assert!((harness.state().sounds_view.zoom.unwrap().span - 2.0).abs() < 1e-3);
+        let wave = harness.get_by_label("Forme d'onde : glisser les points d'entrée et de sortie").rect();
+        harness.hover_at(wave.left_center() + egui::vec2(wave.width() / 4.0, 0.0));
+        harness.run_steps(1);
+        harness.event(egui::Event::Zoom(4.0));
+        harness.run_steps(2);
+        let zoom = harness.state().sounds_view.zoom.unwrap();
+        assert!((zoom.span - 0.5).abs() < 1e-3, "{zoom:?}");
+        assert!((zoom.from - 0.375).abs() < 1e-3, "le temps sous la souris (0,5 s) n'a pas bougé : {zoom:?}");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sounds-zoom.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // Le vent (3) glissé en tête de liste : il devient le son 1, et la cue qui
+        // lançait « Sound 3 » le lance toujours.
+        patch_with_form(&mut harness, "Martin Rush MH 6 Wash", 1);
+        command(&mut harness, "Fixture 1 At 50");
+        command(&mut harness, "Store Cue 1");
+        harness.state_mut().console.set_cue_command(folie_show::CueNumber::whole(1), "Sound 3; Sound 1 Off").unwrap();
+        harness.run_steps(2);
+        let from = harness.get_by_label("3  vent  0:02.0").rect().center();
+        let to = harness.get_by_label("1  pluie  0:02.0  G1").rect().center_top() + egui::vec2(0.0, 2.0);
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        harness.hover_at(from);
+        harness.run_steps(1);
+        harness.event(button(from, true));
+        harness.run_steps(1);
+        for i in 1..=6 {
+            harness.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 6.0)));
+            harness.run_steps(1);
+        }
+        harness.event(button(to, false));
+        harness.run_steps(2);
+        let names: Vec<(u32, String)> = harness.state().console.show.sounds.iter().map(|(n, s)| (*n, s.name.clone())).collect();
+        assert_eq!(names, [(1, "vent".to_string()), (2, "pluie".into()), (3, "orage".into())]);
+        harness.get_by_label("Son 3 devenu le son 1, les suivants renumérotés");
+        let cue = &harness.state().console.show.sequences.values().next().unwrap().cues[&folie_show::CueNumber::whole(1)];
+        assert_eq!(cue.command, "Sound 1; Sound 2 Off");
+        let mixer = harness.state_mut().playback.silent_mixer().unwrap();
+        assert!(mixer.is_playing(1) && mixer.is_playing(3), "le vent et l'orage jouent sous leurs nouveaux numéros");
+        assert!(harness.state().file.dirty);
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();

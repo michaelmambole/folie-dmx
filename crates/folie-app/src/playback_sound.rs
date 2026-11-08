@@ -18,12 +18,14 @@ pub enum Output {
 /// Un fichier du show, chargé ou en cours de chargement.
 pub enum ClipState {
     Loading,
+    /// `peaks` : une crête par bloc de [`PEAK_BLOCK`] images.
     Ready { clip: Clip, peaks: Vec<f32> },
     Failed(String),
 }
 
-/// Colonnes de la forme d'onde gardée pour chaque son.
-const PEAK_COLUMNS: usize = 600;
+/// Images par crête gardée pour la forme d'onde : assez fin pour zoomer (au-delà, la
+/// forme d'onde lit le fichier lui-même).
+pub const PEAK_BLOCK: usize = 256;
 
 pub struct SoundPlayback {
     output: Option<Output>,
@@ -39,6 +41,9 @@ pub struct SoundPlayback {
     /// Muet (tests) : aucune carte son n'est ouverte.
     silent: bool,
 }
+
+/// Coupure d'un son par un autre de son groupe : juste assez pour ne pas claquer.
+const CHOKE_FADE: f32 = 0.005;
 
 /// Fréquence du mélangeur muet.
 const SILENT_RATE: u32 = 48_000;
@@ -123,7 +128,7 @@ impl SoundPlayback {
         for (path, result) in self.receiver.try_iter() {
             let state = match result {
                 Ok(clip) => {
-                    let peaks = clip.peaks(PEAK_COLUMNS);
+                    let peaks = clip.peaks(clip.frames().div_ceil(PEAK_BLOCK));
                     ClipState::Ready { clip, peaks }
                 }
                 Err(e) => ClipState::Failed(e),
@@ -199,8 +204,24 @@ impl SoundPlayback {
             fade_out: sound.fade_out,
             looped: sound.looped,
         };
+        // Groupe d'exclusion : les autres sons du groupe sont coupés net (un rien de fondu
+        // pour éviter le clic), comme sur un sampleur.
+        if sound.group != 0 {
+            for (&other, _) in sounds.iter().filter(|(n, s)| **n != number && s.group == sound.group) {
+                self.pending.retain(|n| *n != other);
+                self.send(Command::Stop { id: other, fade: CHOKE_FADE });
+            }
+        }
         self.send(Command::Play { id: number, clip, settings });
         None
+    }
+
+    /// Les sons ont changé de numéro : ceux en cours ou attendus suivent.
+    pub fn renumber(&mut self, map: &HashMap<u32, u32>) {
+        for n in &mut self.pending {
+            *n = map.get(n).copied().unwrap_or(*n);
+        }
+        self.send(Command::Renumber(map.clone()));
     }
 
     /// Volume changé pendant la lecture.
