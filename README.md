@@ -49,7 +49,9 @@ et seul le réseau local est accepté.
 - **Web** : le téléphone ouvre l'adresse affichée (ou scanne le QR code) et donne un code :
   *régie* (tout) ou *lecture* (GO, Back, Flash). Onglet **Sons** : lancer, arrêter,
   tout arrêter, avec ce qui joue et où en est la lecture ; le code lecture n'y a droit
-  que si la case « Le code lecture lance aussi les sons » est cochée. Sans l'interface :
+  que si la case « Le code lecture lance aussi les sons » est cochée. Avec le code régie :
+  bouton **Blind** (et un bandeau tant qu'il est actif), **Tempo** et **Tap**, état du
+  programmer ; les faders de vitesse et de crossfade s'affichent comme sur la console. Sans l'interface :
   `cargo run -p folie-remote --example demo`, puis http://localhost:8090 (codes 1234 et 5678).
 - **OSC** (UDP, port 8000 par défaut, retour d'état vers le port 9000 du client) :
 
@@ -62,9 +64,11 @@ et seul le réseau local est accepté.
 | `/folie/page 2`, `/folie/page/next`, `/folie/page/prev` | page d'executors |
 | `/folie/blackout 1` / `0` (sans valeur : bascule), `/folie/offall`, `/folie/group 3` | |
 | `/folie/cmd "Fixture 1 At 50"` | une ligne de commande |
+| `/folie/sound/3`, `/folie/sound/3/off` (fondu 1 s), `/folie/sound/off` | sons du show |
+| `/folie/blind 1` / `0` (sans valeur : bascule), `/folie/tap` | blind, tap tempo |
 
 Retour d'état : `/folie/exec/N/fader`, `/name`, `/cue`, `/on` (N : place 1 à 20 de la page
-en cours), `/folie/page`, `/folie/page/name`, `/folie/blackout`.
+en cours), `/folie/page`, `/folie/page/name`, `/folie/blackout`, `/folie/blind`, `/folie/tempo`.
 
 ### Reaper
 

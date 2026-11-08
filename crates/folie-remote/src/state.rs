@@ -16,6 +16,12 @@ pub struct State {
     page: u32,
     page_name: String,
     blackout: bool,
+    /// Les commandes vont au programmer blind (rien ne part sur scène).
+    blind: bool,
+    /// Tempo des chenillards et des effets.
+    tempo: f32,
+    /// Fixtures dans le programmer en cours.
+    programmer: usize,
     /// Executor visé par Go et Back sans numéro.
     selected: String,
     executors: Vec<ExecutorView>,
@@ -77,6 +83,10 @@ struct ExecutorView {
     name: String,
     mode: &'static str,
     level: f32,
+    /// Ce que fait le fader : « Master », « Temp », « Vitesse », « Crossfade ».
+    fader_function: &'static str,
+    /// Valeur du fader telle que la console l'affiche (« 40 % », « × 0.80 »).
+    value: String,
     /// Cue en cours (ou état), et suivante.
     now: String,
     next: String,
@@ -108,6 +118,9 @@ pub fn build(console: &Console, snapshot: &Snapshot, show_name: &str) -> State {
         page,
         page_name: console.page_name(page).to_string(),
         blackout: snapshot.blackout,
+        blind: console.blind(),
+        tempo: (console.tempo() * 10.0).round() / 10.0,
+        programmer: console.programmer().keys().map(|k| k.fixture).collect::<std::collections::BTreeSet<_>>().len(),
         selected: executor_label(console.selected_executor()),
         executors,
         groups,
@@ -125,6 +138,8 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
         name: String::new(),
         mode: "",
         level: status.map_or(1.0, |s| s.level),
+        fader_function: "Master",
+        value: String::new(),
         now: "vide".into(),
         next: String::new(),
         on: false,
@@ -160,5 +175,11 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
         None => "fin".into(),
     };
     view.progress = status.filter(|s| s.in_transition()).map(|s| (s.elapsed / s.duration.max(f32::EPSILON)).clamp(0.0, 1.0));
+    view.fader_function = x.options.fader.label();
+    view.value = if x.options.fader == folie_show::FaderFunction::Speed {
+        format!("× {:.2}", view.level * 2.0)
+    } else {
+        format!("{:.0} %", view.level * 100.0)
+    };
     view
 }

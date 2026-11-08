@@ -76,6 +76,10 @@ enum Command {
     Line(String),
     /// Marqueur passé par Reaper (son numéro).
     Marker(String),
+    Sound(u32),
+    SoundOff(Option<u32>),
+    Blind(Option<bool>),
+    Tap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,6 +120,11 @@ fn parse(message: &OscMessage) -> Option<Command> {
         ["folie", "page", "prev"] => pressed.then_some(Command::PageStep(-1)),
         ["folie", "blackout"] => Some(Command::Blackout(number(arg).map(|v| v > 0.0))),
         ["folie", "group"] => Some(Command::Group(number(arg)?.round() as u32)),
+        ["folie", "sound", "off"] => pressed.then_some(Command::SoundOff(None)),
+        ["folie", "sound", n] => pressed.then_some(Command::Sound(n.parse().ok()?)),
+        ["folie", "sound", n, "off"] => pressed.then_some(Command::SoundOff(Some(n.parse().ok()?))),
+        ["folie", "blind"] => Some(Command::Blind(number(arg).map(|v| v > 0.0))),
+        ["folie", "tap"] => pressed.then_some(Command::Tap),
         ["folie", "cmd"] => match arg? {
             OscType::String(line) => Some(Command::Line(line.clone())),
             _ => None,
@@ -157,6 +166,10 @@ impl Command {
             Self::Line(line) => Action::Command { line },
             Self::Marker(number) if markers => Action::Command { line: format!("Goto Cue {number}") },
             Self::Marker(_) => return None,
+            Self::Sound(number) => Action::Sound { number },
+            Self::SoundOff(number) => Action::SoundOff { number },
+            Self::Blind(on) => Action::Blind { on: on.unwrap_or(!console.blind()) },
+            Self::Tap => Action::Tap,
         })
     }
 }
@@ -377,6 +390,8 @@ fn feedback(console: &Console, snapshot: &Snapshot) -> Vec<(String, OscType)> {
     out.push(("/folie/page".into(), OscType::Int(page as i32)));
     out.push(("/folie/page/name".into(), OscType::String(console.page_name(page).to_string())));
     out.push(("/folie/blackout".into(), OscType::Int(snapshot.blackout as i32)));
+    out.push(("/folie/blind".into(), OscType::Int(console.blind() as i32)));
+    out.push(("/folie/tempo".into(), OscType::Float((console.tempo() * 10.0).round() / 10.0)));
     out
 }
 
@@ -411,6 +426,12 @@ mod tests {
             parse(&message("/folie/cmd", vec![OscType::String("Go".into())])),
             Some(Command::Line("Go".into()))
         );
+        assert_eq!(parse(&message("/folie/sound/3", vec![])), Some(Command::Sound(3)));
+        assert_eq!(parse(&message("/folie/sound/3", vec![OscType::Float(0.0)])), None, "relâchement ignoré");
+        assert_eq!(parse(&message("/folie/sound/3/off", vec![])), Some(Command::SoundOff(Some(3))));
+        assert_eq!(parse(&message("/folie/sound/off", vec![])), Some(Command::SoundOff(None)));
+        assert_eq!(parse(&message("/folie/blind", vec![OscType::Int(1)])), Some(Command::Blind(Some(true))));
+        assert_eq!(parse(&message("/folie/tap", vec![])), Some(Command::Tap));
         assert_eq!(parse(&message("/autre/chose", vec![])), None);
         let marker = |arg| parse(&message("/lastmarker/number/str", vec![arg]));
         assert_eq!(marker(OscType::String("3".into())), Some(Command::Marker("3".into())));

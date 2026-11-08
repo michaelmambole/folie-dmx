@@ -90,6 +90,12 @@ pub enum Action {
     SoundOff {
         number: Option<u32>,
     },
+    /// Entre en blind ou en sort.
+    Blind {
+        on: bool,
+    },
+    /// Tape le tempo (chenillards, effets) : à partir de la deuxième frappe.
+    Tap,
 }
 
 impl Action {
@@ -107,7 +113,7 @@ impl Action {
 
     /// Gestes continus : on ne les annonce pas sur la ligne de commande de la console.
     fn quiet(&self) -> bool {
-        matches!(self, Self::Fader { .. } | Self::Flash { .. })
+        matches!(self, Self::Fader { .. } | Self::Flash { .. } | Self::Tap)
     }
 
     fn apply(self, console: &mut Console) -> Result<Outcome, CommandError> {
@@ -136,6 +142,8 @@ impl Action {
             Self::Sound { number } => console.execute(&format!("Sound {number}")),
             Self::SoundOff { number: Some(number) } => console.execute(&format!("Sound {number} Off Fade 1")),
             Self::SoundOff { number: None } => console.execute("Sound Off"),
+            Self::Blind { on } => Ok(console.set_blind(on)),
+            Self::Tap => Ok(console.tap_tempo().unwrap_or_else(|| info("Tap : encore une frappe"))),
         }
     }
 }

@@ -49,6 +49,8 @@ fn main() {
         console.execute(line).unwrap_or_else(|e| panic!("{line} : {e}"));
     }
     console.store_in_executor(2).unwrap();
+    // Un fader de vitesse, pour voir son affichage (× 0 à × 2).
+    console.show.executors.get_mut(&2).unwrap().options.fader = folie_show::FaderFunction::Speed;
     console.execute("ClearAll").unwrap();
     console.execute("Group 3 At 100").unwrap();
     console.store_in_executor(11).unwrap();

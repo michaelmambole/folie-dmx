@@ -38,6 +38,18 @@ header .title span { display: block; font-size: 12px; color: var(--muted); white
 .led.on { background: var(--go); box-shadow: 0 0 8px var(--go); }
 #blackout { font-weight: 700; letter-spacing: .04em; }
 #blackout.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+#blind { font-weight: 700; letter-spacing: .04em; }
+#blind.on { background: var(--sel); border-color: var(--sel); color: #141518; }
+/* Blind : les commandes ne partent pas sur scène, on le voit partout. */
+.blind-note { display: none; margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px;
+  background: rgba(255, 209, 102, .12); border: 1px solid var(--sel); color: var(--sel); }
+body.blind .blind-note { display: block; }
+body.blind .cmd input { border-color: var(--sel); }
+.tempo { justify-content: space-between; }
+.tempo b { font-size: 18px; }
+#tap { min-width: 96px; min-height: 48px; font-weight: 700; }
+.prog { font-size: 13px; color: var(--muted); margin: 0 2px 8px; }
+.prog b { color: var(--prog); }
 
 nav { display: flex; gap: 6px; padding: 8px 12px 0; }
 nav button { flex: 1; min-height: 36px; background: transparent; border-color: transparent; color: var(--muted); }
@@ -157,6 +169,7 @@ body.playback .badge { display: inline-block; }
   <svg class="mark" viewBox="0 0 44 44" width="26" height="26" aria-hidden="true"><rect x="6" y="0" width="12" height="44" rx="4" fill="#24272c" stroke="#30343a"/><rect x="8" y="15" width="8" height="27" rx="2.5" fill="#f0a63a"/><rect x="26" y="16" width="12" height="28" rx="4" fill="#24272c" stroke="#30343a"/><rect x="28" y="28" width="8" height="14" rx="2.5" fill="#f0a63a"/><circle cx="32" cy="6" r="5.5" fill="#ff5a52"/></svg>
   <div class="title" id="title" title="Changer de code"><b>Folie <span class="led" id="led" title="Connexion"></span></b><span id="show">connexion…</span></div>
   <span class="badge" title="Code lecture : GO, Back et touches des executors">Lecture</span>
+  <button id="blind" class="full-only" title="Blind : préparer sans toucher la scène">BLIND</button>
   <button id="blackout" class="full-only">BLACKOUT</button>
 </header>
 <nav id="tabs">
@@ -166,6 +179,7 @@ body.playback .badge { display: inline-block; }
 </nav>
 
 <main>
+  <div class="blind-note">Blind : les commandes vont au programmer blind, rien ne change sur scène.</div>
   <section id="executors">
     <div class="bar">
       <button id="page-prev" class="full-only" aria-label="Page précédente">‹</button>
@@ -174,6 +188,10 @@ body.playback .badge { display: inline-block; }
       <button id="off-all" class="full-only">Tout éteindre</button>
     </div>
     <div class="faders" id="faders"></div>
+    <div class="bar tempo full-only">
+      <span class="muted">Tempo <b class="mono" id="tempo">120</b> BPM</span>
+      <button id="tap" aria-label="Taper le tempo">Tap</button>
+    </div>
     <h2>Executors à boutons</h2>
     <div class="buttons" id="buttons"></div>
   </section>
@@ -192,6 +210,7 @@ body.playback .badge { display: inline-block; }
       <button class="go" id="send">Envoyer</button>
     </div>
     <div class="result" id="result"></div>
+    <div class="prog" id="prog"></div>
     <div class="pad" id="pad"></div>
     <h2>Groupes</h2>
     <div class="groups" id="groups"></div>
@@ -296,6 +315,9 @@ $("title").onclick = () => {
   location.reload();
 };
 $("blackout").onclick = () => state && send({ type: "blackout", on: !state.blackout });
+$("blind").onclick = () => state && send({ type: "blind", on: !state.blind });
+// Tap : au moment où le doigt touche, pas au relâchement.
+$("tap").addEventListener("pointerdown", (e) => { e.preventDefault(); send({ type: "tap" }); });
 $("page-prev").onclick = () => state && send({ type: "page", page: Math.max(1, state.page - 1) });
 $("page-next").onclick = () => state && send({ type: "page", page: state.page + 1 });
 $("off-all").onclick = () => send({ type: "off_all" });
@@ -346,6 +368,11 @@ function keys(x) {
   return box;
 }
 
+// Valeur d'un fader comme la console l'affiche : vitesse de ×0 à ×2, sinon un pourcentage.
+function faderValue(x, level) {
+  return x.fader_function === "Vitesse" ? "× " + (level * 2).toFixed(2) : Math.round(level * 100) + " %";
+}
+
 function fader(x) {
   const f = el("div", "fader");
   const fill = el("div", "fill"), cap = el("div", "cap");
@@ -363,7 +390,7 @@ function fader(x) {
   const move = (e) => {
     const level = at(e);
     f.set(level);
-    f.parentNode.querySelector(".value").textContent = Math.round(level * 100) + " %";
+    f.parentNode.querySelector(".value").textContent = faderValue(x, level);
     pending = level;
     if (!frame) frame = requestAnimationFrame(() => {
       frame = 0;
@@ -383,13 +410,15 @@ function fader(x) {
 // (un fader qu'on tient ne doit pas être remplacé sous le doigt).
 const cards = new Map();
 function card(x, withFader) {
-  const shape = [x.id, x.kind, x.mode, x.on, withFader].join("|");
+  const shape = [x.id, x.kind, x.mode, x.on, withFader, x.fader_function].join("|");
   let c = cards.get(x.id);
   if (!c || c.shape !== shape) {
     c = el("div", "card");
     c.shape = shape;
     const head = el("div", "head");
-    head.append(el("span", "num mono", x.label), el("span", "mode", x.mode));
+    // Fader autre que Master : sa fonction à côté du mode (« Go · Vitesse »).
+    const special = x.kind === "sequence" && withFader && x.fader_function && x.fader_function !== "Master";
+    head.append(el("span", "num mono", x.label), el("span", "mode", special ? x.mode + " · " + x.fader_function : x.mode));
     c.parts = { name: el("div", "name"), cue: el("div", "cue"), next: el("div", "next"),
                 progress: el("div", "progress"), value: el("div", "value mono") };
     c.parts.progress.append(el("i"));
@@ -411,7 +440,7 @@ function card(x, withFader) {
   c.parts.progress.firstChild.style.width = x.progress == null ? "0" : (x.progress * 100) + "%";
   if (withFader && !dragging.has(x.id)) {
     c.parts.fader.set(x.level);
-    c.parts.value.textContent = Math.round(x.level * 100) + " %";
+    c.parts.value.textContent = faderValue(x, x.level);
   }
   return c;
 }
@@ -462,6 +491,13 @@ function fill(container, nodes) {
 function render() {
   $("show").textContent = state.show;
   $("blackout").classList.toggle("on", state.blackout);
+  $("blind").classList.toggle("on", state.blind);
+  document.body.classList.toggle("blind", state.blind);
+  $("tempo").textContent = state.tempo.toFixed(1).replace(/\.0$/, "");
+  const n = state.programmer;
+  $("prog").innerHTML = "";
+  $("prog").append(document.createTextNode((state.blind ? "Programmer blind : " : "Programmer : ")),
+    n ? el("b", "", n + (n > 1 ? " fixtures" : " fixture")) : document.createTextNode("vide"));
   $("page-num").textContent = "Page " + state.page;
   $("page-name").textContent = state.page_name;
   $("page-prev").disabled = state.page <= 1;

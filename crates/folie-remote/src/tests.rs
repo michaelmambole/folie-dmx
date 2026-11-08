@@ -268,6 +268,66 @@ fn phone_plays_sounds() {
     assert_eq!(state["playback_sounds"], true);
 }
 
+/// Blind, Tap tempo, programmer et fonction des faders : ce que la console affiche,
+/// le téléphone l'affiche aussi.
+#[test]
+fn phone_sees_blind_tempo_programmer_and_fader_functions() {
+    let mut console = console();
+    console.show.executors.get_mut(&1).unwrap().options.fader = folie_show::FaderFunction::Speed;
+    console.execute("Fixture 1 At 50").unwrap();
+    console.set_tempo(60.0);
+    let server = RemoteServer::start(0, "4821", "1357", || {}).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let mut ws = rt.block_on(phone(server.port(), "4821"));
+    rt.block_on(next_json(&mut ws));
+    frames(&server, &mut console, |_, _| server.clients() == 1);
+    let state = rt.block_on(next_json(&mut ws));
+    assert_eq!(state["tempo"], 60.0);
+    assert_eq!((state["blind"].as_bool(), state["programmer"].as_u64()), (Some(false), Some(1)));
+    assert_eq!(state["executors"][0]["fader_function"], "Vitesse");
+    assert_eq!(state["executors"][0]["value"], "× 2.00", "fader en haut : vitesse doublée");
+
+    // Blind, puis deux frappes de Tap à 0,4 s : 150 BPM.
+    rt.block_on(send(&mut ws, json!({"type": "blind", "on": true})));
+    frames(&server, &mut console, |c, _| c.blind());
+    rt.block_on(send(&mut ws, json!({"type": "tap"})));
+    // La première frappe doit être arrivée à la console (sa réponse revient) avant la seconde.
+    let mut first = None;
+    while first.is_none() {
+        frames(&server, &mut console, |_, _| true);
+        first = rt.block_on(async {
+            loop {
+                match tokio::time::timeout(Duration::from_millis(50), ws.next()).await {
+                    Ok(Some(Ok(WsMessage::Text(text)))) => {
+                        let message: Value = serde_json::from_str(&text).unwrap();
+                        if message["type"] == "reply" && message["message"].as_str().is_some_and(|m| m.starts_with("Tap")) {
+                            break Some(message);
+                        }
+                    }
+                    Ok(_) => continue,
+                    Err(_) => break None,
+                }
+            }
+        });
+    }
+    assert_eq!(first.unwrap()["message"], "Tap : encore une frappe");
+    std::thread::sleep(Duration::from_millis(400));
+    rt.block_on(send(&mut ws, json!({"type": "tap"})));
+    // Entre les deux frappes, 0,4 s et un peu plus selon la machine : 130 à 150 BPM.
+    let announced = frames(&server, &mut console, |c, _| (110.0..=160.0).contains(&c.tempo()));
+    assert!(announced.is_empty(), "le Tap ne s'annonce pas sur la console : {announced:?}");
+    let state = rt.block_on(async {
+        loop {
+            let message = next_json(&mut ws).await;
+            if message["type"] == "state" && message["blind"] == true && message["tempo"].as_f64().unwrap() > 100.0 {
+                break message;
+            }
+        }
+    });
+    assert_eq!(state["programmer"], 0, "le programmer blind est vide");
+    assert!((110.0..=160.0).contains(&state["tempo"].as_f64().unwrap()), "{}", state["tempo"]);
+}
+
 #[test]
 fn stopping_the_server_frees_the_port() {
     let server = RemoteServer::start(0, "1", "2", || {}).unwrap();
