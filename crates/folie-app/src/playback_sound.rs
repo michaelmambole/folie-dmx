@@ -40,7 +40,32 @@ pub struct SoundPlayback {
     pending: Vec<u32>,
     /// Muet (tests) : aucune carte son n'est ouverte.
     silent: bool,
+    /// Pré-écoute (casque) : une seconde sortie, que la salle n'entend pas et que le show
+    /// ne voit pas (ni cues qui suivent le son, ni groupes d'exclusion).
+    pub preview: Preview,
 }
+
+/// Fichier remis à la fréquence de la pré-écoute.
+type Prepared = (PathBuf, ClipState);
+
+/// La sortie de pré-écoute.
+#[derive(Default)]
+pub struct Preview {
+    /// Sortie choisie ; vide : pas de pré-écoute.
+    pub device: String,
+    output: Option<Output>,
+    pub error: Option<String>,
+    /// Fichiers remis à la fréquence de la pré-écoute, quand ce n'est pas celle de la salle.
+    clips: HashMap<PathBuf, ClipState>,
+    channel: Option<(Sender<Prepared>, Receiver<Prepared>)>,
+    /// Demandée pendant la préparation du fichier : (son, à partir de).
+    pending: Option<(u32, Option<f64>)>,
+    /// Fréquence de la pré-écoute muette (tests) ; 0 : celle de la salle muette.
+    pub silent_rate: u32,
+}
+
+/// Départ de la pré-écoute au milieu d'un son : un rien de fondu, pour ne pas claquer.
+const PREVIEW_FADE: f32 = 0.005;
 
 /// Coupure d'un son par un autre de son groupe : juste assez pour ne pas claquer.
 const CHOKE_FADE: f32 = 0.005;
@@ -51,7 +76,17 @@ const SILENT_RATE: u32 = 48_000;
 impl SoundPlayback {
     pub fn new(device: String) -> Self {
         let (sender, receiver) = channel();
-        Self { output: None, device, error: None, clips: HashMap::new(), sender, receiver, pending: Vec::new(), silent: false }
+        Self {
+            output: None,
+            device,
+            error: None,
+            clips: HashMap::new(),
+            sender,
+            receiver,
+            pending: Vec::new(),
+            silent: false,
+            preview: Preview::default(),
+        }
     }
 
     /// Sans carte son : tout se joue dans un mélangeur qu'on peut interroger.
@@ -87,7 +122,7 @@ impl SoundPlayback {
         let output = if self.silent {
             Output::Silent(Mixer::new(SILENT_RATE))
         } else {
-            match Player::start(Some(self.device.as_str()).filter(|d| !d.is_empty())) {
+            match Player::start(Some(self.device.as_str()).filter(|d| !d.is_empty()), None) {
                 Ok(player) => Output::Device(player),
                 Err(e) => {
                     self.error = Some(e);
@@ -107,6 +142,175 @@ impl SoundPlayback {
         self.output = None;
         self.clips.clear();
         self.open();
+        // La pré-écoute suit la fréquence de la salle.
+        self.close_preview();
+        self.open_preview();
+    }
+
+    /// Choisit la sortie de pré-écoute (vide : aucune).
+    pub fn set_preview_device(&mut self, device: String) {
+        self.preview.device = device;
+        self.close_preview();
+        self.open_preview();
+    }
+
+    fn close_preview(&mut self) {
+        self.preview.output = None;
+        self.preview.clips.clear();
+        self.preview.pending = None;
+        self.preview.error = None;
+    }
+
+    /// Une pré-écoute est-elle réglée (et ouverte) ?
+    pub fn has_preview(&self) -> bool {
+        self.preview.output.is_some()
+    }
+
+    pub fn preview_device_name(&self) -> Option<&str> {
+        match &self.preview.output {
+            Some(Output::Device(player)) => Some(&player.device),
+            Some(Output::Silent(_)) => Some("muet"),
+            None => None,
+        }
+    }
+
+    /// Ouvre la pré-écoute si elle est réglée, à la fréquence de la salle si elle peut.
+    pub fn open_preview(&mut self) -> bool {
+        if self.preview.output.is_some() {
+            return true;
+        }
+        if self.preview.device.is_empty() {
+            return false;
+        }
+        let output = if self.silent {
+            Output::Silent(Mixer::new(if self.preview.silent_rate == 0 { SILENT_RATE } else { self.preview.silent_rate }))
+        } else {
+            match Player::start(Some(self.preview.device.as_str()), self.rate()) {
+                Ok(player) => Output::Device(player),
+                Err(e) => {
+                    self.preview.error = Some(e);
+                    return false;
+                }
+            }
+        };
+        self.preview.output = Some(output);
+        self.preview.error = None;
+        true
+    }
+
+    fn preview_rate(&self) -> Option<u32> {
+        match &self.preview.output {
+            Some(Output::Device(player)) => Some(player.rate()),
+            Some(Output::Silent(_)) => Some(if self.preview.silent_rate == 0 { SILENT_RATE } else { self.preview.silent_rate }),
+            None => None,
+        }
+    }
+
+    fn send_preview(&mut self, command: Command) {
+        match &mut self.preview.output {
+            Some(Output::Device(player)) => player.send(command),
+            Some(Output::Silent(mixer)) => mixer.apply(command),
+            None => {}
+        }
+    }
+
+    /// Écoute un son dans la pré-écoute, depuis son entrée ou depuis `from` (s). Un seul
+    /// son à la fois : le précédent s'arrête. Rend un problème à signaler.
+    pub fn preview_sound(&mut self, number: u32, from: Option<f64>, sounds: &BTreeMap<u32, Sound>) -> Option<String> {
+        if !self.open_preview() {
+            return self.preview.error.as_ref().map(|e| format!("Pré-écoute : {e}"));
+        }
+        let sound = sounds.get(&number)?;
+        let clip = match self.clips.get(&sound.file) {
+            Some(ClipState::Ready { clip, .. }) => clip.clone(),
+            Some(ClipState::Failed(e)) => return Some(format!("Son {number} : {e}")),
+            Some(ClipState::Loading) | None => {
+                self.preview.pending = Some((number, from));
+                return None;
+            }
+        };
+        let rate = self.preview_rate()?;
+        let clip = if clip.rate == rate {
+            clip
+        } else {
+            // Autre fréquence : le fichier est refait pour la pré-écoute, en arrière-plan.
+            match self.preview.clips.get(&sound.file) {
+                Some(ClipState::Ready { clip, .. }) => clip.clone(),
+                Some(ClipState::Failed(e)) => return Some(format!("Pré-écoute du son {number} : {e}")),
+                Some(ClipState::Loading) => {
+                    self.preview.pending = Some((number, from));
+                    return None;
+                }
+                None => {
+                    self.preview.clips.insert(sound.file.clone(), ClipState::Loading);
+                    self.preview.pending = Some((number, from));
+                    let (sender, _) = self.preview.channel.get_or_insert_with(channel);
+                    let (sender, path) = (sender.clone(), sound.file.clone());
+                    std::thread::spawn(move || {
+                        let state = match player::resample(clip.samples.to_vec(), clip.rate, rate) {
+                            Ok(samples) => ClipState::Ready { clip: Clip { samples: std::sync::Arc::new(samples), rate }, peaks: Vec::new() },
+                            Err(e) => ClipState::Failed(e),
+                        };
+                        let _ = sender.send((path, state));
+                    });
+                    return None;
+                }
+            }
+        };
+        let mut settings = PlaySettings {
+            start: sound.start,
+            end: sound.end,
+            gain_db: sound.gain_db,
+            fade_in: sound.fade_in,
+            fade_out: sound.fade_out,
+            looped: sound.looped,
+        };
+        if let Some(from) = from {
+            settings.start = from.max(0.0);
+            settings.fade_in = PREVIEW_FADE;
+            // Écouter après la sortie : jusqu'au bout du fichier.
+            if settings.end.is_some_and(|e| e <= from) {
+                settings.end = None;
+            }
+        }
+        self.preview.pending = None;
+        self.send_preview(Command::StopAll { fade: PREVIEW_FADE });
+        self.send_preview(Command::Play { id: number, clip, settings });
+        None
+    }
+
+    /// Volume changé pendant la pré-écoute.
+    pub fn set_preview_gain(&mut self, number: u32, gain_db: f32) {
+        self.send_preview(Command::Gain { id: number, gain_db });
+    }
+
+    /// Mélangeur muet (tests) : rien ne sort.
+    pub fn silent_output(&self) -> bool {
+        self.silent
+    }
+
+    pub fn stop_preview(&mut self) {
+        self.preview.pending = None;
+        self.send_preview(Command::StopAll { fade: PREVIEW_FADE });
+    }
+
+    /// Son en pré-écoute et sa position (s).
+    pub fn preview_position(&self) -> Option<(u32, f64)> {
+        let positions = match &self.preview.output {
+            Some(Output::Device(player)) => player.positions(),
+            Some(Output::Silent(mixer)) => mixer.positions(),
+            None => return None,
+        };
+        positions.into_iter().next()
+    }
+
+    /// Pré-écoute muette (tests).
+    #[cfg(test)]
+    pub fn silent_preview(&mut self) -> Option<&mut Mixer> {
+        match &mut self.preview.output {
+            Some(Output::Silent(mixer)) => Some(mixer),
+            _ => None,
+        }
     }
 
     fn send(&mut self, command: Command) {
@@ -150,6 +354,16 @@ impl SoundPlayback {
         let pending = std::mem::take(&mut self.pending);
         for number in pending {
             let _ = self.play(number, sounds);
+        }
+        if let Some((_, receiver)) = &self.preview.channel {
+            for (path, state) in receiver.try_iter() {
+                self.preview.clips.insert(path, state);
+            }
+        }
+        if let Some((number, from)) = self.preview.pending.take()
+            && let Some(problem) = self.preview_sound(number, from, sounds)
+        {
+            self.preview.error = Some(problem);
         }
     }
 
@@ -222,6 +436,10 @@ impl SoundPlayback {
             *n = map.get(n).copied().unwrap_or(*n);
         }
         self.send(Command::Renumber(map.clone()));
+        self.send_preview(Command::Renumber(map.clone()));
+        if let Some((n, _)) = &mut self.preview.pending {
+            *n = map.get(n).copied().unwrap_or(*n);
+        }
     }
 
     /// Volume changé pendant la lecture.

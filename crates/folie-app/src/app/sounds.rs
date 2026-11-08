@@ -186,6 +186,9 @@ impl FolieApp {
         if !self.playback.is_open() && self.playback.error.is_none() {
             self.playback.open();
         }
+        if !self.playback.preview.device.is_empty() && self.playback.preview.error.is_none() {
+            self.playback.open_preview();
+        }
         // Fichiers ou dossiers glissés sur la fenêtre.
         let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         if !dropped.is_empty() {
@@ -245,7 +248,7 @@ impl FolieApp {
     fn sound_output_bar(&mut self, ui: &mut egui::Ui) {
         let devices = self.sounds_view.devices.get_or_insert_with(folie_audio::player::output_devices).clone();
         ui.horizontal(|ui| {
-            let label = ui.label("Sortie");
+            let label = ui.label("Salle");
             let current = if self.playback.device.is_empty() { "celle du système".to_string() } else { self.playback.device.clone() };
             let mut chosen = self.playback.device.clone();
             egui::ComboBox::from_id_salt("sound_output")
@@ -272,8 +275,43 @@ impl FolieApp {
                 ui.label(RichText::new(format!("ouverte : {name}")).size(11.0).color(theme::MUTED));
             }
         });
+        ui.horizontal(|ui| {
+            let label = ui.label("Pré-écoute");
+            let current = if self.playback.preview.device.is_empty() { "aucune".to_string() } else { self.playback.preview.device.clone() };
+            let mut chosen = self.playback.preview.device.clone();
+            egui::ComboBox::from_id_salt("sound_preview_output")
+                .width(240.0)
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut chosen, String::new(), "aucune");
+                    for name in &devices {
+                        ui.selectable_value(&mut chosen, name.clone(), name);
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text("Casque : « Écouter » y joue, la salle n'entend rien. Prise casque du Mac, autre carte son…");
+            if chosen != self.playback.preview.device {
+                self.playback.set_preview_device(chosen);
+                self.file.storage.set_sound_preview_output(&self.playback.preview.device);
+            }
+            match self.playback.preview_device_name() {
+                Some(name) if name == self.playback.device_name().unwrap_or_default() && !self.playback.silent_output() => {
+                    ui.label(RichText::new("même sortie que la salle : la salle entendra").size(11.0).color(theme::EXECUTOR));
+                }
+                Some(name) => {
+                    ui.label(RichText::new(format!("ouverte : {name}")).size(11.0).color(theme::MUTED));
+                }
+                None => {
+                    ui.label(RichText::new("sans pré-écoute, « Écouter » joue en salle").size(11.0).color(theme::MUTED));
+                }
+            }
+        });
         if let Some(e) = &self.playback.error {
             ui.colored_label(theme::DANGER, format!("Sortie audio : {e}"));
+        }
+        if let Some(e) = &self.playback.preview.error {
+            ui.colored_label(theme::DANGER, format!("Pré-écoute : {e}"));
         }
     }
 
@@ -342,6 +380,8 @@ impl FolieApp {
     fn sound_editor(&mut self, ui: &mut egui::Ui, number: u32, position: Option<f64>) {
         let Some(sound) = self.console.show.sounds.get(&number).cloned() else { return };
         let mut edited = sound.clone();
+        // Clic sur la forme d'onde : pré-écoute depuis ce point.
+        let mut listen_from = None;
         let state = self.playback.clip(&sound);
         let duration = match state {
             Some(ClipState::Ready { clip, .. }) => Some(clip.duration()),
@@ -384,7 +424,11 @@ impl FolieApp {
                         ui.label(RichText::new(text).size(11.0).monospace().color(theme::MUTED));
                     }
                 });
-                waveform(ui, clip, peaks, &mut zoom, &mut edited, position);
+                let previewing = self.playback.preview_position().filter(|(n, _)| *n == number).map(|(_, t)| t);
+                let heads = Heads { show: position, preview: previewing, click_to_listen: self.playback.has_preview() };
+                if let Some(t) = waveform(ui, clip, peaks, &mut zoom, &mut edited, heads) {
+                    listen_from = Some(t);
+                }
                 self.sounds_view.zoom = Some(zoom);
             }
             Some(ClipState::Failed(e)) => {
@@ -466,16 +510,35 @@ impl FolieApp {
             edited.end = None;
         }
         ui.add_space(6.0);
+        let preview = self.playback.has_preview();
+        let previewing = self.playback.preview_position().filter(|(n, _)| *n == number).map(|(_, t)| t);
         ui.horizontal(|ui| {
             let playing = position.is_some();
-            if ui.button(RichText::new("Écouter").strong()).on_hover_text(format!("Sound {number}")).clicked() {
+            if preview {
+                // Avec une pré-écoute, « Écouter » reste dans le casque ; la salle a son bouton.
+                if ui.button(RichText::new("Écouter").strong()).on_hover_text("Dans la pré-écoute : la salle n'entend rien").clicked() {
+                    listen_from = Some(-1.0);
+                }
+                if ui.button("En salle").on_hover_text(format!("Sound {number}")).clicked() {
+                    self.run_line(&format!("Sound {number}"));
+                }
+            } else if ui.button(RichText::new("Écouter").strong()).on_hover_text(format!("Sound {number}, en salle")).clicked() {
                 self.run_line(&format!("Sound {number}"));
             }
-            if ui.add_enabled(playing, egui::Button::new("Arrêter")).on_hover_text(format!("Sound {number} Off Fade 1")).clicked() {
-                self.run_line(&format!("Sound {number} Off Fade 1"));
+            let stop = egui::Button::new("Arrêter");
+            if ui.add_enabled(playing || previewing.is_some(), stop).on_hover_text(format!("Pré-écoute, et en salle : Sound {number} Off Fade 1")).clicked() {
+                if previewing.is_some() {
+                    self.playback.stop_preview();
+                }
+                if playing {
+                    self.run_line(&format!("Sound {number} Off Fade 1"));
+                }
             }
             if let Some(t) = position {
-                ui.label(RichText::new(duration_text(t)).monospace().color(theme::GO));
+                ui.label(RichText::new(duration_text(t)).monospace().color(theme::GO)).on_hover_text("En salle");
+            }
+            if let Some(t) = previewing {
+                ui.label(RichText::new(format!("casque {}", duration_text(t))).monospace().color(theme::EXECUTOR));
             }
             ui.label(
                 RichText::new(format!("Dans une cue : clic droit, Au départ : Sound {number}"))
@@ -483,9 +546,16 @@ impl FolieApp {
                     .color(theme::MUTED),
             );
         });
+        if let Some(from) = listen_from {
+            let from = (from >= 0.0).then_some(from);
+            if let Some(problem) = self.playback.preview_sound(number, from, &self.console.show.sounds) {
+                self.command_line.feedback = Some((false, problem));
+            }
+        }
         if edited != sound {
             if edited.gain_db != sound.gain_db {
                 self.playback.set_gain(number, edited.gain_db);
+                self.playback.set_preview_gain(number, edited.gain_db);
             }
             self.console.show.sounds.insert(number, edited);
             self.mark_dirty();
@@ -520,6 +590,14 @@ fn peak_between(clip: &folie_audio::player::Clip, blocks: &[f32], from: usize, t
     }
 }
 
+/// Têtes de lecture de la forme d'onde : en salle, dans la pré-écoute.
+struct Heads {
+    show: Option<f64>,
+    preview: Option<f64>,
+    /// Un clic fait écouter depuis ce point (seulement s'il y a une pré-écoute).
+    click_to_listen: bool,
+}
+
 /// Forme d'onde : la partie jouée en clair, les points d'entrée et de sortie à la souris,
 /// la tête de lecture. Zoom : Cmd + molette ou pincer, autour de la souris ; défilement par
 /// la molette horizontale, ou en glissant ailleurs que sur une poignée.
@@ -529,8 +607,8 @@ fn waveform(
     blocks: &[f32],
     zoom: &mut WaveZoom,
     sound: &mut Sound,
-    position: Option<f64>,
-) {
+    heads: Heads,
+) -> Option<f64> {
     let duration = clip.duration().max(1e-6);
     let width = ui.available_width().clamp(200.0, 900.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 90.0), Sense::click_and_drag());
@@ -609,9 +687,11 @@ fn waveform(
         painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(2.0, theme::SELECTION));
         painter.text(egui::pos2(x + 3.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(10.5), theme::SELECTION);
     }
-    if let Some(t) = position {
-        let x = x_of(t);
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(1.5, theme::GO));
+    for (t, color) in [(heads.show, theme::GO), (heads.preview, theme::EXECUTOR)] {
+        if let Some(t) = t {
+            let x = x_of(t);
+            painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(1.5, color));
+        }
     }
     // Zoomé : où l'on est dans le fichier, en bas.
     if !zoom.is_whole(duration) {
@@ -621,4 +701,12 @@ fn waveform(
         painter.rect_filled(egui::Rect::from_min_size(egui::pos2(left, bar.top()), egui::vec2(w, bar.height())), 1.5, theme::MUTED);
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, true, "Forme d'onde : glisser les points d'entrée et de sortie"));
+    let response = if heads.click_to_listen { response.on_hover_text("Clic : écouter d'ici dans la pré-écoute") } else { response };
+    if heads.click_to_listen
+        && response.clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        return Some(t_of_x(zoom, pos.x).clamp(0.0, duration));
+    }
+    None
 }

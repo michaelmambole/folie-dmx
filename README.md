@@ -137,6 +137,12 @@ Glisser un son dans la liste le renumérote : les `Sound 3` des cues et des macr
 les séquences qui le suivent sont mis à jour. Comme sur un sampleur, un **groupe**
 d'exclusion fait qu'un son qui part coupe net ceux de son groupe.
 
+**Pré-écoute** : une seconde sortie (prise casque du Mac, autre carte son…), choisie
+sous la sortie Salle. « Écouter » y joue sans que la salle entende, et un clic sur la
+forme d'onde fait écouter depuis ce point ; « En salle » lance le son pour le public.
+La pré-écoute ne déclenche rien dans le show : ni les cues qui suivent le son, ni les
+groupes d'exclusion.
+
 ## Réaction au son
 
 Fenêtre **Son** (menu Fenêtres) : choisir l'entrée (micro, carte son, BlackHole pour la sortie

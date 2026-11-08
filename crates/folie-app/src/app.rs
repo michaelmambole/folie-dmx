@@ -197,6 +197,7 @@ impl FolieApp {
         let osc_settings = storage.osc();
         let midi_settings = storage.midi();
         let sound_output = storage.sound_output();
+        let sound_preview_output = storage.sound_preview_output();
         let sound_settings = storage.sound();
         let mut app = Self {
             snapshot: console.engine().snapshot(),
@@ -225,10 +226,14 @@ impl FolieApp {
             midi: None,
             midi_view: Default::default(),
             // Les tests ne touchent pas à la carte son.
-            playback: if cfg!(test) {
-                crate::playback_sound::SoundPlayback::silent()
-            } else {
-                crate::playback_sound::SoundPlayback::new(sound_output)
+            playback: {
+                let mut playback = if cfg!(test) {
+                    crate::playback_sound::SoundPlayback::silent()
+                } else {
+                    crate::playback_sound::SoundPlayback::new(sound_output)
+                };
+                playback.preview.device = sound_preview_output;
+                playback
             },
             sounds_view: Default::default(),
             addresses: Default::default(),
@@ -1754,6 +1759,85 @@ mod tests {
         let mixer = harness.state_mut().playback.silent_mixer().unwrap();
         assert!(mixer.is_playing(1) && mixer.is_playing(3), "le vent et l'orage jouent sous leurs nouveaux numéros");
         assert!(harness.state().file.dirty);
+    }
+
+    /// Pré-écoute : « Écouter » joue dans le casque et pas en salle, un clic sur la forme
+    /// d'onde écoute depuis ce point, « En salle » lance le son pour le public.
+    #[test]
+    fn preview_in_headphones() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("pluie.wav");
+        write_wav(&wav, 2.0);
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.windows.open(WindowKind::Sounds);
+            app.import_sounds(std::slice::from_ref(&wav));
+            app.sounds_view.selected = Some(1);
+        }
+        let start = std::time::Instant::now();
+        while !matches!(harness.state().playback.clip(&harness.state().console.show.sounds[&1]), Some(crate::playback_sound::ClipState::Ready { .. })) {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+        harness.get_by_label("sans pré-écoute, « Écouter » joue en salle");
+        assert!(harness.query_by_label("En salle").is_none());
+        harness.state_mut().playback.set_preview_device("Casque".into());
+        harness.run_steps(2);
+        assert_eq!(harness.query_all_by_label("ouverte : muet").count(), 2, "salle et pré-écoute ouvertes");
+
+        harness.get_by_label("Écouter").click();
+        harness.run_steps(2);
+        assert!(harness.state_mut().playback.silent_preview().unwrap().is_playing(1), "dans le casque");
+        assert!(!harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "la salle n'entend rien");
+        harness.get_by_label("casque 0:00.0");
+
+        // Clic aux trois quarts de la forme d'onde : écoute depuis 1,5 s.
+        let wave = harness.get_by_label("Forme d'onde : glisser les points d'entrée et de sortie").rect();
+        let at = wave.left_center() + egui::vec2(wave.width() * 0.75, 0.0);
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        harness.hover_at(at);
+        harness.run_steps(1);
+        harness.event(button(true));
+        harness.event(button(false));
+        harness.run_steps(2);
+        let (number, t) = harness.state().playback.preview_position().unwrap();
+        assert!(number == 1 && (t - 1.5).abs() < 0.01, "depuis 1,5 s : {t}");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sounds-preview.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        assert_eq!(harness.state().console.show.sounds[&1].start, 0.0, "un clic ne déplace pas l'entrée");
+
+        harness.get_by_label("En salle").click();
+        harness.run_steps(2);
+        assert!(harness.state_mut().playback.silent_mixer().unwrap().is_playing(1), "en salle");
+        harness.get_by_label("Arrêter").click();
+        harness.run_steps(2);
+        let playback = &mut harness.state_mut().playback;
+        let mut block = vec![0.0; 48_000 * 2];
+        playback.silent_preview().unwrap().render(&mut block, 2);
+        playback.silent_mixer().unwrap().render(&mut block, 2);
+        assert!(!playback.silent_preview().unwrap().is_playing(1) && !playback.silent_mixer().unwrap().is_playing(1), "tout arrêté");
+        assert_eq!(harness.state().file.storage.sound_preview_output(), "", "réglé par le code, pas par la liste : rien d'enregistré");
+
+        // Un casque à 44,1 kHz (salle à 48) : le fichier est refait pour lui, puis joué.
+        let playback = &mut harness.state_mut().playback;
+        playback.preview.silent_rate = 44_100;
+        playback.set_preview_device("Casque".into());
+        harness.get_by_label("Écouter").click();
+        let start = std::time::Instant::now();
+        while harness.state().playback.preview_position().is_none() {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "rééchantillonnage trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mixer = harness.state_mut().playback.silent_preview().unwrap();
+        let mut block = vec![0.0; 44_100 * 2];
+        mixer.render(&mut block, 2);
+        assert!((mixer.positions()[&1] - 1.0).abs() < 1e-3, "1 s jouée en 44 100 images : {:?}", mixer.positions());
     }
 
     #[test]

@@ -327,8 +327,9 @@ pub struct Player {
 }
 
 impl Player {
-    /// Ouvre une sortie (`None` : celle du système).
-    pub fn start(device: Option<&str>) -> Result<Self, String> {
+    /// Ouvre une sortie (`None` : celle du système), à la fréquence `rate` si elle la
+    /// connaît (pour jouer les mêmes fichiers qu'une autre sortie), sinon à la sienne.
+    pub fn start(device: Option<&str>, rate: Option<u32>) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = match device {
             Some(name) => host
@@ -339,16 +340,23 @@ impl Player {
             None => host.default_output_device().ok_or("aucune sortie audio")?,
         };
         let name = device.description().map(|d| d.name().to_string()).unwrap_or_default();
-        let config = device.default_output_config().map_err(|e| format!("sortie {name} : {e}"))?;
-        let rate = config.sample_rate();
-        let channels = config.channels() as usize;
+        let default = device.default_output_config().map_err(|e| format!("sortie {name} : {e}"))?;
+        let mut config: cpal::StreamConfig = default.into();
+        if let Some(wanted) = rate.filter(|r| *r != config.sample_rate)
+            && let Ok(mut ranges) = device.supported_output_configs()
+            && ranges.any(|r| r.channels() == config.channels && r.min_sample_rate() <= wanted && wanted <= r.max_sample_rate())
+        {
+            config.sample_rate = wanted;
+        }
+        let rate = config.sample_rate;
+        let channels = config.channels as usize;
         let (commands, receiver): (Sender<Command>, Receiver<Command>) = unbounded();
         let status = Arc::new(Mutex::new(PlayerStatus::default()));
         let shared = status.clone();
         let mut mixer = Mixer::new(rate);
         let stream = device
             .build_output_stream(
-                config.into(),
+                config,
                 move |out: &mut [f32], _| {
                     for command in receiver.try_iter() {
                         mixer.apply(command);
