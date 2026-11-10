@@ -124,7 +124,8 @@ executor de la page affichée, Go/Back de l'executor sélectionné, page, blacko
 groupe, ligne de commande). **Profil** remplit les associations d'un contrôleur connu
 (Arturia MiniLab 3 : faders et encodeurs sur les faders des executors 1 à 10, encodeur
 principal sur les pages, pads sur
-leurs touches et leur Flash, pads allumés en couleur, touches blanches du clavier sur les
+leurs touches et leur Flash, pads allumés à la couleur de leur executor (pleine quand il
+joue, en veilleuse sinon ; ambre sans couleur), touches blanches du clavier sur les
 executors à boutons 11 à 15 et Go/Back). Le retour allume les LED des boutons quand l'executor joue
 et renvoie la position des faders (faders motorisés). Le **MIDI Show Control** est
 compris (GO avec ou sans numéro de cue, STOP, RESUME, ALL_OFF ; la liste de cues

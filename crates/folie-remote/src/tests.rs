@@ -484,7 +484,11 @@ fn midi_controller_drives_executors() {
 
     // Retour : fader à sa valeur, LED du Go allumée (l'executor joue).
     let values = feedback(&settings.mappings, &console, &console.engine().snapshot());
-    assert_eq!(values, [(fader, 51), (go, 127)]);
+    assert_eq!(values, [(fader, 51, None), (go, 127, None)]);
+    // L'executor a une couleur de repère : elle accompagne la LED (pads RGB).
+    console.show.executors.get_mut(&1).unwrap().options.color = Some([229, 72, 77]);
+    let values = feedback(&settings.mappings, &console, &console.engine().snapshot());
+    assert_eq!(values[1], (go, 127, Some([229, 72, 77])));
 
     // Apprentissage : le prochain appui est rendu au lieu d'agir.
     midi.learn(true);

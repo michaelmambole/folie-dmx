@@ -158,22 +158,32 @@ pub enum Leds {
     MiniLab3,
 }
 
-/// Couleur d'un pad du MiniLab 3 : ambre quand l'executor joue, veilleuse sinon.
-fn minilab3_pad(note: u8, on: bool) -> Option<Vec<u8>> {
+/// Couleur d'un pad du MiniLab 3 : celle de l'executor (ambre s'il n'en a pas), pleine
+/// quand il joue, en veilleuse sinon.
+fn minilab3_pad(note: u8, on: bool, color: Option<[u8; 3]>) -> Option<Vec<u8>> {
     let pad = match note {
         36..=43 => 0x34 + (note - 36),
         44..=51 => 0x44 + (note - 44),
         _ => return None,
     };
-    let [r, g, b] = if on { [127, 70, 0] } else { [6, 4, 0] };
+    // Le MiniLab compte de 0 à 127 par composante.
+    let [r, g, b] = match (color, on) {
+        (Some(c), true) => c.map(|v| v / 2),
+        (Some(c), false) => c.map(|v| ((v as u16 * 15) / 255) as u8),
+        (None, true) => [127, 70, 0],
+        (None, false) => [6, 4, 0],
+    };
     Some(vec![0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42, 0x02, 0x01, 0x16, pad, r, g, b, 0xF7])
 }
 
+/// Ce qu'affiche un bouton du contrôleur : sa valeur, et la couleur de son executor.
+type Lit = (u8, Option<[u8; 3]>);
+
 /// Message envoyé au contrôleur pour une valeur de retour.
-fn feedback_message(leds: Leds, control: Control, value: u8) -> Vec<u8> {
+fn feedback_message(leds: Leds, control: Control, value: u8, color: Option<[u8; 3]>) -> Vec<u8> {
     match (leds, control) {
         (Leds::MiniLab3, Control::Note { channel: 9, number }) => {
-            if let Some(sysex) = minilab3_pad(number, value > 0) {
+            if let Some(sysex) = minilab3_pad(number, value > 0, color) {
                 return sysex;
             }
             vec![0x99, number, value]
@@ -414,7 +424,7 @@ pub struct MidiServer {
     mtc: Mutex<MtcReader>,
     timecode: Arc<Mutex<Option<Timecode>>>,
     /// Dernière valeur envoyée à chaque commande du contrôleur.
-    sent: Mutex<HashMap<Control, u8>>,
+    sent: Mutex<HashMap<Control, Lit>>,
     /// Ports ouverts, pour l'affichage.
     pub opened: Vec<String>,
 }
@@ -553,40 +563,43 @@ impl MidiServer {
         let mut output = self.output.lock().unwrap_or_else(|e| e.into_inner());
         let Some(out) = output.as_mut() else { return };
         let mut sent = self.sent.lock().unwrap_or_else(|e| e.into_inner());
-        for (control, value) in feedback(&self.settings.mappings, console, snapshot) {
-            if sent.get(&control) == Some(&value) {
+        for (control, value, color) in feedback(&self.settings.mappings, console, snapshot) {
+            if sent.get(&control) == Some(&(value, color)) {
                 continue;
             }
-            let message = feedback_message(self.settings.leds, control, value);
+            let message = feedback_message(self.settings.leds, control, value, color);
             if out.send(&message).is_ok() {
-                sent.insert(control, value);
+                sent.insert(control, (value, color));
             }
         }
     }
 }
 
 /// Valeur à renvoyer à chaque commande associée : niveau du fader (0 à 127), LED
-/// allumée (127) quand l'executor joue ou que le blackout est mis.
-pub fn feedback(mappings: &[Mapping], console: &Console, snapshot: &Snapshot) -> Vec<(Control, u8)> {
-    let mut out: Vec<(Control, u8)> = Vec::new();
+/// allumée (127) quand l'executor joue ou que le blackout est mis ; avec la couleur de
+/// repère de l'executor, pour les pads RGB.
+pub fn feedback(mappings: &[Mapping], console: &Console, snapshot: &Snapshot) -> Vec<(Control, u8, Option<[u8; 3]>)> {
+    let mut out: Vec<(Control, u8, Option<[u8; 3]>)> = Vec::new();
     for mapping in mappings {
-        let value = match &mapping.target {
+        let (value, color) = match &mapping.target {
             Target::Fader { slot } => {
                 let status = snapshot.executors.get(&console.executor_at(*slot));
-                (status.map_or(1.0, |s| s.level).clamp(0.0, 1.0) * 127.0).round() as u8
+                ((status.map_or(1.0, |s| s.level).clamp(0.0, 1.0) * 127.0).round() as u8, None)
             }
-            Target::Blackout => if snapshot.blackout { 127 } else { 0 },
+            Target::Blackout => (if snapshot.blackout { 127 } else { 0 }, None),
             target => match target.slot() {
                 Some(slot) => {
-                    let on = snapshot.executors.get(&console.executor_at(slot)).is_some_and(|s| s.cue.is_some());
-                    if on { 127 } else { 0 }
+                    let executor = console.executor_at(slot);
+                    let on = snapshot.executors.get(&executor).is_some_and(|s| s.cue.is_some());
+                    let color = console.executor(executor).and_then(|(x, _)| x.options.color);
+                    (if on { 127 } else { 0 }, color)
                 }
                 None => continue,
             },
         };
         // Une commande associée deux fois : la première décide.
-        if !out.iter().any(|(c, _)| *c == mapping.control) {
-            out.push((mapping.control, value));
+        if !out.iter().any(|(c, _, _)| *c == mapping.control) {
+            out.push((mapping.control, value, color));
         }
     }
     out
@@ -662,13 +675,17 @@ mod tests {
     fn minilab3_pads_light_by_sysex() {
         let pad1 = Control::Note { channel: 9, number: 36 };
         assert_eq!(
-            feedback_message(Leds::MiniLab3, pad1, 127),
+            feedback_message(Leds::MiniLab3, pad1, 127, None),
             [0xF0, 0x00, 0x20, 0x6B, 0x7F, 0x42, 0x02, 0x01, 0x16, 0x34, 127, 70, 0, 0xF7]
         );
         let pad_b8 = Control::Note { channel: 9, number: 51 };
-        assert_eq!(feedback_message(Leds::MiniLab3, pad_b8, 0)[9], 0x4B, "pad 8 de la banque B");
-        assert_eq!(feedback_message(Leds::Standard, pad1, 127), [0x99, 36, 127]);
-        assert_eq!(feedback_message(Leds::MiniLab3, Control::Cc { channel: 0, number: 82 }, 64), [0xB0, 82, 64]);
+        assert_eq!(feedback_message(Leds::MiniLab3, pad_b8, 0, None)[9], 0x4B, "pad 8 de la banque B");
+        assert_eq!(feedback_message(Leds::Standard, pad1, 127, Some([76, 175, 80])), [0x99, 36, 127], "LED simple : pas de couleur");
+        assert_eq!(feedback_message(Leds::MiniLab3, Control::Cc { channel: 0, number: 82 }, 64, None), [0xB0, 82, 64]);
+        // Couleur de l'executor : pleine quand il joue, veilleuse sinon.
+        let green = Some([76, 175, 80]);
+        assert_eq!(&feedback_message(Leds::MiniLab3, pad1, 127, green)[10..13], &[38, 87, 40]);
+        assert_eq!(&feedback_message(Leds::MiniLab3, pad1, 0, green)[10..13], &[4, 10, 4]);
     }
 
     #[test]
