@@ -43,6 +43,31 @@ impl Console {
         std::mem::take(&mut self.sound_requests)
     }
 
+    /// La lecture en salle du son `number` est passée de `previous` à `position` (s dans
+    /// le fichier) : les commandes des marqueurs franchis partent, dans l'ordre. Sans
+    /// `previous` (le son vient de partir), on compte depuis son point d'entrée.
+    /// Un retour en arrière (boucle, relance) repart de l'entrée.
+    pub fn markers_tick(&mut self, number: u32, previous: Option<f64>, position: f64) -> Vec<Result<Outcome, CommandError>> {
+        let Some(sound) = self.show.sounds.get(&number) else { return Vec::new() };
+        let from = match previous {
+            Some(p) if p <= position => p,
+            _ => sound.start - 1e-6,
+        };
+        let commands: Vec<String> = sound
+            .markers
+            .iter()
+            .filter(|m| m.time > from && m.time <= position && !m.command.trim().is_empty())
+            .map(|m| m.command.clone())
+            .collect();
+        let mut results = Vec::new();
+        for command in commands {
+            for line in crate::osc_out::split_commands(&command) {
+                results.push(self.execute(&line));
+            }
+        }
+        results
+    }
+
     /// Déplace le son `number` à la place `index` de la liste : les sons gardent la même
     /// série de numéros, dans le nouvel ordre. Les références suivent : `Sound 3` des
     /// cues et des macros, séquences qui suivent un son. Rend ancien -> nouveau numéro
@@ -75,6 +100,11 @@ impl Console {
             sequence.follows_sound = sequence.follows_sound.map(renumber);
             for cue in sequence.cues.values_mut() {
                 cue.command = renumber_in_line(&cue.command, map);
+            }
+        }
+        for sound in self.show.sounds.values_mut() {
+            for marker in &mut sound.markers {
+                marker.command = renumber_in_line(&marker.command, map);
             }
         }
         for entry in self.show.macros.values_mut() {
@@ -158,6 +188,30 @@ mod tests {
             [SoundRequest::Play(2), SoundRequest::Stop { number: 2, fade: 3.0 }, SoundRequest::StopAll { fade: 0.0 }]
         );
         assert!(c.take_sound_requests().is_empty(), "rendues une seule fois");
+    }
+
+    /// Les marqueurs franchis par la lecture font partir leurs commandes, une fois.
+    #[test]
+    fn markers_fire_when_playback_passes_them() {
+        use folie_show::media::Marker;
+        let mut c = console();
+        let marker = |time, command: &str| Marker { time, name: String::new(), command: command.into() };
+        c.show.sounds.insert(1, folie_show::media::Sound { start: 1.0, ..Default::default() });
+        c.show.sounds.insert(2, folie_show::media::Sound {
+            start: 1.0,
+            markers: vec![marker(1.0, "Sound 1"), marker(2.5, "Sound 1 Off; Tempo 90"), marker(4.0, "")],
+            ..Default::default()
+        });
+        let messages = |r: Vec<Result<Outcome, CommandError>>| r.into_iter().map(|r| r.map(|o| o.message).unwrap_or_else(|e| e.to_string())).collect::<Vec<_>>();
+        assert_eq!(messages(c.markers_tick(2, None, 1.02)), ["Son 1 lancé"], "marqueur à l'entrée, au départ du son");
+        assert!(c.markers_tick(2, Some(1.02), 2.0).is_empty());
+        assert_eq!(messages(c.markers_tick(2, Some(2.0), 3.0)), ["Son 1 arrêté", "Tempo 90.0 BPM"], "deux commandes séparées par « ; »");
+        assert!(c.markers_tick(2, Some(3.0), 5.0).is_empty(), "marqueur sans commande");
+        assert_eq!(c.markers_tick(2, Some(5.0), 1.1).len(), 1, "boucle : on repart de l'entrée");
+        assert_eq!(
+            c.take_sound_requests(),
+            [SoundRequest::Play(1), SoundRequest::Stop { number: 1, fade: 0.0 }, SoundRequest::Play(1)]
+        );
     }
 
     #[test]

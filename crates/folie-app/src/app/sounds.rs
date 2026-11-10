@@ -21,6 +21,8 @@ pub struct SoundsView {
     meter: [f32; 2],
     /// Sons en lecture à l'image précédente.
     playing: Vec<u32>,
+    /// Position de chaque son en salle à l'image précédente (marqueurs franchis).
+    last: std::collections::HashMap<u32, f64>,
     /// Partie de la forme d'onde affichée (zoom).
     pub zoom: Option<WaveZoom>,
 }
@@ -157,8 +159,16 @@ impl FolieApp {
             for outcome in self.console.time_tick(TimeSource::Sound(number), position) {
                 self.command_line.feedback = Some((true, outcome.message));
             }
+            // Marqueurs franchis depuis l'image précédente : leurs commandes partent.
+            let previous = self.sounds_view.last.get(&number).copied();
+            for result in self.console.markers_tick(number, previous, position) {
+                if self.command_line.report(result) {
+                    self.mark_dirty();
+                }
+            }
         }
         self.sounds_view.playing = positions.keys().copied().collect();
+        self.sounds_view.last = positions;
     }
 
     /// Une commande des boutons de la fenêtre, annoncée comme à la ligne de commande.
@@ -196,6 +206,7 @@ impl FolieApp {
         for n in &mut self.sounds_view.playing {
             *n = renumber(*n);
         }
+        self.sounds_view.last = std::mem::take(&mut self.sounds_view.last).into_iter().map(|(n, t)| (renumber(n), t)).collect();
         self.sounds_view.selected = self.sounds_view.selected.map(renumber);
         if let Some(zoom) = &mut self.sounds_view.zoom {
             zoom.sound = renumber(zoom.sound);
@@ -618,6 +629,7 @@ impl FolieApp {
         if edited.end.is_some_and(|e| e <= edited.start) {
             edited.end = None;
         }
+        self.markers_list(ui, number, &mut edited, duration, position, &mut listen_from);
         ui.add_space(6.0);
         let preview = self.playback.has_preview();
         let previewing = self.playback.preview_position().filter(|(n, _)| *n == number).map(|(_, t)| t);
@@ -676,6 +688,70 @@ impl FolieApp {
     }
 }
 
+impl FolieApp {
+    /// Marqueurs du son : temps, nom, commande ; ajouter, écouter d'un peu avant, retirer.
+    fn markers_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        number: u32,
+        sound: &mut Sound,
+        duration: Option<f64>,
+        position: Option<f64>,
+        listen_from: &mut Option<f64>,
+    ) {
+        let preview = self.playback.has_preview();
+        let previewing = self.playback.preview_position().filter(|(n, _)| *n == number).map(|(_, t)| t);
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            theme::section(ui, "Marqueurs");
+            let help = "Au temps de la lecture (pré-écoute ou salle), sinon à l'entrée. Ou double-clic sur la forme d'onde";
+            if ui.small_button("Ajouter un marqueur").on_hover_text(help).clicked() {
+                add_marker(sound, previewing.or(position).unwrap_or(sound.start));
+            }
+        });
+        if sound.markers.is_empty() {
+            let text = "Un marqueur fait partir une commande (Go Executor 2, Macro 3, Sound 4…) quand la lecture en salle le passe.";
+            ui.label(RichText::new(text).size(11.5).color(theme::MUTED));
+            return;
+        }
+        let mut remove = None;
+        for (i, marker) in sound.markers.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [70.0, 20.0],
+                    egui::DragValue::new(&mut marker.time)
+                        .range(0.0..=duration.unwrap_or(36_000.0))
+                        .speed(0.01)
+                        .suffix(" s")
+                        .max_decimals(2),
+                )
+                .on_hover_text("Temps dans le fichier");
+                ui.add_sized([120.0, 20.0], egui::TextEdit::singleline(&mut marker.name).hint_text("nom"));
+                let problem = folie_control::osc_out::check_commands(&marker.command).err();
+                let edit = egui::TextEdit::singleline(&mut marker.command)
+                    .font(egui::FontId::monospace(12.5))
+                    .hint_text("Go Executor 2; Macro 3");
+                let response = ui.add_sized([280.0, 20.0], edit);
+                if let Some(problem) = &problem {
+                    ui.painter().rect_stroke(response.rect, 3.0, Stroke::new(1.0, theme::DANGER), egui::StrokeKind::Outside);
+                    response.on_hover_text(problem.as_str());
+                } else {
+                    response.on_hover_text("Commandes qui partent quand la lecture en salle passe ce temps ; plusieurs : séparées par « ; »");
+                }
+                if preview && ui.small_button("Écouter").on_hover_text("Pré-écoute 2 s avant le marqueur").clicked() {
+                    *listen_from = Some((marker.time - 2.0).max(0.0));
+                }
+                if ui.small_button("×").on_hover_text("Retirer le marqueur").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            sound.markers.remove(i);
+        }
+    }
+}
+
 /// Vu-mètre de sortie, gauche et droite.
 fn meter(ui: &mut egui::Ui, peaks: [f32; 2]) {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(120.0, 14.0), Sense::hover());
@@ -701,6 +777,22 @@ fn peak_between(clip: &folie_audio::player::Clip, blocks: &[f32], from: usize, t
         let samples = &clip.samples;
         samples.get(from * 2..(to * 2).min(samples.len())).map_or(0.0, |s| s.iter().fold(0.0f32, |m, v| m.max(v.abs())))
     }
+}
+
+/// Ce que la souris a pris sur la forme d'onde.
+#[derive(Clone, Copy)]
+enum Grab {
+    Start,
+    End,
+    Marker(usize),
+    Pan,
+}
+
+/// Ajoute un marqueur à ce temps, à sa place dans la liste.
+fn add_marker(sound: &mut Sound, time: f64) {
+    let name = format!("Marqueur {}", sound.markers.len() + 1);
+    sound.markers.push(folie_show::media::Marker { time, name, command: String::new() });
+    sound.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
 }
 
 /// Têtes de lecture de la forme d'onde : en salle, dans la pré-écoute.
@@ -744,36 +836,61 @@ fn waveform(
     let x_at = |zoom: &WaveZoom, t: f64| rect.left() + ((t - zoom.from) / zoom.span) as f32 * rect.width();
     let end = sound.end.unwrap_or(duration);
 
-    // Glisser : la poignée (entrée ou sortie) la plus proche suit la souris. Zoomé, on ne
-    // prend une poignée que tout près ; ailleurs, on fait défiler.
-    let handle_id = response.id.with("handle");
+    // Arrondi au centième, ou à l'image près quand on est très près.
+    let step = if zoom.span < 2.0 { 1.0 / clip.rate.max(1) as f64 } else { 0.01 };
+    let snap = |zoom: &WaveZoom, x: f32| ((t_of_x(zoom, x).clamp(0.0, duration) / step).round() * step).min(duration);
+
+    // Glisser : un marqueur tout proche, sinon la poignée (entrée ou sortie) la plus
+    // proche suit la souris. Zoomé, on ne prend une poignée que tout près ; ailleurs, on
+    // fait défiler.
+    let grab_id = response.id.with("grab");
     if response.drag_started()
         && let Some(pos) = response.interact_pointer_pos()
     {
+        let marker = sound
+            .markers
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (i, (pos.x - x_at(zoom, m.time)).abs()))
+            .filter(|(_, d)| *d <= 8.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| Grab::Marker(i));
         let (to_start, to_end) = ((pos.x - x_at(zoom, sound.start)).abs(), (pos.x - x_at(zoom, end)).abs());
-        let grab = if zoom.is_whole(duration) || to_start.min(to_end) <= 12.0 { Some(to_start <= to_end) } else { None };
-        ui.data_mut(|d| d.insert_temp(handle_id, grab));
+        let handle = if zoom.is_whole(duration) || to_start.min(to_end) <= 12.0 {
+            if to_start <= to_end { Grab::Start } else { Grab::End }
+        } else {
+            Grab::Pan
+        };
+        ui.data_mut(|d| d.insert_temp(grab_id, marker.unwrap_or(handle)));
     }
     if response.dragged()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        match ui.data(|d| d.get_temp::<Option<bool>>(handle_id)).flatten() {
-            Some(start_handle) => {
-                // Arrondi au centième, ou à l'image près quand on est très près.
-                let step = if zoom.span < 2.0 { 1.0 / clip.rate.max(1) as f64 } else { 0.01 };
-                let t = ((t_of_x(zoom, pos.x).clamp(0.0, duration) / step).round() * step).min(duration);
-                if start_handle {
-                    sound.start = t.min(end - 0.01).max(0.0);
-                } else {
-                    let t = t.max(sound.start + 0.01);
-                    sound.end = (t < duration - 0.005).then_some(t);
+        match ui.data(|d| d.get_temp::<Grab>(grab_id)).unwrap_or(Grab::Pan) {
+            Grab::Start => sound.start = snap(zoom, pos.x).min(end - 0.01).max(0.0),
+            Grab::End => {
+                let t = snap(zoom, pos.x).max(sound.start + 0.01);
+                sound.end = (t < duration - 0.005).then_some(t);
+            }
+            Grab::Marker(i) => {
+                if let Some(marker) = sound.markers.get_mut(i) {
+                    marker.time = snap(zoom, pos.x);
                 }
             }
-            None => {
+            Grab::Pan => {
                 zoom.from -= f64::from(response.drag_delta().x / rect.width()) * zoom.span;
                 zoom.clamp(duration);
             }
         }
+    }
+    if response.drag_stopped() {
+        sound.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
+    }
+    // Double-clic : un marqueur à cet endroit.
+    if response.double_clicked()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        add_marker(sound, snap(zoom, pos.x));
     }
 
     let x_of = |t: f64| x_at(zoom, t);
@@ -799,6 +916,16 @@ fn waveform(
         let x = x_of(t);
         painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(2.0, theme::SELECTION));
         painter.text(egui::pos2(x + 3.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(10.5), theme::SELECTION);
+    }
+    // Marqueurs : trait violet et nom en bas.
+    for marker in &sound.markers {
+        let x = x_of(marker.time);
+        if x < rect.left() || x > rect.right() {
+            continue;
+        }
+        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(1.5, theme::EFFECT));
+        let name = if marker.name.is_empty() { "marqueur" } else { marker.name.as_str() };
+        painter.text(egui::pos2(x + 3.0, rect.bottom() - 3.0), egui::Align2::LEFT_BOTTOM, name, egui::FontId::proportional(10.5), theme::EFFECT);
     }
     for (t, color) in [(heads.show, theme::GO), (heads.preview, theme::EXECUTOR)] {
         if let Some(t) = t {

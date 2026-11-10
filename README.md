@@ -151,6 +151,12 @@ Glisser un son dans la liste le renumérote : les `Sound 3` des cues et des macr
 les séquences qui le suivent sont mis à jour. Comme sur un sampleur, un **groupe**
 d'exclusion fait qu'un son qui part coupe net ceux de son groupe.
 
+**Marqueurs** : sous la forme d'onde, chaque son peut porter des marqueurs (double-clic
+sur la forme d'onde, ou « Ajouter un marqueur » au temps de la lecture), avec un nom et une
+commande quelconque (`Go Executor 2; Macro 3`, `Sound 4`, `Osc "Reaper" "/marker" 2`…).
+Quand la lecture en salle passe un marqueur, sa commande part. Ils se déplacent à la
+souris sur la forme d'onde ; la pré-écoute ne les déclenche pas.
+
 **Pré-écoute** : une seconde sortie (prise casque du Mac, autre carte son…), choisie
 sous la sortie Salle. « Écouter » y joue sans que la salle entende, et un clic sur la
 forme d'onde fait écouter depuis ce point ; « En salle » lance le son pour le public.

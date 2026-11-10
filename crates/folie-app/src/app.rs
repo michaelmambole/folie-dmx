@@ -2032,6 +2032,69 @@ mod tests {
         assert!(harness.state().help.open, "le bouton ? rouvre");
     }
 
+    /// Marqueurs : un double-clic sur la forme d'onde en pose un ; quand la lecture en salle
+    /// le passe, sa commande part. Une cue vide peut ne porter qu'une commande.
+    #[test]
+    fn sound_markers_fire_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("pluie.wav");
+        write_wav(&wav, 2.0);
+        let mut harness = harness(Storage::at(&dir.path().join("donnees")));
+        {
+            let app = harness.state_mut();
+            app.windows.open(WindowKind::Sounds);
+            app.import_sounds(std::slice::from_ref(&wav));
+            app.sounds_view.selected = Some(1);
+        }
+        let start = std::time::Instant::now();
+        while !matches!(harness.state().playback.clip(&harness.state().console.show.sounds[&1]), Some(crate::playback_sound::ClipState::Ready { .. })) {
+            harness.run_steps(1);
+            assert!(start.elapsed() < Duration::from_secs(10), "chargement trop long");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        harness.run_steps(2);
+        harness.get_by_label("Un marqueur fait partir une commande (Go Executor 2, Macro 3, Sound 4…) quand la lecture en salle le passe.");
+
+        // Double-clic au quart de la forme d'onde : un marqueur à 0,5 s.
+        let wave = harness.get_by_label("Forme d'onde : glisser les points d'entrée et de sortie").rect();
+        let at = wave.left_center() + egui::vec2(wave.width() * 0.25, 0.0);
+        harness.hover_at(at);
+        harness.run_steps(1);
+        for pressed in [true, false, true, false] {
+            let click = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            harness.input_mut().events.push(click);
+        }
+        harness.run_steps(2);
+        let marker = harness.state().console.show.sounds[&1].markers[0].clone();
+        assert!((marker.time - 0.5).abs() < 0.02, "{marker:?}");
+        assert_eq!(marker.name, "Marqueur 1");
+        harness.state_mut().console.show.sounds.get_mut(&1).unwrap().markers[0].command = "Tempo 90".into();
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("sons-marqueurs.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+
+        // La lecture en salle passe le marqueur : Tempo 90.
+        command(&mut harness, "Sound 1");
+        let mut block = vec![0.0; 2 * 4800]; // 0,1 s
+        for _ in 0..4 {
+            harness.state_mut().playback.silent_mixer().unwrap().render(&mut block, 2);
+            harness.run_steps(1);
+        }
+        assert_eq!(harness.state().console.tempo(), 120.0, "pas encore à 0,4 s");
+        for _ in 0..2 {
+            harness.state_mut().playback.silent_mixer().unwrap().render(&mut block, 2);
+            harness.run_steps(1);
+        }
+        assert_eq!(harness.state().console.tempo(), 90.0, "marqueur franchi");
+        harness.get_by_label("Tempo 90.0 BPM");
+
+        // Cue vide : programmer vide, elle ne porte qu'une commande.
+        command(&mut harness, "Store Cue 5");
+        harness.get_by_label("Cue 5 vide enregistrée sur l'executor 1 : donnez-lui une commande « Au départ »");
+    }
+
     #[test]
     fn search_ofl_online_and_import() {
         let dir = tempfile::tempdir().unwrap();

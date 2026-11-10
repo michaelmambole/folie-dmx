@@ -1062,6 +1062,7 @@ mod tests {
                     pair: 2,
                     then: Some(2),
                     transition: media::Transition::Crossfade(1.5),
+                    markers: vec![media::Marker { time: 12.5, name: "Tonnerre".into(), command: "Go Executor 2; Sound 3".into() }],
                 },
             )]),
             sound: sound::SoundSetup {

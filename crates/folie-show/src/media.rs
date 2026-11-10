@@ -30,6 +30,19 @@ pub struct Sound {
     /// Son qui part quand celui-ci arrive à sa fin (pas s'il est arrêté).
     pub then: Option<u32>,
     pub transition: Transition,
+    /// Moments du son qui font partir une commande, rangés par temps.
+    pub markers: Vec<Marker>,
+}
+
+/// Un moment d'un son : quand la lecture en salle le passe, sa commande part.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Marker {
+    /// En secondes depuis le début du fichier.
+    pub time: f64,
+    pub name: String,
+    /// Une ou plusieurs commandes séparées par « ; » : `Go Executor 2; Macro 3`.
+    pub command: String,
 }
 
 /// Comment le son suivant prend le relais.
@@ -70,6 +83,7 @@ impl Default for Sound {
             pair: 0,
             then: None,
             transition: Transition::End,
+            markers: Vec::new(),
         }
     }
 }

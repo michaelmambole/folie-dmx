@@ -27,6 +27,19 @@ pub fn resolve(address: &str) -> Result<SocketAddr, String> {
 }
 
 /// Coupe une commande de cue en lignes, sur les « ; » hors guillemets.
+/// Vérifie des commandes « Au départ » (cue, marqueur de son) : chacune doit se lire, et
+/// Wait n'a de sens que dans une macro. Rend le problème à afficher.
+pub fn check_commands(text: &str) -> Result<(), String> {
+    for line in split_commands(text) {
+        match crate::command::parse(&line) {
+            Ok(crate::command::Command::Wait(_)) => return Err("Wait ne s'utilise que dans une macro : lancez une macro".into()),
+            Ok(_) => {}
+            Err(err) => return Err(format!("« {line} » : {err}")),
+        }
+    }
+    Ok(())
+}
+
 pub fn split_commands(text: &str) -> Vec<String> {
     let mut lines = vec![String::new()];
     let mut quoted = false;
@@ -105,12 +118,8 @@ impl Console {
 
     /// Commande de la cue (séquence de l'executor sélectionné) ; chaque ligne est vérifiée.
     pub fn set_cue_command(&mut self, number: folie_show::CueNumber, command: &str) -> Result<Outcome, CommandError> {
-        for line in split_commands(command) {
-            match crate::command::parse(&line) {
-                Ok(crate::command::Command::Wait(_)) => return invalid("Wait ne s'utilise que dans une macro : lancez une macro depuis la cue"),
-                Ok(_) => {}
-                Err(err) => return invalid(format!("« {line} » : {err}")),
-            }
+        if let Err(problem) = check_commands(command) {
+            return invalid(problem);
         }
         let command = command.trim().to_string();
         let cue = self.selected_sequence_mut()?.cues.get_mut(&number);

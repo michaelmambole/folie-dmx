@@ -81,7 +81,9 @@ Effets modèles : 1 Sinus dimmer, 2 Chenillard, 3 Vague, 4 Cercle, 5 Arc-en-ciel
 | `Delete Group 3` | supprime ; de même `Delete Preset 4.1`, `Delete Cue 3`, `Delete Macro 3` |
 
 Une cue qui existe déjà est complétée, pas remplacée. Un executor sans séquence en reçoit
-une nouvelle. `Fade` ne vaut que pour les cues.
+une nouvelle. `Fade` ne vaut que pour les cues. Avec un programmer vide, `Store Cue 5`
+crée une cue vide : elle ne porte qu'une commande « Au départ » (clic droit sur la cue),
+pour lancer un son, une macro, un message OSC au bon moment.
 
 ## Jouer les executors et les cues
 

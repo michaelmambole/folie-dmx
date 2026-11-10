@@ -1272,11 +1272,24 @@ mod tests {
         assert!(c.presets_in_use(&BTreeMap::new()).is_empty());
     }
 
+    /// Programmer vide : une cue vide, qui ne porte qu'une commande ; mais on ne complète
+    /// pas une cue existante avec rien.
+    #[test]
+    fn empty_cue_carries_a_command() {
+        let mut c = console();
+        run(&mut c, "Executor 3");
+        let stored = run(&mut c, "Store Cue 2");
+        assert!(stored.message.contains("Cue 2 vide enregistrée"), "{}", stored.message);
+        let sequence = &c.show.sequences[&c.show.executors[&3].sequence];
+        assert!(sequence.cues[&CueNumber::whole(2)].values.is_empty());
+        c.set_cue_command(CueNumber::whole(2), "Macro 4; Sound 1").unwrap();
+        assert_eq!(c.execute("Store Cue 2").unwrap_err().to_string(), "programmer vide : rien à ajouter à la cue 2");
+    }
+
     #[test]
     fn executors_and_cue_errors() {
         let mut c = console();
         assert!(run(&mut c, "Executor 2").message.contains("vide"));
-        assert_eq!(c.execute("Store Cue").unwrap_err().to_string(), "programmer vide : rien à enregistrer");
         run(&mut c, "Fixture 4 At 100");
         run(&mut c, "Store Cue 1 Fade 0");
         run(&mut c, "ClearAll");

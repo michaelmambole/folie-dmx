@@ -322,9 +322,9 @@ impl Console {
         fade: Option<f32>,
         name: Option<String>,
     ) -> Result<Outcome, CommandError> {
-        if self.programmer.is_empty() && self.released.is_empty() && self.effects.is_empty() {
-            return invalid("programmer vide : rien à enregistrer");
-        }
+        // Programmer vide : une cue vide, pour ne porter qu'une commande « Au départ » ou un
+        // temps (pas pour compléter une cue existante).
+        let empty = self.programmer.is_empty() && self.released.is_empty() && self.effects.is_empty();
         let mut values: BTreeMap<FixtureId, BTreeMap<String, CueValue>> = BTreeMap::new();
         for (key, value) in &self.programmer {
             let Some(parameter) = self.show.patch.get(key.fixture).and_then(|f| f.mode().parameters.get(key.parameter))
@@ -360,6 +360,9 @@ impl Console {
             sequence.cues.keys().next_back().map_or(CueNumber::whole(1), |last| last.next_whole())
         });
         let merged = sequence.cues.contains_key(&number);
+        if empty && merged {
+            return invalid(format!("programmer vide : rien à ajouter à la cue {number}"));
+        }
         let cue = sequence.cues.entry(number).or_insert_with(|| Cue::new(String::new()));
         for (fixture, parameters) in values {
             cue.values.entry(fixture).or_default().extend(parameters);
@@ -374,7 +377,11 @@ impl Console {
             cue.effects = Some(self.effects.clone());
         }
         let verb = if merged { "complétée" } else { "enregistrée" };
-        let message = format!("Cue {number} {verb} sur l'executor {executor} (fondu {} s)", cue.fade, executor = executor_label(executor));
+        let message = if empty {
+            format!("Cue {number} vide enregistrée sur l'executor {executor} : donnez-lui une commande « Au départ »", executor = executor_label(executor))
+        } else {
+            format!("Cue {number} {verb} sur l'executor {executor} (fondu {} s)", cue.fade, executor = executor_label(executor))
+        };
         self.sync_playback();
         Ok(Outcome::changed(message))
     }
