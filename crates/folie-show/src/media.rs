@@ -140,18 +140,43 @@ pub fn gather(sounds: &mut std::collections::BTreeMap<u32, Sound>, show_path: &P
     problems
 }
 
-/// Chemin écrit dans le fichier : relatif au dossier du show quand il y est.
+/// Chemin écrit dans le fichier : relatif au dossier du show quand il y est, toujours avec
+/// des « / » (que Windows comprend aussi), pour qu'un show passe d'un système à l'autre.
 pub(crate) fn relative(file: &Path, show_dir: Option<&Path>) -> PathBuf {
     match show_dir.and_then(|dir| file.strip_prefix(dir).ok()) {
-        Some(rel) => rel.to_path_buf(),
+        Some(rel) => {
+            let parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            PathBuf::from(parts.join("/"))
+        }
         None => file.to_path_buf(),
     }
 }
 
-/// Chemin en mémoire : complet, à partir du dossier du show.
+/// Chemin en mémoire : complet, à partir du dossier du show. Un chemin relatif peut venir
+/// d'un autre système : « / » et « \ » séparent tous deux les dossiers.
 pub(crate) fn absolute(file: &Path, show_dir: Option<&Path>) -> PathBuf {
+    let text = file.to_string_lossy();
+    let relative = !text.is_empty() && !text.starts_with(['/', '\\']) && !file.is_absolute() && text.chars().nth(1) != Some(':');
     match show_dir {
-        Some(dir) if file.is_relative() && !file.as_os_str().is_empty() => dir.join(file),
+        Some(dir) if relative => text.split(['/', '\\']).filter(|p| !p.is_empty()).fold(dir.to_path_buf(), |path, part| path.join(part)),
         _ => file.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un show enregistré sous Windows s'ouvre sur Mac, et l'inverse.
+    #[test]
+    fn relative_paths_cross_systems() {
+        let dir = Path::new("/tournee");
+        assert_eq!(relative(&dir.join("concert-sons").join("pluie.wav"), Some(dir)), PathBuf::from("concert-sons/pluie.wav"));
+        assert_eq!(relative(Path::new("/ailleurs/pluie.wav"), Some(dir)), PathBuf::from("/ailleurs/pluie.wav"), "hors du dossier : tel quel");
+        let expected = dir.join("concert-sons").join("pluie.wav");
+        assert_eq!(absolute(Path::new("concert-sons/pluie.wav"), Some(dir)), expected);
+        assert_eq!(absolute(Path::new("concert-sons\\pluie.wav"), Some(dir)), expected, "écrit sous Windows");
+        assert_eq!(absolute(Path::new("/sons/pluie.wav"), Some(dir)), PathBuf::from("/sons/pluie.wav"));
+        assert_eq!(absolute(Path::new("C:\\sons\\pluie.wav"), Some(dir)), PathBuf::from("C:\\sons\\pluie.wav"), "absolu Windows");
     }
 }

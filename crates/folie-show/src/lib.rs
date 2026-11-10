@@ -1051,7 +1051,8 @@ mod tests {
                 2,
                 media::Sound {
                     name: "Pluie".into(),
-                    file: "/sons/pluie.wav".into(),
+                    // Absolu sur chaque système (sous Windows, « /sons » n'en est pas un).
+                    file: if cfg!(windows) { "C:\\sons\\pluie.wav".into() } else { "/sons/pluie.wav".into() },
                     start: 1.5,
                     end: Some(30.0),
                     gain_db: -6.0,
@@ -1096,7 +1097,8 @@ mod tests {
         save(&show, &path).unwrap();
         let loaded = load(&path, &library).unwrap();
         // Seul avertissement : le son de l'exemple n'existe pas sur le disque.
-        assert_eq!(loaded.warnings, ["son 2 « Pluie » : fichier introuvable (/sons/pluie.wav)"]);
+        let missing = show.sounds[&2].file.display();
+        assert_eq!(loaded.warnings, [format!("son 2 « Pluie » : fichier introuvable ({missing})")]);
         assert_eq!(loaded.show.sounds, show.sounds, "réglages des sons relus");
         assert_eq!(summary(&loaded.show), summary(&show));
         assert_eq!(loaded.show.patch.fixtures()[2].mode().name, "Individual");
