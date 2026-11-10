@@ -86,11 +86,87 @@ impl State {
 /// teinté et une bordure épaisse de sa couleur. Un executor fixé (présent sur
 /// toutes les pages) a un cadre en pointillés. L'executor sélectionné, celui du GO
 /// principal (Espace), porte une bande jaune en haut.
-fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, selected: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// Couleurs de repère proposées pour un executor : (nom, rouge, vert, bleu), lisibles sur
+/// le fond sombre.
+pub const EXECUTOR_COLORS: [(&str, [u8; 3]); 12] = [
+    ("Rouge", [229, 72, 77]),
+    ("Orange", [240, 140, 58]),
+    ("Jaune", [232, 200, 64]),
+    ("Vert", [76, 175, 80]),
+    ("Turquoise", [38, 166, 154]),
+    ("Cyan", [64, 190, 230]),
+    ("Bleu", [60, 130, 230]),
+    ("Indigo", [100, 110, 220]),
+    ("Violet", [160, 110, 230]),
+    ("Magenta", [215, 90, 200]),
+    ("Rose", [240, 130, 170]),
+    ("Gris", [150, 155, 165]),
+];
+
+/// Choix de la couleur d'un executor : pastilles, aucune, ou une autre au sélecteur.
+/// Renvoie le choix (`Some(None)` : plus de couleur).
+fn color_choice(ui: &mut egui::Ui, executor: u32, current: Option<[u8; 3]>) -> Option<Option<[u8; 3]>> {
+    let mut chosen = None;
+    let swatch = |ui: &mut egui::Ui, rgb: [u8; 3], name: &str, on: bool| {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+        ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+        if on || response.hovered() {
+            ui.painter().rect_stroke(rect.expand(1.5), 5.0, egui::Stroke::new(2.0, theme::TEXT), egui::StrokeKind::Outside);
+        }
+        let name = name.to_string();
+        response.widget_info(move || egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+        response.on_hover_text(name_hint(rgb))
+    };
+    fn name_hint([r, g, b]: [u8; 3]) -> String {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+    egui::Grid::new(("executor-colors", executor)).spacing([5.0, 5.0]).show(ui, |ui| {
+        for (i, (name, rgb)) in EXECUTOR_COLORS.iter().enumerate() {
+            if swatch(ui, *rgb, name, current == Some(*rgb)).clicked() {
+                chosen = Some(Some(*rgb));
+            }
+            if i % 6 == 5 {
+                ui.end_row();
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.add_enabled(current.is_some(), egui::Button::new("Aucune")).clicked() {
+            chosen = Some(None);
+        }
+        // Une autre couleur, au sélecteur de Folie.
+        ui.menu_button("Autre…", |ui| {
+            let id = egui::Id::unique(("executor-color-hsv", executor));
+            let start = current.unwrap_or([60, 130, 230]).map(|c| c as f32 / 255.0);
+            let mut hsv = ui.data_mut(|d| *d.get_temp_mut_or_insert_with(id, || folie_control::color::rgb_to_hsv(start)));
+            if crate::color_picker::hsv_picker(ui, &mut hsv) {
+                let rgb = folie_control::color::hsv_to_rgb(hsv).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+                chosen = Some(Some(rgb));
+            }
+            ui.data_mut(|d| d.insert_temp(id, hsv));
+        });
+    });
+    chosen
+}
+
+fn card<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    state: State,
+    fixed: bool,
+    selected: bool,
+    tag: Option<[u8; 3]>,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let (fill, stroke) = match state {
         State::Empty => (theme::BG, egui::Stroke::new(1.0, theme::SURFACE_2)),
         State::Off => (theme::SURFACE_1, egui::Stroke::new(1.0, theme::LINE)),
         State::On(color) => (theme::SURFACE_1.lerp_to_gamma(color, 0.14), egui::Stroke::new(2.0, color)),
+    };
+    // Couleur de repère : un léger voile sur le fond, en plus de la bande du bas.
+    let fill = match tag {
+        Some([r, g, b]) => fill.lerp_to_gamma(Color32::from_rgb(r, g, b), 0.12),
+        None => fill,
     };
     let frame = egui::Frame::new()
         .fill(fill)
@@ -113,6 +189,13 @@ fn card<R>(ui: &mut egui::Ui, width: f32, state: State, fixed: bool, selected: b
         let band = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), 5.0));
         let corners = egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
         ui.painter().rect_filled(band, corners, theme::SELECTION);
+    }
+    // Couleur de repère : en bas, le haut est à la sélection.
+    if let Some([r, g, b]) = tag {
+        let rect = frame.response.rect;
+        let band = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 5.0), rect.max);
+        let corners = egui::CornerRadius { nw: 0, ne: 0, sw: 8, se: 8 };
+        ui.painter().rect_filled(band, corners, Color32::from_rgb(r, g, b));
     }
     frame.inner
 }
@@ -314,6 +397,18 @@ fn executor_menu(ui: &mut egui::Ui, console: &mut Console, executor: u32) -> Act
         }
     });
     ui.data_mut(|d| d.insert_temp(id, name));
+    // Couleur de repère : la pastille actuelle dans le titre du sous-menu.
+    let response = ui.menu_button("Couleur", |ui| {
+        if let Some(color) = color_choice(ui, executor, x.options.color) {
+            action = Some(console.set_executor_options(executor, ExecutorOptions { color, ..x.options }));
+        }
+    });
+    if let Some([r, g, b]) = x.options.color {
+        // Le point du titre prend la couleur choisie.
+        let rect = response.response.rect;
+        let dot = egui::pos2(rect.right() - 14.0, rect.center().y);
+        ui.painter().circle_filled(dot, 5.0, Color32::from_rgb(r, g, b));
+    }
     let sequences: Vec<(u32, String)> = console.show.sequences.iter().map(|(n, s)| (*n, s.name.clone())).collect();
     ui.menu_button("Jouer une autre séquence", |ui| {
         for (number, name) in sequences {
@@ -1262,7 +1357,8 @@ pub fn executors_window(
                 let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
                 let selected = console.selected_executor() == executor;
-                card(ui, inner, state, fixed, selected, |ui| {
+                let tag = console.executor(executor).and_then(|(x, _)| x.options.color);
+                card(ui, inner, state, fixed, selected, tag, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));
@@ -1301,7 +1397,8 @@ pub fn executors_window(
                 let used = state != State::Empty;
                 let fixed = console.executor(executor).is_some_and(|(x, _)| x.options.fixed);
                 let selected = console.selected_executor() == executor;
-                card(ui, inner, state, fixed, selected, |ui| {
+                let tag = console.executor(executor).and_then(|(x, _)| x.options.color);
+                card(ui, inner, state, fixed, selected, tag, |ui| {
                     keep(executor_header(ui, console, executor, status, inner));
                     if *store_armed {
                         keep(store_here(ui, console, executor, store_armed, inner));

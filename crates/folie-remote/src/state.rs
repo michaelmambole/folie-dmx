@@ -117,6 +117,8 @@ struct ExecutorView {
     fixed: bool,
     /// Temps suivi par les cues à temps TC : « son 3 », « TC » ; vide sinon.
     follows: String,
+    /// Couleur de repère, « #rrggbb ».
+    color: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -194,6 +196,7 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
         progress: None,
         fixed: false,
         follows: String::new(),
+        color: None,
     };
     if let Some((number, m)) = console.executor_macro(id) {
         let running = console.macros_in_progress().iter().any(|p| p.number == number);
@@ -224,6 +227,7 @@ fn executor_view(console: &Console, id: u32, fader: bool, status: Option<&Execut
     };
     view.progress = status.filter(|s| s.in_transition()).map(|s| (s.elapsed / s.duration.max(f32::EPSILON)).clamp(0.0, 1.0));
     view.fader_function = x.options.fader.label();
+    view.color = x.options.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}"));
     if sequence.cues.values().any(|c| c.timecode.is_some()) {
         view.follows = match sequence.follows_sound {
             Some(n) => format!("son {n}"),

@@ -294,6 +294,9 @@ struct OptionsEntry {
     mib: bool,
     swop_protect: bool,
     kill_protect: bool,
+    /// Couleur de repère, « #rrggbb ».
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<String>,
 }
 
 impl Default for OptionsEntry {
@@ -324,6 +327,7 @@ impl OptionsEntry {
             mib: o.mib,
             swop_protect: o.swop_protect,
             kill_protect: o.kill_protect,
+            color: o.color.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
         }
     }
 
@@ -350,8 +354,19 @@ impl OptionsEntry {
             mib: self.mib,
             swop_protect: self.swop_protect,
             kill_protect: self.kill_protect,
+            color: self.color.as_deref().and_then(parse_color),
         }
     }
+}
+
+/// « #rrggbb » -> couleur ; illisible : aucune.
+fn parse_color(text: &str) -> Option<[u8; 3]> {
+    let hex = text.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 fn cue_value_to_json(value: &CueValue) -> Value {
@@ -991,6 +1006,7 @@ mod tests {
                     options: ExecutorOptions {
                         wrap: true,
                         fader: FaderFunction::Temp,
+                        color: Some([0x3c, 0x82, 0xe6]),
                         off_time: 3.0,
                         back_time: Some(1.5),
                         priority: Priority::High,

@@ -274,6 +274,7 @@ fn phone_plays_sounds() {
 fn phone_sees_blind_tempo_programmer_and_fader_functions() {
     let mut console = console();
     console.show.executors.get_mut(&1).unwrap().options.fader = folie_show::FaderFunction::Speed;
+    console.show.executors.get_mut(&1).unwrap().options.color = Some([76, 175, 80]);
     console.execute("Fixture 1 At 50").unwrap();
     console.set_tempo(60.0);
     let server = RemoteServer::start(0, "4821", "1357", || {}).unwrap();
@@ -286,6 +287,8 @@ fn phone_sees_blind_tempo_programmer_and_fader_functions() {
     assert_eq!((state["blind"].as_bool(), state["programmer"].as_u64()), (Some(false), Some(1)));
     assert_eq!(state["executors"][0]["fader_function"], "Vitesse");
     assert_eq!(state["executors"][0]["value"], "× 2.00", "fader en haut : vitesse doublée");
+    assert_eq!(state["executors"][0]["color"], "#4caf50");
+    assert!(state["executors"][1]["color"].is_null());
 
     // Blind, puis deux frappes de Tap à 0,4 s : 150 BPM.
     rt.block_on(send(&mut ws, json!({"type": "blind", "on": true})));

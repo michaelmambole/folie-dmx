@@ -2624,6 +2624,36 @@ mod tests {
             let path = std::path::Path::new(&dir).join("executor-menu.png");
             harness.render().expect("rendu").save(&path).expect("écriture de l'image");
         }
+        // Couleur de repère : une pastille de la palette, puis plus de couleur.
+        harness.get_by_label("Couleur").click();
+        harness.run_steps(2);
+        // Les pastilles du menu (20 points), pas les couleurs rapides du Programmer.
+        let swatch = |h: &Harness<'_, FolieApp>, name: &str| {
+            h.get_all_by_label(name).find(|n| (n.rect().width() - 20.0).abs() < 0.5).expect("pastille").click();
+        };
+        swatch(&harness, "Vert");
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.executors[&1].options.color, Some([76, 175, 80]));
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-couleur.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.run_steps(2);
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("executor-carte-couleur.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_all(By::new().role(Role::Button).label("1")).find(|n| n.rect().min.y > 800.0).unwrap().click_secondary();
+        harness.run_steps(2);
+        harness.get_by_label("Couleur").click();
+        harness.run_steps(2);
+        harness.get_by_label("Aucune").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.executors[&1].options.color, None);
+        swatch(&harness, "Rouge");
+        harness.run_steps(2);
+        assert_eq!(harness.state().console.show.executors[&1].options.color, Some([229, 72, 77]));
 
         // Fenêtre Cues, sur la séquence de l'executor 1 : cue 1 en cours après le Back.
         harness.key_press(egui::Key::Escape);

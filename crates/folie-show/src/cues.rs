@@ -415,6 +415,8 @@ pub struct ExecutorOptions {
     pub swop_protect: bool,
     /// Ignore le Kill des autres executors.
     pub kill_protect: bool,
+    /// Couleur de repère (rouge, vert, bleu), sans effet sur la lumière ; `None` : aucune.
+    pub color: Option<[u8; 3]>,
 }
 
 impl Default for ExecutorOptions {
@@ -436,6 +438,7 @@ impl Default for ExecutorOptions {
             mib: false,
             swop_protect: false,
             kill_protect: false,
+            color: None,
         }
     }
 }

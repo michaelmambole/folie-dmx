@@ -166,6 +166,11 @@ fn gels_menu(ui: &mut egui::Ui) -> Option<&'static Gel> {
     chosen
 }
 
+/// Carré et bande de teinte seuls (couleur d'un executor…). Vrai si la couleur change.
+pub fn hsv_picker(ui: &mut egui::Ui, hsv: &mut [f32; 3]) -> bool {
+    ui.horizontal_top(|ui| sv_square(ui, hsv).changed() | hue_strip(ui, hsv).changed()).inner
+}
+
 /// Sélecteur complet. `current` : couleur produite en ce moment par la cible de
 /// référence. Renvoie la couleur choisie quand l'utilisateur en change.
 pub fn color_picker(ui: &mut egui::Ui, hsv: &mut [f32; 3], current: Option<[u8; 3]>) -> Option<[f32; 3]> {
