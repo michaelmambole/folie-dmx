@@ -1618,7 +1618,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folie-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "display-info",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "folie-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cpal",
  "crossbeam-channel",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "folie-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1675,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "folie-control"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "folie-dmx",
  "folie-engine",
@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "folie-dmx"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "log",
  "serialport",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "folie-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
  "folie-dmx",
@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "folie-fixture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "folie-dmx",
  "roxmltree",
@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "folie-remote"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "crossbeam-channel",
@@ -1741,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "folie-show"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "folie-fixture",
  "serde",
