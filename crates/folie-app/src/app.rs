@@ -20,6 +20,7 @@ use crate::theme;
 
 mod about;
 mod file;
+mod help;
 mod midi;
 mod remote;
 mod sound;
@@ -165,6 +166,8 @@ pub struct FolieApp {
     addresses: crate::network::AddressCache,
     /// Fenêtre « À propos » ouverte.
     about_open: bool,
+    /// Aide des commandes.
+    pub(crate) help: help::HelpView,
     pub(crate) sound_settings: SoundSettings,
     /// Entrée audio en marche, et les réactions qu'elle applique.
     pub(crate) audio: Option<folie_audio::input::AudioInput>,
@@ -240,6 +243,7 @@ impl FolieApp {
             sounds_view: Default::default(),
             addresses: Default::default(),
             about_open: false,
+            help: Default::default(),
             sound_settings,
             audio: None,
             audio_setup: Default::default(),
@@ -606,6 +610,9 @@ impl eframe::App for FolieApp {
         egui::Panel::bottom("command").show(ui, |ui| {
             ui.add_space(4.0);
             command_changed = self.command_line.show(ui, &mut self.console);
+            if std::mem::take(&mut self.command_line.help_requested) {
+                self.help.open = true;
+            }
             ui.add_space(4.0);
         });
         if command_changed {
@@ -623,6 +630,7 @@ impl eframe::App for FolieApp {
         self.file_modals(&ctx);
         self.layout_dialog(&ctx);
         self.about_dialog(&ctx);
+        self.help_window(&ctx);
         ctx.request_repaint_after(UI_REFRESH);
     }
 
@@ -1987,6 +1995,41 @@ mod tests {
         command(&mut harness, "Sound 3 Off");
         let playing = render(&mut harness, 10);
         assert!(playing.is_empty(), "{playing:?}");
+    }
+
+    /// Aide des commandes : « ? » l'ouvre, la recherche filtre, un exemple cliqué passe
+    /// dans la ligne de commande, F1 la referme.
+    #[test]
+    fn command_help() {
+        let mut harness = harness(Storage::disabled());
+        assert!(!harness.state().help.open);
+        command(&mut harness, "?");
+        assert!(harness.state().help.open, "« ? » ouvre l'aide");
+        assert_eq!(harness.state().command_line.input, "", "et ne reste pas dans la ligne");
+        harness.get_by_label("Abréviations");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("aide-complete.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_role_and_label(Role::TextInput, "Chercher").focus();
+        harness.run_steps(1);
+        harness.get_by_role_and_label(Role::TextInput, "Chercher").type_text("fondu");
+        harness.run_steps(2);
+        assert_eq!(harness.state().help.search, "fondu");
+        assert!(harness.query_by_label("Abréviations").is_none(), "section sans « fondu » cachée");
+        if let Some(dir) = std::env::var_os("FOLIE_UI_CAPTURE") {
+            let path = std::path::Path::new(&dir).join("aide.png");
+            harness.render().expect("rendu").save(&path).expect("écriture de l'image");
+        }
+        harness.get_by_label("Sound 3 Off Fade 2").click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().command_line.input, "Sound 3 Off Fade 2");
+        harness.key_press(egui::Key::F1);
+        harness.run_steps(2);
+        assert!(!harness.state().help.open, "F1 referme");
+        harness.get_by_label("?").click();
+        harness.run_steps(2);
+        assert!(harness.state().help.open, "le bouton ? rouvre");
     }
 
     #[test]

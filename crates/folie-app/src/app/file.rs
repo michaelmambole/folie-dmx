@@ -245,6 +245,9 @@ impl FolieApp {
                 self.save_as();
             }
             ui.separator();
+            if ui.add(egui::Button::new("Aide des commandes").shortcut_text("F1")).clicked() {
+                self.help.open = true;
+            }
             if ui.button("À propos de Folie-DMX").clicked() {
                 self.about_open = true;
             }

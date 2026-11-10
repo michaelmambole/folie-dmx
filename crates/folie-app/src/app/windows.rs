@@ -258,6 +258,10 @@ impl FolieApp {
             let result = self.console.press(self.console.selected_executor());
             self.command_line.report(result);
         }
+        // F1 : l'aide des commandes.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
+            self.help.open = !self.help.open;
+        }
         // S : la touche Store, comme sur grandMA2 onPC.
         if !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
             self.store_armed = !self.store_armed;

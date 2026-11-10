@@ -751,9 +751,49 @@ pub fn fixture(id: u32) -> Target {
     Target::whole(FixtureId(id))
 }
 
+/// Référence des commandes, aussi affichée par l'aide de Folie.
+pub const REFERENCE: &str = include_str!("../../../docs/commandes.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La référence suit le langage : chaque mot-clé y figure, et chaque exemple de ses
+    /// tableaux « Commande » est une commande valide.
+    #[test]
+    fn reference_covers_the_language() {
+        for (_, keyword) in KEYWORDS {
+            let name = keyword.name();
+            // Le mot entier (pas « Fix » dans « Fixture »).
+            let whole = REFERENCE.match_indices(name).any(|(i, _)| {
+                let before = REFERENCE[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+                let after = REFERENCE[i + name.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+                before && after
+            });
+            assert!(whole, "{name} absent de docs/commandes.md");
+        }
+        let mut examples = 0;
+        let mut in_commands = false;
+        for line in REFERENCE.lines() {
+            if line.starts_with("| Commande |") {
+                in_commands = true;
+                continue;
+            }
+            if !line.starts_with('|') {
+                in_commands = false;
+                continue;
+            }
+            if !in_commands || line.starts_with("|---") {
+                continue;
+            }
+            let first = line.split('|').nth(1).unwrap_or_default();
+            for example in first.split('`').skip(1).step_by(2) {
+                parse(example).unwrap_or_else(|e| panic!("exemple invalide dans docs/commandes.md : {example} ({e})"));
+                examples += 1;
+            }
+        }
+        assert!(examples > 50, "{examples} exemples seulement");
+    }
 
     fn select(line: &str) -> (Vec<(bool, Item)>, Option<Value>) {
         match parse(line).unwrap() {

@@ -17,6 +17,8 @@ pub struct CommandLine {
     pub feedback: Option<(bool, String)>,
     /// Complétion en cours, tant que la ligne reste celle que Tab a écrite.
     tab: Option<TabCompletion>,
+    /// L'aide des commandes est demandée (bouton ?, ou « ? » tapé) : l'application l'ouvre.
+    pub help_requested: bool,
 }
 
 struct TabCompletion {
@@ -31,7 +33,7 @@ struct TabCompletion {
 
 impl CommandLine {
     pub fn new() -> Self {
-        Self { input: String::new(), history: Vec::new(), browsing: None, feedback: None, tab: None }
+        Self { input: String::new(), history: Vec::new(), browsing: None, feedback: None, tab: None, help_requested: false }
     }
 
     /// Affiche le résultat d'une action, qu'elle vienne de la ligne de commande ou d'ailleurs.
@@ -95,7 +97,10 @@ impl CommandLine {
             }
             if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                 let line = self.input.trim().to_string();
-                if !line.is_empty() {
+                if ["?", "aide", "help"].contains(&line.to_lowercase().as_str()) {
+                    self.help_requested = true;
+                    self.input.clear();
+                } else if !line.is_empty() {
                     changed = self.report(console.execute(&line));
                     if self.history.last() != Some(&line) {
                         self.history.push(line);
@@ -108,6 +113,9 @@ impl CommandLine {
                 response.request_focus();
             }
 
+            if ui.button(RichText::new("?").strong()).on_hover_text("Aide des commandes (F1)").clicked() {
+                self.help_requested = true;
+            }
             if let Some((ok, text)) = &self.feedback {
                 let color = if *ok { theme::GO } else { theme::PROGRAMMER };
                 ui.add(egui::Label::new(RichText::new(text).size(12.5).color(color)).truncate());

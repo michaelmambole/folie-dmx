@@ -34,6 +34,10 @@ cargo run -- info --port /dev/cu.usbserial-XXXX      # interroger l'USB Pro
 cargo run -- test --port /dev/cu.usbserial-XXXX --channels 1-8 --seconds 20
 ```
 
+Les commandes (ligne `Folie>`, macros, cues, télécommande) sont décrites dans
+[docs/commandes.md](docs/commandes.md), aussi affiché dans Folie : touche F1, bouton `?`
+à côté de la ligne de commande, ou `?` tapé dedans.
+
 Les shows sont des fichiers `.folie` (JSON lisible) qui embarquent les fiches
 de fixtures utilisées. Réglages et sauvegarde automatique :
 `~/Library/Application Support/Folie-DMX/`.
